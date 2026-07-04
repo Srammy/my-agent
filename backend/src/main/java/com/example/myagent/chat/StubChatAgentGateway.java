@@ -1,9 +1,11 @@
 package com.example.myagent.chat;
 
 import org.springframework.stereotype.Component;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import reactor.core.publisher.Flux;
 
 @Component
+@ConditionalOnMissingBean(ChatAgentGateway.class)
 public class StubChatAgentGateway implements ChatAgentGateway {
 
   @Override
