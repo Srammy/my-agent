@@ -6,6 +6,9 @@ import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.harness.agent.HarnessAgent;
+import io.agentscope.harness.agent.tools.ToolsConfig;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -71,9 +74,7 @@ public class AgentScopeConfig {
     if (!toolPolicy.shellEnabled()) {
       builder.disableShellTool();
     }
-    if (!toolPolicy.externalToolsEnabled()) {
-      builder.disableToolsConfig();
-    }
+    builder.toolsConfig(toolPolicy.toolsConfig());
   }
 
   HarnessAgent.Builder configureHarnessAgentBuilder(
@@ -138,6 +139,10 @@ public class AgentScopeConfig {
       boolean httpFetchEnabled,
       boolean mcpEnabled) {
 
+    // AgentScope tools.json boundary: keep HTTP fetch policy and MCP server registration
+    // separate so the two flags do not collapse into one external-tools gate.
+    private static final List<String> HTTP_FETCH_TOOL_NAMES = List.of("http_fetch", "web_fetch");
+
     AgentToolPolicy(AgentProperties.Tools tools) {
       this(
           tools.fileToolsEnabled(),
@@ -146,8 +151,17 @@ public class AgentScopeConfig {
           tools.mcpEnabled());
     }
 
-    boolean externalToolsEnabled() {
-      return httpFetchEnabled || mcpEnabled;
+    ToolsConfig toolsConfig() {
+      ToolsConfig toolsConfig = new ToolsConfig();
+      if (httpFetchEnabled) {
+        toolsConfig.setAllow(HTTP_FETCH_TOOL_NAMES);
+      } else {
+        toolsConfig.setDeny(HTTP_FETCH_TOOL_NAMES);
+      }
+      if (!mcpEnabled) {
+        toolsConfig.setMcpServers(Collections.emptyMap());
+      }
+      return toolsConfig;
     }
   }
 }

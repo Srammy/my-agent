@@ -11,6 +11,7 @@ import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.harness.agent.HarnessAgent;
+import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.lang.reflect.Field;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -128,37 +129,47 @@ class AgentScopeConfigTest {
     assertThat(policy.mcpEnabled()).isFalse();
     assertThat(booleanField(builder, "disableFilesystemTools")).isTrue();
     assertThat(booleanField(builder, "disableShellTool")).isTrue();
-    assertThat(booleanField(builder, "disableToolsConfig")).isTrue();
+    assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
+    assertThat(toolsConfig(builder).getDeny()).containsExactly("http_fetch", "web_fetch");
+    assertThat(toolsConfig(builder).getAllow()).isNullOrEmpty();
+    assertThat(toolsConfig(builder).getMcpServers()).isEmpty();
   }
 
   @Test
-  void enablingHttpFetchOpensExternalToolBoundary() throws Exception {
+  void enablingHttpFetchKeepsMcpDisabled() throws Exception {
     HarnessAgent.Builder builder = HarnessAgent.builder();
 
     config.applyToolPolicy(builder, config.toolPolicy(properties(false, false, true, false)));
 
     assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
+    assertThat(toolsConfig(builder).getAllow()).containsExactly("http_fetch", "web_fetch");
+    assertThat(toolsConfig(builder).getDeny()).isNullOrEmpty();
+    assertThat(toolsConfig(builder).getMcpServers()).isEmpty();
   }
 
   @Test
-  void enablingMcpOpensExternalToolBoundary() throws Exception {
+  void enablingMcpKeepsHttpFetchDisabled() throws Exception {
     HarnessAgent.Builder builder = HarnessAgent.builder();
 
     config.applyToolPolicy(builder, config.toolPolicy(properties(false, false, false, true)));
 
     assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
+    assertThat(toolsConfig(builder).getDeny()).containsExactly("http_fetch", "web_fetch");
+    assertThat(toolsConfig(builder).getAllow()).isNullOrEmpty();
+    assertThat(toolsConfig(builder).getMcpServers()).isNull();
   }
 
   @Test
-  void productionHarnessAgentBuilderKeepsExternalToolBoundaryWhenHttpFetchEnabled()
-      throws Exception {
+  void productionHarnessAgentBuilderUsesFineGrainedToolsConfig() throws Exception {
     HarnessAgent.Builder builder = HarnessAgent.builder();
 
-    config.configureHarnessAgentBuilder(builder, config.toolPolicy(properties(false, false, true, false)));
+    config.configureHarnessAgentBuilder(builder, config.toolPolicy(properties(false, false, true, true)));
 
     assertThat(booleanField(builder, "disableFilesystemTools")).isTrue();
     assertThat(booleanField(builder, "disableShellTool")).isTrue();
     assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
+    assertThat(toolsConfig(builder).getAllow()).containsExactly("http_fetch", "web_fetch");
+    assertThat(toolsConfig(builder).getMcpServers()).isNull();
   }
 
   @Test
@@ -169,7 +180,9 @@ class AgentScopeConfigTest {
 
     assertThat(booleanField(builder, "disableFilesystemTools")).isFalse();
     assertThat(booleanField(builder, "disableShellTool")).isFalse();
-    assertThat(booleanField(builder, "disableToolsConfig")).isTrue();
+    assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
+    assertThat(toolsConfig(builder).getDeny()).containsExactly("http_fetch", "web_fetch");
+    assertThat(toolsConfig(builder).getMcpServers()).isEmpty();
   }
 
   @Test
@@ -219,6 +232,12 @@ class AgentScopeConfigTest {
     Field field = target.getClass().getDeclaredField(fieldName);
     field.setAccessible(true);
     return field.getBoolean(target);
+  }
+
+  private ToolsConfig toolsConfig(HarnessAgent.Builder builder) throws Exception {
+    Field field = builder.getClass().getDeclaredField("toolsConfigOverride");
+    field.setAccessible(true);
+    return (ToolsConfig) field.get(builder);
   }
 
   @Configuration(proxyBeanMethods = false)
