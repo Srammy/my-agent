@@ -45,3 +45,7 @@ mybatis-plus:
   global-config:
     db-config:
       id-type: auto
+
+security:
+  jwt:
+    secret: ${SECURITY_JWT_SECRET:change-this-default-jwt-secret-min-32-bytes}
