@@ -21,6 +21,7 @@ class AgentPropertiesBindingTest {
               AgentProperties agentProperties = context.getBean(AgentProperties.class);
               assertThat(agentProperties.model().provider()).isEqualTo("openai");
               assertThat(agentProperties.model().name()).isEqualTo("gpt-4.1");
+              assertThat(agentProperties.agentScope().enabled()).isFalse();
               assertThat(agentProperties.model().apiKeyEnv()).isEqualTo("DASHSCOPE_API_KEY");
               assertThat(agentProperties.permission().defaultMode()).isEqualTo("DEFAULT");
             });
@@ -37,6 +38,7 @@ class AgentPropertiesBindingTest {
         context -> {
           AgentProperties agentProperties = context.getBean(AgentProperties.class);
           assertThat(agentProperties.deployment().mode()).isEqualTo("local");
+          assertThat(agentProperties.agentScope().enabled()).isFalse();
           assertThat(agentProperties.model().provider()).isEqualTo("dashscope");
           assertThat(agentProperties.model().name()).isEqualTo("dashscope:qwen-plus");
           assertThat(agentProperties.model().apiKeyEnv()).isEqualTo("DASHSCOPE_API_KEY");
@@ -47,7 +49,31 @@ class AgentPropertiesBindingTest {
               .isEqualTo("myagent:agent-state:");
           assertThat(agentProperties.skill().storage()).isEqualTo("mysql");
           assertThat(agentProperties.permission().defaultMode()).isEqualTo("DEFAULT");
+          assertThat(agentProperties.tools().fileToolsEnabled()).isFalse();
+          assertThat(agentProperties.tools().shellEnabled()).isFalse();
+          assertThat(agentProperties.tools().httpFetchEnabled()).isFalse();
+          assertThat(agentProperties.tools().mcpEnabled()).isFalse();
         });
+  }
+
+  @Test
+  void bindsAgentScopeAndToolFlags() {
+    contextRunner
+        .withPropertyValues(
+            "agent.agent-scope.enabled=true",
+            "agent.tools.file-tools-enabled=true",
+            "agent.tools.shell-enabled=true",
+            "agent.tools.http-fetch-enabled=true",
+            "agent.tools.mcp-enabled=true")
+        .run(
+            context -> {
+              AgentProperties agentProperties = context.getBean(AgentProperties.class);
+              assertThat(agentProperties.agentScope().enabled()).isTrue();
+              assertThat(agentProperties.tools().fileToolsEnabled()).isTrue();
+              assertThat(agentProperties.tools().shellEnabled()).isTrue();
+              assertThat(agentProperties.tools().httpFetchEnabled()).isTrue();
+              assertThat(agentProperties.tools().mcpEnabled()).isTrue();
+            });
   }
 
   @SpringBootConfiguration

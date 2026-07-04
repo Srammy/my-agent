@@ -8,6 +8,7 @@ import org.springframework.validation.annotation.Validated;
 @ConfigurationProperties(prefix = "agent")
 public record AgentProperties(
     @DefaultValue Deployment deployment,
+    @DefaultValue AgentScope agentScope,
     @DefaultValue Model model,
     @DefaultValue StateStore stateStore,
     @DefaultValue Skill skill,
@@ -15,6 +16,8 @@ public record AgentProperties(
     @DefaultValue Tools tools) {
 
   public record Deployment(@DefaultValue("local") String mode) {}
+
+  public record AgentScope(@DefaultValue("false") boolean enabled) {}
 
   public record Model(
       @DefaultValue("dashscope") String provider,

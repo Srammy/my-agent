@@ -3,21 +3,39 @@ package com.example.myagent.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.myagent.chat.AgentEventMapper;
+import com.example.myagent.chat.AgentScopeChatAgentGateway;
+import com.example.myagent.chat.ChatAgentGateway;
+import com.example.myagent.chat.StubChatAgentGateway;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
+import io.agentscope.harness.agent.HarnessAgent;
+import java.lang.reflect.Field;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.mock.env.MockEnvironment;
 
 class AgentScopeConfigTest {
 
   private final AgentScopeConfig config = new AgentScopeConfig();
+  private final ApplicationContextRunner contextRunner =
+      new ApplicationContextRunner()
+          .withConfiguration(
+              AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class))
+          .withUserConfiguration(AgentScopeGatewayContextConfiguration.class);
 
   @Test
   void createsDashScopeModelByDefault() {
     AgentProperties properties =
         new AgentProperties(
             new AgentProperties.Deployment("local"),
+            new AgentProperties.AgentScope(true),
             new AgentProperties.Model("dashscope", "qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
@@ -27,7 +45,7 @@ class AgentScopeConfigTest {
 
     Model model =
         new AgentScopeConfig(name -> "DASHSCOPE_API_KEY".equals(name) ? "dashscope-test-key" : null)
-            .agentScopeModel(properties, new MockEnvironment());
+            .agentScopeModel(properties);
 
     assertThat(model).isInstanceOf(DashScopeChatModel.class);
     assertThat(model.getModelName()).isEqualTo("dashscope:qwen-plus");
@@ -38,6 +56,7 @@ class AgentScopeConfigTest {
     AgentProperties properties =
         new AgentProperties(
             new AgentProperties.Deployment("local"),
+            new AgentProperties.AgentScope(true),
             new AgentProperties.Model(
                 "openai-compatible",
                 "gpt-4.1-mini",
@@ -51,7 +70,7 @@ class AgentScopeConfigTest {
 
     Model model =
         new AgentScopeConfig(name -> "OPENAI_API_KEY".equals(name) ? "openai-test-key" : null)
-            .agentScopeModel(properties, new MockEnvironment());
+            .agentScopeModel(properties);
 
     assertThat(model).isInstanceOf(OpenAIChatModel.class);
     assertThat(model.getModelName()).isEqualTo("gpt-4.1-mini");
@@ -62,6 +81,7 @@ class AgentScopeConfigTest {
     AgentProperties properties =
         new AgentProperties(
             new AgentProperties.Deployment("local"),
+            new AgentProperties.AgentScope(true),
             new AgentProperties.Model("dashscope", "qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
@@ -69,7 +89,7 @@ class AgentScopeConfigTest {
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
-    assertThatThrownBy(() -> config.agentScopeModel(properties, new MockEnvironment()))
+    assertThatThrownBy(() -> config.agentScopeModel(properties))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("DASHSCOPE_API_KEY");
   }
@@ -79,6 +99,7 @@ class AgentScopeConfigTest {
     AgentProperties properties =
         new AgentProperties(
             new AgentProperties.Deployment("local"),
+            new AgentProperties.AgentScope(true),
             new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
@@ -89,10 +110,112 @@ class AgentScopeConfigTest {
     assertThatThrownBy(
             () ->
                 new AgentScopeConfig(name -> null)
-                    .agentScopeModel(
-                        properties,
-                        new MockEnvironment().withProperty("DASHSCOPE_API_KEY", "property-only-key")))
+                    .agentScopeModel(properties))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("DASHSCOPE_API_KEY");
   }
+
+  @Test
+  void toolFlagsDefaultToDisabledAndCloseHarnessBoundaries() throws Exception {
+    AgentScopeConfig.AgentToolPolicy policy = config.toolPolicy(properties(false, false, false, false));
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+
+    config.applyToolPolicy(builder, policy);
+
+    assertThat(policy.fileToolsEnabled()).isFalse();
+    assertThat(policy.shellEnabled()).isFalse();
+    assertThat(policy.httpFetchEnabled()).isFalse();
+    assertThat(policy.mcpEnabled()).isFalse();
+    assertThat(booleanField(builder, "disableFilesystemTools")).isTrue();
+    assertThat(booleanField(builder, "disableShellTool")).isTrue();
+    assertThat(booleanField(builder, "disableToolsConfig")).isTrue();
+  }
+
+  @Test
+  void enablingHttpFetchOpensExternalToolBoundary() throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+
+    config.applyToolPolicy(builder, config.toolPolicy(properties(false, false, true, false)));
+
+    assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
+  }
+
+  @Test
+  void enablingMcpOpensExternalToolBoundary() throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+
+    config.applyToolPolicy(builder, config.toolPolicy(properties(false, false, false, true)));
+
+    assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
+  }
+
+  @Test
+  void enabledFileAndShellFlagsAreReflectedOnHarnessBuilder() throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+
+    config.applyToolPolicy(builder, config.toolPolicy(properties(true, true, false, false)));
+
+    assertThat(booleanField(builder, "disableFilesystemTools")).isFalse();
+    assertThat(booleanField(builder, "disableShellTool")).isFalse();
+    assertThat(booleanField(builder, "disableToolsConfig")).isTrue();
+  }
+
+  @Test
+  void contextUsesStubGatewayWhenAgentScopeDisabledWithoutApiKey() {
+    contextRunner.run(
+        context -> {
+          assertThat(context).hasNotFailed();
+          assertThat(context).hasSingleBean(ChatAgentGateway.class);
+          assertThat(context).hasSingleBean(StubChatAgentGateway.class);
+          assertThat(context).doesNotHaveBean(AgentScopeChatAgentGateway.class);
+          assertThat(context).doesNotHaveBean(Model.class);
+        });
+  }
+
+  @Test
+  void contextFailsClearlyWhenAgentScopeEnabledWithoutApiKey() {
+    contextRunner
+        .withPropertyValues("agent.agent-scope.enabled=true")
+        .run(
+            context -> {
+              assertThat(context).hasFailed();
+              assertThat(context.getStartupFailure())
+                  .hasRootCauseInstanceOf(IllegalStateException.class)
+                  .hasMessageContaining("Missing required API key")
+                  .hasMessageContaining("DASHSCOPE_API_KEY");
+            });
+  }
+
+  private AgentProperties properties(
+      boolean fileToolsEnabled,
+      boolean shellEnabled,
+      boolean httpFetchEnabled,
+      boolean mcpEnabled) {
+    return new AgentProperties(
+        new AgentProperties.Deployment("local"),
+        new AgentProperties.AgentScope(true),
+        new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
+        new AgentProperties.StateStore(
+            "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
+        new AgentProperties.Skill("mysql", "./.agentscope/cache/skills"),
+        new AgentProperties.Permission("DEFAULT"),
+        new AgentProperties.Tools(
+            fileToolsEnabled, shellEnabled, httpFetchEnabled, mcpEnabled));
+  }
+
+  private boolean booleanField(Object target, String fieldName) throws Exception {
+    Field field = target.getClass().getDeclaredField(fieldName);
+    field.setAccessible(true);
+    return field.getBoolean(target);
+  }
+
+  @Configuration(proxyBeanMethods = false)
+  @EnableConfigurationProperties(AgentProperties.class)
+  @Import({
+    AgentScopeConfig.class,
+    AgentScopeChatAgentGateway.class,
+    AgentEventMapper.class,
+    StubChatAgentGateway.class
+  })
+  static class AgentScopeGatewayContextConfiguration {}
 }

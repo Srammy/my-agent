@@ -18,6 +18,8 @@ server:
 agent:
   deployment:
     mode: local
+  agent-scope:
+    enabled: ${AGENT_SCOPE_ENABLED:false}
   model:
     provider: ${AGENT_MODEL_PROVIDER:dashscope}
     name: ${AGENT_MODEL_NAME:dashscope:qwen-plus}

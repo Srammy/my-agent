@@ -2,12 +2,16 @@ package com.example.myagent.chat;
 
 import com.example.myagent.agent.AgentScopeStreamExecutor;
 import io.agentscope.core.agent.RuntimeContext;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
 @Component
 @Primary
+@ConditionalOnBean(AgentScopeStreamExecutor.class)
+@ConditionalOnProperty(prefix = "agent.agent-scope", name = "enabled", havingValue = "true")
 public class AgentScopeChatAgentGateway implements ChatAgentGateway {
 
   private final AgentScopeStreamExecutor executor;

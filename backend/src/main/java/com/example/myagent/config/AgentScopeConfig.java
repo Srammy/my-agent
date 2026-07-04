@@ -8,9 +8,9 @@ import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.harness.agent.HarnessAgent;
 import java.util.Locale;
 import java.util.function.Function;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.env.Environment;
 
 @Configuration
 public class AgentScopeConfig {
@@ -26,7 +26,8 @@ public class AgentScopeConfig {
   }
 
   @Bean
-  Model agentScopeModel(AgentProperties agentProperties, Environment environment) {
+  @ConditionalOnProperty(prefix = "agent.agent-scope", name = "enabled", havingValue = "true")
+  Model agentScopeModel(AgentProperties agentProperties) {
     AgentProperties.Model modelProperties = agentProperties.model();
     String apiKey = resolveRequiredSecret(modelProperties.apiKeyEnv());
 
@@ -40,15 +41,10 @@ public class AgentScopeConfig {
   }
 
   @Bean(destroyMethod = "close")
+  @ConditionalOnProperty(prefix = "agent.agent-scope", name = "enabled", havingValue = "true")
   HarnessAgent harnessAgent(Model agentScopeModel, AgentProperties agentProperties) {
     HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
-
-    if (!agentProperties.tools().fileToolsEnabled()) {
-      builder.disableFilesystemTools();
-    }
-    if (!agentProperties.tools().shellEnabled()) {
-      builder.disableShellTool();
-    }
+    applyToolPolicy(builder, toolPolicy(agentProperties));
 
     builder
         .disableDynamicSkills()
@@ -63,6 +59,7 @@ public class AgentScopeConfig {
   }
 
   @Bean
+  @ConditionalOnProperty(prefix = "agent.agent-scope", name = "enabled", havingValue = "true")
   AgentScopeStreamExecutor agentScopeStreamExecutor(HarnessAgent harnessAgent) {
     return new AgentScopeStreamExecutor() {
       @Override
@@ -72,6 +69,22 @@ public class AgentScopeConfig {
             .cast(Object.class);
       }
     };
+  }
+
+  AgentToolPolicy toolPolicy(AgentProperties agentProperties) {
+    return new AgentToolPolicy(agentProperties.tools());
+  }
+
+  void applyToolPolicy(HarnessAgent.Builder builder, AgentToolPolicy toolPolicy) {
+    if (!toolPolicy.fileToolsEnabled()) {
+      builder.disableFilesystemTools();
+    }
+    if (!toolPolicy.shellEnabled()) {
+      builder.disableShellTool();
+    }
+    if (!toolPolicy.externalToolsEnabled()) {
+      builder.disableToolsConfig();
+    }
   }
 
   private Model buildDashScopeModel(AgentProperties.Model modelProperties, String apiKey) {
@@ -115,5 +128,24 @@ public class AgentScopeConfig {
       return configuredName;
     }
     return modelProperties.provider() + ":" + configuredName;
+  }
+
+  record AgentToolPolicy(
+      boolean fileToolsEnabled,
+      boolean shellEnabled,
+      boolean httpFetchEnabled,
+      boolean mcpEnabled) {
+
+    AgentToolPolicy(AgentProperties.Tools tools) {
+      this(
+          tools.fileToolsEnabled(),
+          tools.shellEnabled(),
+          tools.httpFetchEnabled(),
+          tools.mcpEnabled());
+    }
+
+    boolean externalToolsEnabled() {
+      return httpFetchEnabled || mcpEnabled;
+    }
   }
 }
