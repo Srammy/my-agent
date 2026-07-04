@@ -44,18 +44,7 @@ public class AgentScopeConfig {
   @ConditionalOnProperty(prefix = "agent.agent-scope", name = "enabled", havingValue = "true")
   HarnessAgent harnessAgent(Model agentScopeModel, AgentProperties agentProperties) {
     HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
-    applyToolPolicy(builder, toolPolicy(agentProperties));
-
-    builder
-        .disableDynamicSkills()
-        .disableDefaultWorkspaceSkills()
-        .disableMemoryTools()
-        .disableMemoryHooks()
-        .disableSubagents()
-        .disableDynamicSubagents()
-        .disableToolsConfig();
-
-    return builder.build();
+    return configureHarnessAgentBuilder(builder, toolPolicy(agentProperties)).build();
   }
 
   @Bean
@@ -85,6 +74,19 @@ public class AgentScopeConfig {
     if (!toolPolicy.externalToolsEnabled()) {
       builder.disableToolsConfig();
     }
+  }
+
+  HarnessAgent.Builder configureHarnessAgentBuilder(
+      HarnessAgent.Builder builder, AgentToolPolicy toolPolicy) {
+    applyToolPolicy(builder, toolPolicy);
+
+    return builder
+        .disableDynamicSkills()
+        .disableDefaultWorkspaceSkills()
+        .disableMemoryTools()
+        .disableMemoryHooks()
+        .disableSubagents()
+        .disableDynamicSubagents();
   }
 
   private Model buildDashScopeModel(AgentProperties.Model modelProperties, String apiKey) {

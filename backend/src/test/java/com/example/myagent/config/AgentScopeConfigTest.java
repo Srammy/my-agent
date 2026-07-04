@@ -150,6 +150,18 @@ class AgentScopeConfigTest {
   }
 
   @Test
+  void productionHarnessAgentBuilderKeepsExternalToolBoundaryWhenHttpFetchEnabled()
+      throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+
+    config.configureHarnessAgentBuilder(builder, config.toolPolicy(properties(false, false, true, false)));
+
+    assertThat(booleanField(builder, "disableFilesystemTools")).isTrue();
+    assertThat(booleanField(builder, "disableShellTool")).isTrue();
+    assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
+  }
+
+  @Test
   void enabledFileAndShellFlagsAreReflectedOnHarnessBuilder() throws Exception {
     HarnessAgent.Builder builder = HarnessAgent.builder();
 
