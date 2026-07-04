@@ -7,7 +7,9 @@ import static org.mockito.Mockito.when;
 import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.session.ChatSessionEntity;
 import com.example.myagent.session.SessionService;
+import com.example.myagent.skill.SkillMaterializer;
 import java.time.LocalDateTime;
+import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,24 +27,35 @@ class ChatServiceTest {
 
   @Mock private SessionService sessionService;
   @Mock private ChatAgentGateway chatAgentGateway;
+  @Mock private SkillMaterializer skillMaterializer;
 
   @Test
-  void streamBuildsGatewayRequestFromAuthenticatedUser() {
+  void streamMaterializesCurrentUserSkillsBeforeCallingGateway() {
     when(sessionService.requireOwnedSession(USER, "s_123"))
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
+    when(skillMaterializer.materializeForUser(USER.id()))
+        .thenReturn(Path.of("/tmp/materialized-skills"));
     when(chatAgentGateway.stream(org.mockito.ArgumentMatchers.any()))
         .thenReturn(Flux.just(StreamEventDto.replyStart(), StreamEventDto.done()));
 
-    ChatService chatService = new ChatService(sessionService, chatAgentGateway);
+    ChatService chatService = new ChatService(sessionService, chatAgentGateway, skillMaterializer);
 
     List<StreamEventDto> events = chatService.stream(USER, "s_123", "hello").collectList().block();
 
     assertThat(events).extracting(StreamEventDto::type).containsExactly("reply_start", "done");
 
     ArgumentCaptor<ChatAgentRequest> requestCaptor = ArgumentCaptor.forClass(ChatAgentRequest.class);
-    verify(chatAgentGateway).stream(requestCaptor.capture());
-    verify(sessionService).requireOwnedSession(USER, "s_123");
+    org.mockito.InOrder inOrder =
+        org.mockito.Mockito.inOrder(sessionService, skillMaterializer, chatAgentGateway);
+    inOrder.verify(sessionService).requireOwnedSession(USER, "s_123");
+    inOrder.verify(skillMaterializer).materializeForUser(USER.id());
+    inOrder.verify(chatAgentGateway).stream(requestCaptor.capture());
     assertThat(requestCaptor.getValue())
-        .isEqualTo(new ChatAgentRequest(USER.id(), "s_123", "hello"));
+        .isEqualTo(
+            new ChatAgentRequest(
+                USER.id(),
+                "s_123",
+                "hello",
+                List.of(Path.of("/tmp/materialized-skills").toString())));
   }
 }

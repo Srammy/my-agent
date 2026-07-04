@@ -21,6 +21,9 @@ import reactor.core.publisher.Flux;
 @ExtendWith(MockitoExtension.class)
 class AgentScopeChatAgentGatewayTest {
 
+  private static final String MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY =
+      ChatAgentRequest.MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY;
+
   @Mock private AgentScopeStreamExecutor executor;
 
   @Test
@@ -34,7 +37,11 @@ class AgentScopeChatAgentGatewayTest {
 
     AgentScopeChatAgentGateway gateway = new AgentScopeChatAgentGateway(executor, new AgentEventMapper());
 
-    var events = gateway.stream(new ChatAgentRequest(7L, "s_123", "hello")).collectList().block();
+    var events =
+        gateway
+            .stream(new ChatAgentRequest(7L, "s_123", "hello", java.util.List.of("/tmp/skills/7")))
+            .collectList()
+            .block();
 
     assertThat(events)
         .extracting(StreamEventDto::type)
@@ -47,6 +54,8 @@ class AgentScopeChatAgentGatewayTest {
     RuntimeContext runtimeContext = (RuntimeContext) runtimeContextCaptor.getValue();
     assertThat(runtimeContext.getUserId()).isEqualTo("7");
     assertThat(runtimeContext.getSessionId()).isEqualTo("s_123");
+    assertThat(runtimeContext.get(MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY, java.util.List.class))
+        .containsExactly("/tmp/skills/7");
   }
 
   @Test
@@ -55,7 +64,11 @@ class AgentScopeChatAgentGatewayTest {
 
     AgentScopeChatAgentGateway gateway = new AgentScopeChatAgentGateway(executor, new AgentEventMapper());
 
-    var events = gateway.stream(new ChatAgentRequest(7L, "s_123", "hello")).collectList().block();
+    var events =
+        gateway
+            .stream(new ChatAgentRequest(7L, "s_123", "hello", java.util.List.of("/tmp/skills/7")))
+            .collectList()
+            .block();
 
     assertThat(events).singleElement().satisfies(event -> {
       assertThat(event.type()).isEqualTo("error");
@@ -70,7 +83,11 @@ class AgentScopeChatAgentGatewayTest {
 
     AgentScopeChatAgentGateway gateway = new AgentScopeChatAgentGateway(executor, new AgentEventMapper());
 
-    var events = gateway.stream(new ChatAgentRequest(7L, "s_123", "hello")).collectList().block();
+    var events =
+        gateway
+            .stream(new ChatAgentRequest(7L, "s_123", "hello", java.util.List.of("/tmp/skills/7")))
+            .collectList()
+            .block();
 
     assertThat(events).singleElement().satisfies(event -> {
       assertThat(event.type()).isEqualTo("error");

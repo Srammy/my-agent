@@ -6,6 +6,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.ZoneOffset;
@@ -20,6 +21,32 @@ import org.springframework.util.StringUtils;
 public class SkillMaterializer {
 
   private static final String MATERIALIZED_KEY_FILE = ".materialized-key";
+  private static final String STAGING_SUFFIX = ".staging";
+  private static final String BACKUP_SUFFIX = ".backup";
+  private static final Set<String> WINDOWS_RESERVED_NAMES =
+      Set.of(
+          "CON",
+          "PRN",
+          "AUX",
+          "NUL",
+          "COM1",
+          "COM2",
+          "COM3",
+          "COM4",
+          "COM5",
+          "COM6",
+          "COM7",
+          "COM8",
+          "COM9",
+          "LPT1",
+          "LPT2",
+          "LPT3",
+          "LPT4",
+          "LPT5",
+          "LPT6",
+          "LPT7",
+          "LPT8",
+          "LPT9");
 
   private final SkillService skillService;
   private final Path cacheRoot;
@@ -55,13 +82,32 @@ public class SkillMaterializer {
       return;
     }
 
-    deleteRecursively(skillRoot);
-    Files.createDirectories(skillRoot);
+    Path parent = skillRoot.getParent();
+    String directoryName = skillRoot.getFileName().toString();
+    Path stagingRoot = resolveDirectory(parent, directoryName + STAGING_SUFFIX);
+    Path backupRoot = resolveDirectory(parent, directoryName + BACKUP_SUFFIX);
+
+    deleteRecursively(stagingRoot);
+    deleteRecursively(backupRoot);
+
+    try {
+      writeSkillToDirectory(stagingRoot, skill, materializedKey);
+      replaceSkillDirectory(skillRoot, stagingRoot, backupRoot);
+    } finally {
+      deleteRecursively(stagingRoot);
+      deleteRecursively(backupRoot);
+    }
+  }
+
+  private void writeSkillToDirectory(
+      Path targetRoot, SkillService.MaterializedSkill skill, String materializedKey)
+      throws IOException {
+    Files.createDirectories(targetRoot);
 
     boolean hasSkillMarkdown = false;
     for (SkillFileEntity file : skill.files()) {
       String validatedPath = validateDatabasePath(file.getPath(), skill.skillId());
-      Path targetFile = resolveFile(skillRoot, validatedPath);
+      Path targetFile = resolveFile(targetRoot, validatedPath);
       Files.createDirectories(targetFile.getParent());
       Files.writeString(
           targetFile, file.getContent() == null ? "" : file.getContent(), StandardCharsets.UTF_8);
@@ -73,7 +119,32 @@ public class SkillMaterializer {
       throw new IllegalStateException("Skill " + skill.skillId() + " is missing SKILL.md");
     }
 
-    Files.writeString(skillRoot.resolve(MATERIALIZED_KEY_FILE), materializedKey, StandardCharsets.UTF_8);
+    Files.writeString(
+        targetRoot.resolve(MATERIALIZED_KEY_FILE), materializedKey, StandardCharsets.UTF_8);
+  }
+
+  private void replaceSkillDirectory(Path skillRoot, Path stagingRoot, Path backupRoot) throws IOException {
+    if (Files.exists(skillRoot)) {
+      moveDirectory(skillRoot, backupRoot);
+    }
+
+    try {
+      moveDirectory(stagingRoot, skillRoot);
+    } catch (IOException exception) {
+      if (Files.exists(backupRoot) && !Files.exists(skillRoot)) {
+        moveDirectory(backupRoot, skillRoot);
+      }
+      throw exception;
+    }
+
+    deleteRecursively(backupRoot);
+  }
+
+  private void moveDirectory(Path source, Path target) throws IOException {
+    if (!Files.exists(source)) {
+      return;
+    }
+    Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
   }
 
   private void cleanupStaleDirectories(Path userRoot, Set<String> activeDirectories) throws IOException {
@@ -162,15 +233,53 @@ public class SkillMaterializer {
       return fallbackDirectoryName(skill);
     }
 
-    String sanitized =
-        name.replace('/', '_').replace('\\', '_').replace(':', '_').replace('\u0000', '_');
+    String sanitized = sanitizeWindowsUnsafeName(name);
     if (".".equals(sanitized) || "..".equals(sanitized) || sanitized.isBlank()) {
       return fallbackDirectoryName(skill);
     }
-    if (!sanitized.equals(name)) {
+    if (!sanitized.equals(name) || isWindowsReservedName(sanitized)) {
       return sanitized + "--" + skill.skillId();
     }
     return sanitized;
+  }
+
+  private String sanitizeWindowsUnsafeName(String name) {
+    StringBuilder builder = new StringBuilder(name.length());
+    for (int index = 0; index < name.length(); index++) {
+      char current = name.charAt(index);
+      if (current < 32
+          || current == '"'
+          || current == '*'
+          || current == '/'
+          || current == ':'
+          || current == '<'
+          || current == '>'
+          || current == '?'
+          || current == '\\'
+          || current == '|') {
+        builder.append('_');
+      } else {
+        builder.append(current);
+      }
+    }
+
+    int end = builder.length();
+    while (end > 0) {
+      char current = builder.charAt(end - 1);
+      if (current == '.' || current == ' ') {
+        end--;
+      } else {
+        break;
+      }
+    }
+    return builder.substring(0, end);
+  }
+
+  private boolean isWindowsReservedName(String name) {
+    String upperCaseName = name.toUpperCase(java.util.Locale.ROOT);
+    int dotIndex = upperCaseName.indexOf('.');
+    String baseName = dotIndex >= 0 ? upperCaseName.substring(0, dotIndex) : upperCaseName;
+    return WINDOWS_RESERVED_NAMES.contains(baseName);
   }
 
   private String fallbackDirectoryName(SkillService.MaterializedSkill skill) {

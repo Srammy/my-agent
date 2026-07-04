@@ -8,7 +8,9 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.session.ChatSessionEntity;
 import com.example.myagent.session.SessionService;
+import com.example.myagent.skill.SkillMaterializer;
 import java.time.LocalDateTime;
+import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -34,6 +36,7 @@ class ChatControllerTest {
   @Autowired private WebTestClient webTestClient;
 
   @MockBean private SessionService sessionService;
+  @MockBean private SkillMaterializer skillMaterializer;
 
   @Test
   void postStreamRejectsUnknownFields() {
@@ -69,6 +72,8 @@ class ChatControllerTest {
   void postStreamReturnsNdjsonEventsForOwnedSession() {
     when(sessionService.requireOwnedSession(USER, "s_123"))
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
+    when(skillMaterializer.materializeForUser(USER.id()))
+        .thenReturn(Path.of("/tmp/materialized-skills"));
 
     authenticatedClient()
         .post()

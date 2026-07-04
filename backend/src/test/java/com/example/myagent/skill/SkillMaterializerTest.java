@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.myagent.config.AgentProperties;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -149,6 +150,122 @@ class SkillMaterializerTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("references/../../escape.md");
     assertThat(cacheDir.resolve("escape.md")).doesNotExist();
+  }
+
+  @Test
+  void materializeForUserKeepsExistingCacheWhenUpdatedSkillIsMissingSkillMarkdown() throws IOException {
+    Path cacheDir = tempDir.resolve("skill-cache");
+    SkillMaterializer materializer = new SkillMaterializer(skillService, properties(cacheDir));
+
+    when(skillService.listEnabledSkillsForUser(7L))
+        .thenReturn(
+            List.of(
+                snapshot(
+                    11L,
+                    "mysql-helper",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 10, 0),
+                    file("SKILL.md", "---\nname: mysql-helper\ndescription: user\n---\n"),
+                    file("references/foo.md", "alpha"))),
+            List.of(
+                snapshot(
+                    11L,
+                    "mysql-helper",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 11, 0),
+                    file("references/foo.md", "beta"))));
+
+    Path materializedRoot = materializer.materializeForUser(7L);
+    Path skillRoot = materializedRoot.resolve("mysql-helper");
+    assertThat(Files.readString(skillRoot.resolve("references/foo.md"))).isEqualTo("alpha");
+
+    assertThatThrownBy(() -> materializer.materializeForUser(7L))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("missing SKILL.md");
+    assertThat(Files.readString(skillRoot.resolve("references/foo.md"))).isEqualTo("alpha");
+    assertThat(skillRoot.resolve("SKILL.md")).exists();
+  }
+
+  @Test
+  void materializeForUserKeepsExistingCacheWhenWritingUpdatedSkillFails() throws IOException {
+    Path cacheDir = tempDir.resolve("skill-cache");
+    SkillMaterializer materializer = new SkillMaterializer(skillService, properties(cacheDir));
+
+    when(skillService.listEnabledSkillsForUser(7L))
+        .thenReturn(
+            List.of(
+                snapshot(
+                    11L,
+                    "mysql-helper",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 10, 0),
+                    file("SKILL.md", "---\nname: mysql-helper\ndescription: user\n---\n"),
+                    file("references/foo.md", "alpha"))),
+            List.of(
+                snapshot(
+                    11L,
+                    "mysql-helper",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 11, 0),
+                    file("SKILL.md", "---\nname: mysql-helper\ndescription: user\n---\n"),
+                    file("references/conflict", "conflict"),
+                    file("references/conflict/run.md", "echo broken"))));
+
+    Path materializedRoot = materializer.materializeForUser(7L);
+    Path skillRoot = materializedRoot.resolve("mysql-helper");
+    assertThat(Files.readString(skillRoot.resolve("references/foo.md"))).isEqualTo("alpha");
+
+    assertThatThrownBy(() -> materializer.materializeForUser(7L))
+        .isInstanceOf(UncheckedIOException.class);
+    assertThat(Files.readString(skillRoot.resolve("references/foo.md"))).isEqualTo("alpha");
+    assertThat(skillRoot.resolve("references/conflict")).doesNotExist();
+  }
+
+  @Test
+  void materializeForUserSanitizesWindowsUnsafeDirectoryNamesIntoCacheRoot() throws IOException {
+    Path cacheDir = tempDir.resolve("skill-cache");
+    SkillMaterializer materializer = new SkillMaterializer(skillService, properties(cacheDir));
+
+    when(skillService.listEnabledSkillsForUser(7L))
+        .thenReturn(
+            List.of(
+                snapshot(
+                    11L,
+                    "CON?. ",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 10, 0),
+                    file("SKILL.md", "---\nname: con\ndescription: user\n---\n")),
+                snapshot(
+                    12L,
+                    "LPT1",
+                    SkillService.OWNER_TYPE_SYSTEM,
+                    LocalDateTime.of(2026, 7, 4, 10, 5),
+                    file("SKILL.md", "---\nname: lpt\ndescription: system\n---\n"))));
+
+    Path materializedRoot = materializer.materializeForUser(7L);
+    List<Path> skillDirectories;
+    try (var children = Files.list(materializedRoot)) {
+      skillDirectories = children.filter(Files::isDirectory).toList();
+    }
+
+    assertThat(skillDirectories).hasSize(2);
+    assertThat(skillDirectories)
+        .allSatisfy(
+            path -> {
+              assertThat(path.normalize()).startsWith(materializedRoot.normalize());
+              assertThat(path.getFileName().toString()).doesNotContainAnyWhitespaces();
+              assertThat(path.getFileName().toString())
+                  .doesNotContain("?")
+                  .doesNotContain("*")
+                  .doesNotContain("<")
+                  .doesNotContain(">")
+                  .doesNotContain("|");
+              assertThat(path.getFileName().toString()).doesNotEndWith(".");
+              assertThat(path.getFileName().toString()).doesNotEndWith(" ");
+            });
+    assertThat(skillDirectories)
+        .extracting(path -> path.getFileName().toString())
+        .contains("CON_--11", "LPT1--12");
   }
 
   private static SkillService.MaterializedSkill snapshot(
