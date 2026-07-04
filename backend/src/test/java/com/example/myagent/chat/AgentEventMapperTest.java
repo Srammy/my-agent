@@ -4,10 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.agentscope.core.event.AgentEndEvent;
 import io.agentscope.core.event.AgentStartEvent;
+import io.agentscope.core.event.ExceedMaxItersEvent;
+import io.agentscope.core.event.RequestStopEvent;
+import io.agentscope.core.event.RequireExternalExecutionEvent;
 import io.agentscope.core.event.RequireUserConfirmEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultTextDeltaEvent;
+import io.agentscope.core.message.GenerateReason;
 import io.agentscope.core.message.ToolUseBlock;
 import java.util.List;
 import java.util.Map;
@@ -54,14 +58,40 @@ class AgentEventMapperTest {
 
   @Test
   void mapsConfirmRequestToPermissionRequiredEvent() {
-    ToolUseBlock toolUseBlock =
-        new ToolUseBlock("call-1", "shell_command", Map.of("command", "Get-ChildItem"));
+    ToolUseBlock toolUseBlock = shellCommandToolCall();
 
     StreamEventDto event =
         mapper.map(new RequireUserConfirmEvent("reply-1", List.of(toolUseBlock)));
 
     assertThat(event.type()).isEqualTo("permission_required");
     assertThat(event.payload()).containsEntry("permission", "shell_command");
+  }
+
+  @Test
+  void mapsRequireExternalExecutionToPermissionRequiredEvent() {
+    StreamEventDto event =
+        mapper.map(new RequireExternalExecutionEvent("reply-1", List.of(shellCommandToolCall())));
+
+    assertThat(event.type()).isEqualTo("permission_required");
+    assertThat(event.payload()).containsEntry("permission", "shell_command");
+  }
+
+  @Test
+  void mapsExceedMaxItersToErrorEvent() {
+    StreamEventDto event = mapper.map(new ExceedMaxItersEvent("reply-1", 8, 8));
+
+    assertThat(event.type()).isEqualTo("error");
+    assertThat(event.payload())
+        .containsEntry("message", "Agent iteration limit reached (8/8)");
+  }
+
+  @Test
+  void mapsRequestStopToDoneEvent() {
+    StreamEventDto event =
+        mapper.map(new RequestStopEvent("reply-1", GenerateReason.ACTING_STOP_REQUESTED));
+
+    assertThat(event.type()).isEqualTo("done");
+    assertThat(event.payload()).isEmpty();
   }
 
   @Test
@@ -78,5 +108,9 @@ class AgentEventMapperTest {
 
     assertThat(event.type()).isEqualTo("error");
     assertThat(event.payload()).containsEntry("message", "sdk exploded");
+  }
+
+  private ToolUseBlock shellCommandToolCall() {
+    return new ToolUseBlock("call-1", "shell_command", Map.of("command", "Get-ChildItem"));
   }
 }

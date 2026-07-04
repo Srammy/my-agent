@@ -1,7 +1,11 @@
 package com.example.myagent.chat;
 
+import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.AgentEndEvent;
 import io.agentscope.core.event.AgentStartEvent;
+import io.agentscope.core.event.ExceedMaxItersEvent;
+import io.agentscope.core.event.RequestStopEvent;
+import io.agentscope.core.event.RequireExternalExecutionEvent;
 import io.agentscope.core.event.RequireUserConfirmEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
@@ -40,10 +44,47 @@ public class AgentEventMapper {
     if (agentEvent instanceof RequireUserConfirmEvent requireUserConfirmEvent) {
       return StreamEventDto.permissionRequired(firstToolName(requireUserConfirmEvent.getToolCalls()));
     }
+    if (agentEvent instanceof RequireExternalExecutionEvent requireExternalExecutionEvent) {
+      return StreamEventDto.permissionRequired(
+          firstToolName(requireExternalExecutionEvent.getToolCalls()));
+    }
+    if (agentEvent instanceof ExceedMaxItersEvent exceedMaxItersEvent) {
+      return StreamEventDto.error(
+          "Agent iteration limit reached (%d/%d)"
+              .formatted(exceedMaxItersEvent.getCurrentIter(), exceedMaxItersEvent.getMaxIters()));
+    }
+    if (agentEvent instanceof RequestStopEvent) {
+      return StreamEventDto.done();
+    }
     if (agentEvent instanceof AgentEndEvent) {
       return StreamEventDto.done();
     }
+    if (agentEvent instanceof AgentEvent baseAgentEvent) {
+      return mapUnhandledAgentEvent(baseAgentEvent);
+    }
     return null;
+  }
+
+  private StreamEventDto mapUnhandledAgentEvent(AgentEvent agentEvent) {
+    // These SDK event types are lower-level stream markers with no current frontend protocol shape.
+    return switch (agentEvent.getType()) {
+      case AGENT_RESULT,
+          MODEL_CALL_START,
+          MODEL_CALL_END,
+          TEXT_BLOCK_START,
+          TEXT_BLOCK_END,
+          THINKING_BLOCK_START,
+          THINKING_BLOCK_DELTA,
+          THINKING_BLOCK_END,
+          DATA_BLOCK_START,
+          DATA_BLOCK_DELTA,
+          DATA_BLOCK_END,
+          TOOL_CALL_DELTA,
+          TOOL_CALL_END,
+          TOOL_RESULT_START,
+          TOOL_RESULT_END -> null;
+      default -> StreamEventDto.error("Unhandled AgentScope event: " + agentEvent.getType().getValue());
+    };
   }
 
   private String errorMessage(Throwable throwable) {
