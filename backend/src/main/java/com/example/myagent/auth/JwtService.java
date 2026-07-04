@@ -15,10 +15,11 @@ import org.springframework.stereotype.Service;
 @Service
 public class JwtService {
 
+  private static final int MIN_SECRET_BYTES = 32;
   private final SecretKey signingKey;
 
   public JwtService(@Value("${security.jwt.secret}") String secret) {
-    this.signingKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+    this.signingKey = Keys.hmacShaKeyFor(validateSecret(secret));
   }
 
   public String createToken(UserEntity user) {
@@ -47,5 +48,20 @@ public class JwtService {
 
   private Claims parseClaims(String token) {
     return Jwts.parser().verifyWith(signingKey).build().parseSignedClaims(token).getPayload();
+  }
+
+  private byte[] validateSecret(String secret) {
+    if (secret == null || secret.isBlank()) {
+      throw new IllegalArgumentException(
+          "security.jwt.secret must be provided via SECURITY_JWT_SECRET");
+    }
+
+    byte[] secretBytes = secret.getBytes(StandardCharsets.UTF_8);
+    if (secretBytes.length < MIN_SECRET_BYTES) {
+      throw new IllegalArgumentException(
+          "security.jwt.secret must be at least 32 bytes for HS256 signing");
+    }
+
+    return secretBytes;
   }
 }
