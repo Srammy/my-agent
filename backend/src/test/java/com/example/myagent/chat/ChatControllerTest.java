@@ -1,5 +1,6 @@
 package com.example.myagent.chat;
 
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
@@ -35,6 +36,36 @@ class ChatControllerTest {
   @MockBean private SessionService sessionService;
 
   @Test
+  void postStreamRejectsUnknownFields() {
+    authenticatedClient()
+        .post()
+        .uri("/api/chat/sessions/s_123/stream")
+        .contentType(MediaType.APPLICATION_JSON)
+        .accept(MediaType.parseMediaType("application/x-ndjson"))
+        .bodyValue("{\"message\":\"hello\",\"userId\":999}")
+        .exchange()
+        .expectStatus()
+        .isBadRequest();
+
+    verify(sessionService, never()).requireOwnedSession(USER, "s_123");
+  }
+
+  @Test
+  void postStreamRejectsArbitraryUnknownFields() {
+    authenticatedClient()
+        .post()
+        .uri("/api/chat/sessions/s_123/stream")
+        .contentType(MediaType.APPLICATION_JSON)
+        .accept(MediaType.parseMediaType("application/x-ndjson"))
+        .bodyValue("{\"message\":\"hello\",\"traceId\":\"abc\"}")
+        .exchange()
+        .expectStatus()
+        .isBadRequest();
+
+    verify(sessionService, never()).requireOwnedSession(USER, "s_123");
+  }
+
+  @Test
   void postStreamReturnsNdjsonEventsForOwnedSession() {
     when(sessionService.requireOwnedSession(USER, "s_123"))
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
@@ -44,7 +75,7 @@ class ChatControllerTest {
         .uri("/api/chat/sessions/s_123/stream")
         .contentType(MediaType.APPLICATION_JSON)
         .accept(MediaType.parseMediaType("application/x-ndjson"))
-        .bodyValue("{\"message\":\"你好\",\"userId\":999}")
+        .bodyValue("{\"message\":\"你好\"}")
         .exchange()
         .expectStatus()
         .isOk()
