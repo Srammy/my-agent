@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -63,6 +64,69 @@ class SkillMaterializerTest {
     assertThat(Files.readString(materializedRoot.resolve("ops-helper/assets/icon.txt")))
         .isEqualTo("icon");
     assertThat(materializedRoot.resolve("stale-skill")).doesNotExist();
+  }
+
+  @Test
+  void materializeForUserRefreshesWhenSkillFilesChangeWithoutSkillTimestamp() throws IOException {
+    Path cacheDir = tempDir.resolve("skill-cache");
+    SkillMaterializer materializer = new SkillMaterializer(skillService, properties(cacheDir));
+
+    when(skillService.listEnabledSkillsForUser(7L))
+        .thenReturn(
+            List.of(
+                snapshot(
+                    11L,
+                    "mysql-helper",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 10, 0),
+                    file("SKILL.md", "---\nname: mysql-helper\ndescription: user\n---\n"),
+                    file("references/foo.md", "alpha"))),
+            List.of(
+                snapshot(
+                    11L,
+                    "mysql-helper",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 10, 0),
+                    file("SKILL.md", "---\nname: mysql-helper\ndescription: user\n---\n"),
+                    file("references/foo.md", "beta"))));
+
+    Path materializedRoot = materializer.materializeForUser(7L);
+    assertThat(Files.readString(materializedRoot.resolve("mysql-helper/references/foo.md")))
+        .isEqualTo("alpha");
+
+    materializer.materializeForUser(7L);
+    assertThat(Files.readString(materializedRoot.resolve("mysql-helper/references/foo.md")))
+        .isEqualTo("beta");
+  }
+
+  @Test
+  void materializeForUserRemovesDeletedSkillFilesWithoutSkillTimestampChange() throws IOException {
+    Path cacheDir = tempDir.resolve("skill-cache");
+    SkillMaterializer materializer = new SkillMaterializer(skillService, properties(cacheDir));
+
+    when(skillService.listEnabledSkillsForUser(7L))
+        .thenReturn(
+            List.of(
+                snapshot(
+                    11L,
+                    "mysql-helper",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 10, 0),
+                    file("SKILL.md", "---\nname: mysql-helper\ndescription: user\n---\n"),
+                    file("scripts/run.sh", "echo one"))),
+            List.of(
+                snapshot(
+                    11L,
+                    "mysql-helper",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 10, 0),
+                    file("SKILL.md", "---\nname: mysql-helper\ndescription: user\n---\n"))));
+
+    Path materializedRoot = materializer.materializeForUser(7L);
+    assertThat(materializedRoot.resolve("mysql-helper/scripts/run.sh")).exists();
+
+    materializer.materializeForUser(7L);
+    assertThat(materializedRoot.resolve("mysql-helper/scripts/run.sh")).doesNotExist();
   }
 
   @Test

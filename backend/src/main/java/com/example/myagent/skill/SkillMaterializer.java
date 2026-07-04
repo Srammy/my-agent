@@ -6,8 +6,12 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.ZoneOffset;
+import java.util.HexFormat;
 import java.util.HashSet;
+import java.util.Comparator;
 import java.util.Set;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -93,7 +97,35 @@ public class SkillMaterializer {
   private String buildMaterializedKey(SkillService.MaterializedSkill skill) {
     long updatedAtMillis =
         skill.updatedAt() == null ? 0L : skill.updatedAt().toInstant(ZoneOffset.UTC).toEpochMilli();
-    return skill.skillId() + "-" + updatedAtMillis;
+    return skill.skillId() + "-" + updatedAtMillis + "-" + fingerprintFiles(skill.files());
+  }
+
+  private String fingerprintFiles(Iterable<SkillFileEntity> files) {
+    try {
+      MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      java.util.stream.StreamSupport.stream(files.spliterator(), false)
+          .sorted(Comparator.comparing(SkillFileEntity::getPath))
+          .forEach(
+          file -> {
+            updateDigest(digest, file.getPath());
+            updateDigest(
+                digest,
+                file.getUpdatedAt() == null
+                    ? "0"
+                    : String.valueOf(
+                        file.getUpdatedAt().toInstant(ZoneOffset.UTC).toEpochMilli()));
+            updateDigest(digest, file.getContent() == null ? "" : file.getContent());
+            digest.update((byte) 0);
+          });
+      return HexFormat.of().formatHex(digest.digest());
+    } catch (NoSuchAlgorithmException exception) {
+      throw new IllegalStateException("Failed to compute skill materialization fingerprint", exception);
+    }
+  }
+
+  private static void updateDigest(MessageDigest digest, String value) {
+    digest.update(value.getBytes(StandardCharsets.UTF_8));
+    digest.update((byte) 0);
   }
 
   private String validateDatabasePath(String path, Long skillId) {
