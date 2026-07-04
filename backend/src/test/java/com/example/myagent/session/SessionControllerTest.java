@@ -1,6 +1,7 @@
 package com.example.myagent.session;
 
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
@@ -115,18 +116,63 @@ class SessionControllerTest {
   }
 
   @Test
-  void getSessionMapsCrossUserInvisibleTo404() {
-    when(sessionService.requireOwnedSession(USER, "other-users-session"))
-        .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"));
+  void getSessionReturnsDtoShapeWithoutUserId() {
+    when(sessionService.requireOwnedSession(USER, "s_123"))
+        .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
 
     authenticatedClient()
         .get()
+        .uri("/api/chat/sessions/s_123")
+        .exchange()
+        .expectStatus()
+        .isOk()
+        .expectHeader()
+        .contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+        .expectBody()
+        .jsonPath("$.id")
+        .isEqualTo("s_123")
+        .jsonPath("$.title")
+        .isEqualTo("Sprint planning")
+        .jsonPath("$.createdAt")
+        .isEqualTo("2026-07-04T09:30:00")
+        .jsonPath("$.updatedAt")
+        .isEqualTo("2026-07-04T09:45:00")
+        .jsonPath("$.userId")
+        .doesNotExist();
+
+    verify(sessionService).requireOwnedSession(USER, "s_123");
+  }
+
+  @Test
+  void deleteSessionMapsMissingTo404() {
+    doThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"))
+        .when(sessionService)
+        .deleteSession(USER, "missing");
+
+    authenticatedClient()
+        .delete()
+        .uri("/api/chat/sessions/missing")
+        .exchange()
+        .expectStatus()
+        .isNotFound();
+
+    verify(sessionService).deleteSession(USER, "missing");
+  }
+
+  @Test
+  void deleteSessionMapsCrossUserInvisibleTo404() {
+    doThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"))
+        .when(sessionService)
+        .deleteSession(USER, "other-users-session");
+
+    authenticatedClient()
+        .delete()
         .uri("/api/chat/sessions/other-users-session")
         .exchange()
         .expectStatus()
         .isNotFound();
 
-    verify(sessionService).requireOwnedSession(USER, "other-users-session");
+    verify(sessionService).deleteSession(USER, "other-users-session");
   }
 
   @Test
