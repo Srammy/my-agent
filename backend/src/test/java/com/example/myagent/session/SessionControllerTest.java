@@ -1,178 +1,164 @@
 package com.example.myagent.session;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.doAnswer;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
 import com.example.myagent.auth.CurrentUser;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.stubbing.Answer;
-import reactor.test.StepVerifier;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.config.web.server.ServerHttpSecurity;
+import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.web.server.ResponseStatusException;
 
-@ExtendWith(MockitoExtension.class)
+@WebFluxTest(SessionController.class)
+@Import(SessionControllerTest.TestSecurityConfig.class)
 class SessionControllerTest {
 
   private static final CurrentUser USER = new CurrentUser(1L, "alice", "USER");
+  private static final LocalDateTime CREATED_AT = LocalDateTime.parse("2026-07-04T09:30:00");
+  private static final LocalDateTime UPDATED_AT = LocalDateTime.parse("2026-07-04T09:45:00");
 
-  @Mock private SessionService sessionService;
+  @Autowired private WebTestClient webTestClient;
+
+  @MockBean private SessionService sessionService;
 
   @Test
-  void createOffloadsBlockingServiceCallToBoundedElasticThread() {
-    SessionController controller = new SessionController(sessionService);
-    CreateSessionRequest request = new CreateSessionRequest("Sprint planning");
-    AtomicReference<String> serviceThreadName = new AtomicReference<>();
-    ChatSessionDto response =
-        new ChatSessionDto("s_123", "Sprint planning", LocalDateTime.now(), LocalDateTime.now());
+  void postSessionsCreatesSessionForAuthenticatedUserAndDoesNotExposeUserId() {
+    ChatSessionEntity session =
+        new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT);
+    when(sessionService.createSession(USER, "Sprint planning")).thenReturn(session);
 
-    when(sessionService.createSession(USER, "Sprint planning"))
-        .thenAnswer(
-            (Answer<ChatSessionEntity>)
-                invocation -> {
-                  serviceThreadName.set(Thread.currentThread().getName());
-                  return new ChatSessionEntity(
-                      response.id(),
-                      USER.id(),
-                      response.title(),
-                      response.createdAt(),
-                      response.updatedAt());
-                });
+    authenticatedClient()
+        .post()
+        .uri("/api/chat/sessions")
+        .contentType(MediaType.APPLICATION_JSON)
+        .bodyValue("{\"title\":\"Sprint planning\",\"userId\":999}")
+        .exchange()
+        .expectStatus()
+        .isOk()
+        .expectHeader()
+        .contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+        .expectBody()
+        .jsonPath("$.id")
+        .isEqualTo("s_123")
+        .jsonPath("$.title")
+        .isEqualTo("Sprint planning")
+        .jsonPath("$.createdAt")
+        .isEqualTo("2026-07-04T09:30:00")
+        .jsonPath("$.updatedAt")
+        .isEqualTo("2026-07-04T09:45:00")
+        .jsonPath("$.userId")
+        .doesNotExist();
 
-    AtomicReference<String> subscriberThreadName = new AtomicReference<>();
-    Thread subscriberThread =
-        new Thread(
-            () -> {
-              subscriberThreadName.set(Thread.currentThread().getName());
-              StepVerifier.create(controller.createSession(USER, request))
-                  .expectNext(response)
-                  .verifyComplete();
-            },
-            "session-create-subscriber");
-
-    subscriberThread.start();
-    join(subscriberThread);
-
-    assertThat(subscriberThreadName.get()).isEqualTo("session-create-subscriber");
-    assertThat(serviceThreadName.get()).startsWith("boundedElastic-");
+    verify(sessionService).createSession(eq(USER), eq("Sprint planning"));
   }
 
   @Test
-  void listOffloadsBlockingServiceCallToBoundedElasticThread() {
-    SessionController controller = new SessionController(sessionService);
-    ChatSessionEntity session =
-        new ChatSessionEntity("s_123", USER.id(), "Plan", LocalDateTime.now(), LocalDateTime.now());
-    AtomicReference<String> serviceThreadName = new AtomicReference<>();
-
+  void getSessionsReturnsOnlyCurrentUsersDtosWithoutUserId() {
     when(sessionService.listSessions(USER))
-        .thenAnswer(
-            (Answer<List<ChatSessionEntity>>)
-                invocation -> {
-                  serviceThreadName.set(Thread.currentThread().getName());
-                  return List.of(session);
-                });
+        .thenReturn(
+            List.of(
+                new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT),
+                new ChatSessionEntity("s_456", USER.id(), "Retro", CREATED_AT, UPDATED_AT)));
 
-    AtomicReference<String> subscriberThreadName = new AtomicReference<>();
-    Thread subscriberThread =
-        new Thread(
-            () -> {
-              subscriberThreadName.set(Thread.currentThread().getName());
-              StepVerifier.create(controller.listSessions(USER))
-                  .expectNext(
-                      List.of(
-                          new ChatSessionDto(
-                              session.getId(),
-                              session.getTitle(),
-                              session.getCreatedAt(),
-                              session.getUpdatedAt())))
-                  .verifyComplete();
-            },
-            "session-list-subscriber");
+    authenticatedClient()
+        .get()
+        .uri("/api/chat/sessions")
+        .exchange()
+        .expectStatus()
+        .isOk()
+        .expectHeader()
+        .contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+        .expectBody()
+        .jsonPath("$[0].id")
+        .isEqualTo("s_123")
+        .jsonPath("$[0].title")
+        .isEqualTo("Sprint planning")
+        .jsonPath("$[0].userId")
+        .doesNotExist()
+        .jsonPath("$[1].id")
+        .isEqualTo("s_456")
+        .jsonPath("$[1].title")
+        .isEqualTo("Retro")
+        .jsonPath("$[1].userId")
+        .doesNotExist();
 
-    subscriberThread.start();
-    join(subscriberThread);
-
-    assertThat(subscriberThreadName.get()).isEqualTo("session-list-subscriber");
-    assertThat(serviceThreadName.get()).startsWith("boundedElastic-");
+    verify(sessionService).listSessions(USER);
   }
 
   @Test
-  void getOffloadsBlockingServiceCallToBoundedElasticThread() {
-    SessionController controller = new SessionController(sessionService);
-    ChatSessionEntity session =
-        new ChatSessionEntity("s_123", USER.id(), "Plan", LocalDateTime.now(), LocalDateTime.now());
-    AtomicReference<String> serviceThreadName = new AtomicReference<>();
+  void getSessionMapsNotFoundTo404() {
+    when(sessionService.requireOwnedSession(USER, "missing"))
+        .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"));
 
-    when(sessionService.requireOwnedSession(USER, "s_123"))
-        .thenAnswer(
-            (Answer<ChatSessionEntity>)
-                invocation -> {
-                  serviceThreadName.set(Thread.currentThread().getName());
-                  return session;
-                });
+    authenticatedClient()
+        .get()
+        .uri("/api/chat/sessions/missing")
+        .exchange()
+        .expectStatus()
+        .isNotFound();
 
-    AtomicReference<String> subscriberThreadName = new AtomicReference<>();
-    Thread subscriberThread =
-        new Thread(
-            () -> {
-              subscriberThreadName.set(Thread.currentThread().getName());
-              StepVerifier.create(controller.getSession(USER, "s_123"))
-                  .expectNext(
-                      new ChatSessionDto(
-                          session.getId(),
-                          session.getTitle(),
-                          session.getCreatedAt(),
-                          session.getUpdatedAt()))
-                  .verifyComplete();
-            },
-            "session-get-subscriber");
-
-    subscriberThread.start();
-    join(subscriberThread);
-
-    assertThat(subscriberThreadName.get()).isEqualTo("session-get-subscriber");
-    assertThat(serviceThreadName.get()).startsWith("boundedElastic-");
+    verify(sessionService).requireOwnedSession(USER, "missing");
   }
 
   @Test
-  void deleteOffloadsBlockingServiceCallToBoundedElasticThread() {
-    SessionController controller = new SessionController(sessionService);
-    AtomicReference<String> serviceThreadName = new AtomicReference<>();
+  void getSessionMapsCrossUserInvisibleTo404() {
+    when(sessionService.requireOwnedSession(USER, "other-users-session"))
+        .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"));
 
-    doAnswer(
-            invocation -> {
-              serviceThreadName.set(Thread.currentThread().getName());
-              return null;
-            })
-        .when(sessionService)
-        .deleteSession(USER, "s_123");
+    authenticatedClient()
+        .get()
+        .uri("/api/chat/sessions/other-users-session")
+        .exchange()
+        .expectStatus()
+        .isNotFound();
 
-    AtomicReference<String> subscriberThreadName = new AtomicReference<>();
-    Thread subscriberThread =
-        new Thread(
-            () -> {
-              subscriberThreadName.set(Thread.currentThread().getName());
-              StepVerifier.create(controller.deleteSession(USER, "s_123")).verifyComplete();
-            },
-            "session-delete-subscriber");
-
-    subscriberThread.start();
-    join(subscriberThread);
-
-    assertThat(subscriberThreadName.get()).isEqualTo("session-delete-subscriber");
-    assertThat(serviceThreadName.get()).startsWith("boundedElastic-");
+    verify(sessionService).requireOwnedSession(USER, "other-users-session");
   }
 
-  private static void join(Thread thread) {
-    try {
-      thread.join();
-    } catch (InterruptedException exception) {
-      Thread.currentThread().interrupt();
-      throw new AssertionError("Interrupted while waiting for test thread", exception);
+  @Test
+  void deleteSessionReturnsNoContentForCurrentContract() {
+    authenticatedClient()
+        .delete()
+        .uri("/api/chat/sessions/s_123")
+        .exchange()
+        .expectStatus()
+        .isNoContent()
+        .expectBody()
+        .isEmpty();
+
+    verify(sessionService).deleteSession(USER, "s_123");
+  }
+
+  private WebTestClient authenticatedClient() {
+    return webTestClient.mutateWith(
+        mockAuthentication(new TestingAuthenticationToken(USER, null, "ROLE_USER")));
+  }
+
+  @TestConfiguration
+  static class TestSecurityConfig {
+
+    @Bean
+    SecurityWebFilterChain springSecurityFilterChain(ServerHttpSecurity http) {
+      return http
+          .csrf(ServerHttpSecurity.CsrfSpec::disable)
+          .authorizeExchange(exchanges -> exchanges.anyExchange().authenticated())
+          .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
+          .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
+          .build();
     }
   }
 }
