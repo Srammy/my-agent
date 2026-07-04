@@ -1,14 +1,14 @@
-# AgentScope Java 通用助手 Implementation Plan
+# AgentScope Java 通用助手实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给 agentic workers 的要求：** 实施本计划时必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans`。所有步骤使用 checkbox（`- [ ]`）跟踪执行状态。
 
-**Goal:** 构建一个 Docker-first 的 AgentScope Java 通用助手，支持登录、多会话、流式对话、MySQL skill 文件树、权限、记忆、自我进化和 Vue UI。
+**目标：** 构建一个 Docker-first 的 AgentScope Java 通用助手，支持登录、多会话、流式对话、MySQL skill 文件树、权限、记忆、自我进化和 Vue UI。
 
-**Architecture:** 后端采用 Spring Boot 3 + WebFlux + Spring Security + MyBatis-Plus，通过 `ChatAgentGateway` 适配 AgentScope Java `HarnessAgent`。前端采用 Vue 3 + Vite + TypeScript + Element Plus，通过 `fetch` 读取 NDJSON 流。MySQL 存业务数据，Redis 用于 distributed 模式下的 AgentState/分布式状态，Docker Compose 提供一键启动。
+**架构：** 后端使用 Spring Boot 3 + WebFlux + Spring Security + MyBatis-Plus，通过 `ChatAgentGateway` 隔离 AgentScope Java `HarnessAgent` 的具体 API。前端使用 Vue 3 + Vite + TypeScript + Element Plus，通过 `fetch` 读取 NDJSON 流。MySQL 存业务数据，Redis 用于 distributed 模式下的 AgentState/分布式状态，Docker Compose 提供一键启动。
 
-**Tech Stack:** Java 21, Spring Boot 3, WebFlux, Spring Security JWT, MyBatis-Plus, MySQL 8.4, Redis 7, AgentScope Java `io.agentscope:agentscope-harness:2.0.0-RC4`, Vue 3, Vite, TypeScript, Pinia, Element Plus, Nginx, Docker Compose.
+**技术栈：** Java 21、Spring Boot 3、WebFlux、Spring Security JWT、MyBatis-Plus、MySQL 8.4、Redis 7、AgentScope Java `io.agentscope:agentscope-harness:2.0.0-RC4`、Vue 3、Vite、TypeScript、Pinia、Element Plus、Nginx、Docker Compose。
 
-## Global Constraints
+## 全局约束
 
 - 后端包名使用 `com.example.myagent`。
 - 后端 Java 版本为 21。
@@ -27,7 +27,7 @@
 
 ---
 
-## File Structure
+## 计划中的文件结构
 
 ```text
 backend/
@@ -65,6 +65,7 @@ backend/
       ChatController.java
       ChatService.java
       ChatRequest.java
+      ChatAgentRequest.java
       StreamEventDto.java
       AgentEventMapper.java
     skill/
@@ -150,31 +151,31 @@ docker-compose.yml
 README.md
 ```
 
-### Task 1: Repository And Docker Skeleton
+## 任务 1：创建仓库骨架和 Docker 启动骨架
 
-**Files:**
-- Create: `backend/pom.xml`
-- Create: `backend/Dockerfile`
-- Create: `backend/.dockerignore`
-- Create: `frontend/package.json`
-- Create: `frontend/vite.config.ts`
-- Create: `frontend/Dockerfile`
-- Create: `frontend/nginx.conf`
-- Create: `frontend/.dockerignore`
-- Create: `docker-compose.yml`
-- Create: `.env.example`
-- Create: `docker/mysql/init.sql`
+**文件：**
+- 新建：`backend/pom.xml`
+- 新建：`backend/Dockerfile`
+- 新建：`backend/.dockerignore`
+- 新建：`frontend/package.json`
+- 新建：`frontend/vite.config.ts`
+- 新建：`frontend/Dockerfile`
+- 新建：`frontend/nginx.conf`
+- 新建：`frontend/.dockerignore`
+- 新建：`docker-compose.yml`
+- 新建：`.env.example`
+- 新建：`docker/mysql/init.sql`
 
-**Interfaces:**
-- Produces: Docker service names `mysql`, `redis`, `backend`, `frontend`.
-- Produces: backend port `8080`, frontend container port `80`, host frontend port `5173`.
-- Produces: environment variables `MYSQL_ROOT_PASSWORD`, `DASHSCOPE_API_KEY`, `MYSQL_HOST`, `REDIS_HOST`.
+**接口与产物：**
+- 产出 Docker 服务名：`mysql`、`redis`、`backend`、`frontend`。
+- 产出端口：后端 `8080`，前端容器 `80`，宿主机前端 `5173`。
+- 产出环境变量：`MYSQL_ROOT_PASSWORD`、`DASHSCOPE_API_KEY`、`MYSQL_HOST`、`REDIS_HOST`。
 
-- [ ] **Step 1: Create backend Maven skeleton**
+- [ ] **步骤 1：创建后端 Maven 骨架**
 
-Create `backend/pom.xml` with Spring Boot 3, Java 21, WebFlux, Security, MyBatis-Plus, MySQL driver, Redis, JWT, test dependencies, and AgentScope Harness dependency using Aliyun Maven repository.
+创建 `backend/pom.xml`，包含 Spring Boot 3、Java 21、WebFlux、Security、MyBatis-Plus、MySQL driver、Redis、JWT、测试依赖和 AgentScope Harness 依赖。必须配置阿里云 Maven 仓库。
 
-Expected key content:
+关键配置：
 
 ```xml
 <properties>
@@ -183,120 +184,130 @@ Expected key content:
 </properties>
 ```
 
-- [ ] **Step 2: Create Docker Compose**
+- [ ] **步骤 2：创建 Docker Compose**
 
-Create `docker-compose.yml` with services `mysql`, `redis`, `backend`, and `frontend`. Use MySQL 8.4 and Redis 7. Backend must use `SPRING_PROFILES_ACTIVE=docker`. Frontend must publish `5173:80`.
+创建 `docker-compose.yml`，包含 `mysql`、`redis`、`backend`、`frontend`。MySQL 使用 `mysql:8.4`，Redis 使用 `redis:7`，后端设置 `SPRING_PROFILES_ACTIVE=docker`，前端暴露 `5173:80`。
 
-- [ ] **Step 3: Create backend Dockerfile**
+- [ ] **步骤 3：创建后端 Dockerfile**
 
-Use `maven:3.9-eclipse-temurin-21` for build and `eclipse-temurin:21-jre` for runtime. Expose `8080`.
+使用 `maven:3.9-eclipse-temurin-21` 构建，使用 `eclipse-temurin:21-jre` 运行，暴露 `8080`。
 
-- [ ] **Step 4: Create frontend Vite skeleton**
+- [ ] **步骤 4：创建前端 Vite 骨架**
 
-Create `frontend/package.json` with dependencies `@vitejs/plugin-vue`, `vite`, `typescript`, `vue`, `vue-router`, `pinia`, `element-plus`.
+创建 `frontend/package.json`，依赖包含 `@vitejs/plugin-vue`、`vite`、`typescript`、`vue`、`vue-router`、`pinia`、`element-plus`。
 
-- [ ] **Step 5: Create frontend Dockerfile and nginx config**
+- [ ] **步骤 5：创建前端 Dockerfile 和 Nginx 配置**
 
-Build with `node:22-alpine`; serve `dist` with `nginx:1.27-alpine`. `nginx.conf` must proxy `/api/` to `http://backend:8080/api/` and disable buffering for stream endpoints.
+使用 `node:22-alpine` 构建前端，使用 `nginx:1.27-alpine` 托管 `dist`。`nginx.conf` 必须把 `/api/` 反代到 `http://backend:8080/api/`，并对流式接口关闭缓冲。
 
-- [ ] **Step 6: Verify compose config parses**
+- [ ] **步骤 6：验证 Docker Compose 配置**
 
-Run: `docker compose config`
+运行：
 
-Expected: exits 0 and prints merged services.
+```bash
+docker compose config
+```
 
-- [ ] **Step 7: Commit**
+预期：命令退出码为 0，并输出合并后的 services 配置。
+
+- [ ] **步骤 7：提交**
 
 ```bash
 git add backend/pom.xml backend/Dockerfile backend/.dockerignore frontend/package.json frontend/vite.config.ts frontend/Dockerfile frontend/nginx.conf frontend/.dockerignore docker-compose.yml .env.example docker/mysql/init.sql
-git commit -m "chore: add docker project skeleton"
+git commit -m "chore: 添加 Docker 项目骨架"
 ```
 
-### Task 2: Backend Configuration And Database Schema
+## 任务 2：后端配置与数据库 schema
 
-**Files:**
-- Create: `backend/src/main/java/com/example/myagent/MyAgentApplication.java`
-- Create: `backend/src/main/java/com/example/myagent/config/AgentProperties.java`
-- Create: `backend/src/main/java/com/example/myagent/config/MyBatisPlusConfig.java`
-- Create: `backend/src/main/resources/application.yml`
-- Create: `backend/src/main/resources/application-docker.yml`
-- Create: `backend/src/main/resources/db/migration/V1__init_schema.sql`
+**文件：**
+- 新建：`backend/src/main/java/com/example/myagent/MyAgentApplication.java`
+- 新建：`backend/src/main/java/com/example/myagent/config/AgentProperties.java`
+- 新建：`backend/src/main/java/com/example/myagent/config/MyBatisPlusConfig.java`
+- 新建：`backend/src/main/resources/application.yml`
+- 新建：`backend/src/main/resources/application-docker.yml`
+- 新建：`backend/src/main/resources/db/migration/V1__init_schema.sql`
 
-**Interfaces:**
-- Produces: `AgentProperties` with nested `Deployment`, `Model`, `StateStore`, `Skill`, `Permission`, `Tools`.
-- Produces: database tables `users`, `chat_sessions`, `skills`, `skill_files`, `user_skill_settings`, `agent_evolution_proposals`.
+**接口与产物：**
+- 产出 `AgentProperties`，包含 `Deployment`、`Model`、`StateStore`、`Skill`、`Permission`、`Tools`。
+- 产出数据库表：`users`、`chat_sessions`、`skills`、`skill_files`、`user_skill_settings`、`agent_evolution_proposals`。
 
-- [ ] **Step 1: Write configuration binding test**
+- [ ] **步骤 1：编写配置绑定测试**
 
-Create a Spring Boot test that loads `agent.model.provider=dashscope`, `agent.model.name=qwen-plus`, and asserts `AgentProperties.model().name()` equals `qwen-plus`.
+创建 Spring Boot 测试，加载 `agent.model.provider=dashscope` 和 `agent.model.name=qwen-plus`，断言 `AgentProperties.model().name()` 等于 `qwen-plus`。
 
-- [ ] **Step 2: Implement `AgentProperties`**
+- [ ] **步骤 2：实现 `AgentProperties`**
 
-Define immutable configuration records with `@ConfigurationProperties(prefix = "agent")` and defaults:
+使用 `@ConfigurationProperties(prefix = "agent")` 定义配置记录类型。默认值：
 
-```java
-provider = "dashscope";
-name = "qwen-plus";
-apiKeyEnv = "DASHSCOPE_API_KEY";
-defaultMode = "DEFAULT";
+```text
+provider = dashscope
+name = qwen-plus
+apiKeyEnv = DASHSCOPE_API_KEY
+defaultMode = DEFAULT
 ```
 
-- [ ] **Step 3: Add application YAML files**
+- [ ] **步骤 3：添加应用配置文件**
 
-`application.yml` uses localhost MySQL/Redis defaults. `application-docker.yml` reads `MYSQL_HOST`, `MYSQL_PASSWORD`, and `REDIS_HOST`.
+`application.yml` 使用本机 MySQL/Redis 默认值。`application-docker.yml` 读取 `MYSQL_HOST`、`MYSQL_PASSWORD`、`REDIS_HOST`。
 
-- [ ] **Step 4: Add schema migration**
+- [ ] **步骤 4：添加数据库 schema**
 
-Create `V1__init_schema.sql` with all six tables from the approved spec. Include unique keys for username, session user index, skill owner/name, skill file path, and user skill settings.
+创建 `V1__init_schema.sql`，包含已批准 spec 中的六张表。必须包含 username 唯一键、会话 user 索引、skill owner/name 唯一键、skill file path 唯一键、user skill setting 唯一键。
 
-- [ ] **Step 5: Run backend tests**
+- [ ] **步骤 5：运行后端测试**
 
-Run: `cd backend && mvn test`
+运行：
 
-Expected: tests pass.
+```bash
+cd backend
+mvn test
+```
 
-- [ ] **Step 6: Commit**
+预期：测试通过。
+
+- [ ] **步骤 6：提交**
 
 ```bash
 git add backend/src/main/java/com/example/myagent backend/src/main/resources
-git commit -m "feat: add backend configuration and schema"
+git commit -m "feat: 添加后端配置和数据库 schema"
 ```
 
-### Task 3: Authentication And Current User
+## 任务 3：登录认证与当前用户解析
 
-**Files:**
-- Create: `backend/src/main/java/com/example/myagent/auth/*`
-- Create: `backend/src/main/java/com/example/myagent/user/UserEntity.java`
-- Create: `backend/src/main/java/com/example/myagent/user/UserMapper.java`
-- Create: `backend/src/main/java/com/example/myagent/config/SecurityConfig.java`
-- Create: `backend/src/test/java/com/example/myagent/auth/AuthServiceTest.java`
+**文件：**
+- 新建：`backend/src/main/java/com/example/myagent/auth/*`
+- 新建：`backend/src/main/java/com/example/myagent/user/UserEntity.java`
+- 新建：`backend/src/main/java/com/example/myagent/user/UserMapper.java`
+- 新建：`backend/src/main/java/com/example/myagent/config/SecurityConfig.java`
+- 新建：`backend/src/test/java/com/example/myagent/auth/AuthServiceTest.java`
 
-**Interfaces:**
-- Produces: `AuthService.register(RegisterRequest): AuthResponse`
-- Produces: `AuthService.login(LoginRequest): AuthResponse`
-- Produces: `JwtService.createToken(UserEntity): String`
-- Produces: `JwtService.parseUserId(String): Long`
-- Produces: `CurrentUser(Long id, String username, String role)`
+**接口与产物：**
+- 产出：`AuthService.register(RegisterRequest): AuthResponse`
+- 产出：`AuthService.login(LoginRequest): AuthResponse`
+- 产出：`JwtService.createToken(UserEntity): String`
+- 产出：`JwtService.parseUserId(String): Long`
+- 产出：`CurrentUser(Long id, String username, String role)`
 
-- [ ] **Step 1: Write auth service tests**
+- [ ] **步骤 1：编写认证服务测试**
 
-Tests:
-- registering a new user stores a BCrypt hash, not the raw password.
-- duplicate username fails.
-- login returns a JWT for valid credentials.
-- invalid password fails.
+测试内容：
 
-- [ ] **Step 2: Implement user entity and mapper**
+- 注册新用户后存储 BCrypt hash，不存明文密码。
+- 重复 username 注册失败。
+- 正确账号密码登录后返回 JWT。
+- 错误密码登录失败。
 
-Map `users` table fields: `id`, `username`, `passwordHash`, `displayName`, `role`, `createdAt`, `updatedAt`.
+- [ ] **步骤 2：实现用户实体和 mapper**
 
-- [ ] **Step 3: Implement JWT service**
+映射 `users` 表字段：`id`、`username`、`passwordHash`、`displayName`、`role`、`createdAt`、`updatedAt`。
 
-Use HMAC secret from `security.jwt.secret`; default only for local dev. Token must include `sub=userId`, `username`, and `role`.
+- [ ] **步骤 3：实现 JWT 服务**
 
-- [ ] **Step 4: Implement auth service and controller**
+使用 `security.jwt.secret` 中的 HMAC secret。token 包含 `sub=userId`、`username`、`role`。
 
-Endpoints:
+- [ ] **步骤 4：实现认证服务和 controller**
+
+接口：
 
 ```text
 POST /api/auth/register
@@ -304,53 +315,59 @@ POST /api/auth/login
 GET  /api/auth/me
 ```
 
-- [ ] **Step 5: Implement Spring Security filter**
+- [ ] **步骤 5：实现 Spring Security filter**
 
-All `/api/**` endpoints require JWT except `/api/auth/register` and `/api/auth/login`.
+除 `/api/auth/register` 和 `/api/auth/login` 外，所有 `/api/**` 都需要 JWT。
 
-- [ ] **Step 6: Run tests**
+- [ ] **步骤 6：运行测试**
 
-Run: `cd backend && mvn -Dtest=AuthServiceTest test`
+运行：
 
-Expected: all auth tests pass.
+```bash
+cd backend
+mvn -Dtest=AuthServiceTest test
+```
 
-- [ ] **Step 7: Commit**
+预期：认证测试全部通过。
+
+- [ ] **步骤 7：提交**
 
 ```bash
 git add backend/src/main/java/com/example/myagent/auth backend/src/main/java/com/example/myagent/user backend/src/main/java/com/example/myagent/config/SecurityConfig.java backend/src/test/java/com/example/myagent/auth
-git commit -m "feat: add jwt authentication"
+git commit -m "feat: 添加 JWT 登录认证"
 ```
 
-### Task 4: Chat Session Metadata
+## 任务 4：会话元数据与用户隔离
 
-**Files:**
-- Create: `backend/src/main/java/com/example/myagent/session/*`
-- Create: `backend/src/test/java/com/example/myagent/session/SessionServiceTest.java`
+**文件：**
+- 新建：`backend/src/main/java/com/example/myagent/session/*`
+- 新建：`backend/src/test/java/com/example/myagent/session/SessionServiceTest.java`
 
-**Interfaces:**
-- Produces: `SessionService.createSession(CurrentUser, String title): ChatSessionEntity`
-- Produces: `SessionService.listSessions(CurrentUser): List<ChatSessionEntity>`
-- Produces: `SessionService.requireOwnedSession(CurrentUser, String sessionId): ChatSessionEntity`
-- Produces: `SessionService.deleteSession(CurrentUser, String sessionId): void`
+**接口与产物：**
+- 产出：`SessionService.createSession(CurrentUser, String title): ChatSessionEntity`
+- 产出：`SessionService.listSessions(CurrentUser): List<ChatSessionEntity>`
+- 产出：`SessionService.requireOwnedSession(CurrentUser, String sessionId): ChatSessionEntity`
+- 产出：`SessionService.deleteSession(CurrentUser, String sessionId): void`
 
-- [ ] **Step 1: Write ownership tests**
+- [ ] **步骤 1：编写归属测试**
 
-Tests:
-- user A sees only user A sessions.
-- user A cannot require user B session.
-- deleting a session filters by user id.
+测试内容：
 
-- [ ] **Step 2: Implement entity and mapper**
+- 用户 A 只能看到用户 A 的会话。
+- 用户 A 不能读取用户 B 的会话。
+- 删除会话时必须按 user id 过滤。
 
-Map `chat_sessions` table with `id`, `userId`, `title`, `createdAt`, `updatedAt`.
+- [ ] **步骤 2：实现 entity 和 mapper**
 
-- [ ] **Step 3: Implement service**
+映射 `chat_sessions` 表字段：`id`、`userId`、`title`、`createdAt`、`updatedAt`。
 
-Generate session IDs with prefix `s_` plus UUID without dashes. Default title is first 30 characters of user message or `新会话`.
+- [ ] **步骤 3：实现 service**
 
-- [ ] **Step 4: Implement controller**
+会话 ID 使用 `s_` + 去掉短横线的 UUID。默认标题为用户消息前 30 个字符，或 `新会话`。
 
-Endpoints:
+- [ ] **步骤 4：实现 controller**
+
+接口：
 
 ```text
 POST   /api/chat/sessions
@@ -359,39 +376,45 @@ GET    /api/chat/sessions/{sessionId}
 DELETE /api/chat/sessions/{sessionId}
 ```
 
-- [ ] **Step 5: Run tests**
+- [ ] **步骤 5：运行测试**
 
-Run: `cd backend && mvn -Dtest=SessionServiceTest test`
+运行：
 
-Expected: all session tests pass.
+```bash
+cd backend
+mvn -Dtest=SessionServiceTest test
+```
 
-- [ ] **Step 6: Commit**
+预期：会话测试全部通过。
+
+- [ ] **步骤 6：提交**
 
 ```bash
 git add backend/src/main/java/com/example/myagent/session backend/src/test/java/com/example/myagent/session
-git commit -m "feat: add user-scoped chat sessions"
+git commit -m "feat: 添加用户隔离会话"
 ```
 
-### Task 5: Chat Gateway And NDJSON Stream
+## 任务 5：聊天网关与 NDJSON 流
 
-**Files:**
-- Create: `backend/src/main/java/com/example/myagent/chat/ChatAgentGateway.java`
-- Create: `backend/src/main/java/com/example/myagent/chat/StubChatAgentGateway.java`
-- Create: `backend/src/main/java/com/example/myagent/chat/ChatService.java`
-- Create: `backend/src/main/java/com/example/myagent/chat/ChatController.java`
-- Create: `backend/src/main/java/com/example/myagent/chat/ChatRequest.java`
-- Create: `backend/src/main/java/com/example/myagent/chat/StreamEventDto.java`
-- Create: `backend/src/test/java/com/example/myagent/chat/ChatControllerTest.java`
+**文件：**
+- 新建：`backend/src/main/java/com/example/myagent/chat/ChatAgentGateway.java`
+- 新建：`backend/src/main/java/com/example/myagent/chat/StubChatAgentGateway.java`
+- 新建：`backend/src/main/java/com/example/myagent/chat/ChatService.java`
+- 新建：`backend/src/main/java/com/example/myagent/chat/ChatController.java`
+- 新建：`backend/src/main/java/com/example/myagent/chat/ChatRequest.java`
+- 新建：`backend/src/main/java/com/example/myagent/chat/ChatAgentRequest.java`
+- 新建：`backend/src/main/java/com/example/myagent/chat/StreamEventDto.java`
+- 新建：`backend/src/test/java/com/example/myagent/chat/ChatControllerTest.java`
 
-**Interfaces:**
-- Produces: `ChatAgentGateway.stream(ChatAgentRequest): Flux<StreamEventDto>`
-- Produces: `ChatAgentRequest(Long userId, String sessionId, String message)`
-- Produces: `StreamEventDto(String type, Map<String, Object> payload)`
-- Produces: `POST /api/chat/sessions/{sessionId}/stream` as `application/x-ndjson`.
+**接口与产物：**
+- 产出：`ChatAgentGateway.stream(ChatAgentRequest): Flux<StreamEventDto>`
+- 产出：`ChatAgentRequest(Long userId, String sessionId, String message)`
+- 产出：`StreamEventDto(String type, Map<String, Object> payload)`
+- 产出：`POST /api/chat/sessions/{sessionId}/stream`，响应类型为 `application/x-ndjson`。
 
-- [ ] **Step 1: Write stream controller test**
+- [ ] **步骤 1：编写流式 controller 测试**
 
-Use `StubChatAgentGateway` to emit:
+使用 `StubChatAgentGateway` 输出三行事件：
 
 ```json
 {"type":"reply_start"}
@@ -399,66 +422,71 @@ Use `StubChatAgentGateway` to emit:
 {"type":"done"}
 ```
 
-Assert response content type is NDJSON-compatible and contains all three lines.
+断言响应包含三行 NDJSON。
 
-- [ ] **Step 2: Implement stream DTOs**
+- [ ] **步骤 2：实现流式 DTO**
 
-`StreamEventDto` has helper factories: `replyStart`, `textDelta`, `toolCall`, `toolResult`, `permissionRequired`, `evolutionProposal`, `done`, `error`.
+`StreamEventDto` 提供静态工厂方法：`replyStart`、`textDelta`、`toolCall`、`toolResult`、`permissionRequired`、`evolutionProposal`、`done`、`error`。
 
-- [ ] **Step 3: Implement `ChatService`**
+- [ ] **步骤 3：实现 `ChatService`**
 
-Validate session ownership using `SessionService.requireOwnedSession`, then call `ChatAgentGateway.stream`.
+先调用 `SessionService.requireOwnedSession` 校验会话归属，再调用 `ChatAgentGateway.stream`。
 
-- [ ] **Step 4: Implement controller**
+- [ ] **步骤 4：实现 controller**
 
-Return `Flux<String>` where each event is serialized with Jackson and suffixed with `\n`.
+返回 `Flux<String>`，每个事件用 Jackson 序列化并追加 `\n`。
 
-- [ ] **Step 5: Run tests**
+- [ ] **步骤 5：运行测试**
 
-Run: `cd backend && mvn -Dtest=ChatControllerTest test`
+运行：
 
-Expected: stream endpoint test passes.
+```bash
+cd backend
+mvn -Dtest=ChatControllerTest test
+```
 
-- [ ] **Step 6: Commit**
+预期：流式接口测试通过。
+
+- [ ] **步骤 6：提交**
 
 ```bash
 git add backend/src/main/java/com/example/myagent/chat backend/src/test/java/com/example/myagent/chat
-git commit -m "feat: add ndjson chat stream"
+git commit -m "feat: 添加 NDJSON 聊天流"
 ```
 
-### Task 6: AgentScope Gateway Adapter
+## 任务 6：接入 AgentScope Java Gateway
 
-**Files:**
-- Create: `backend/src/main/java/com/example/myagent/chat/AgentScopeChatAgentGateway.java`
-- Create: `backend/src/main/java/com/example/myagent/chat/AgentEventMapper.java`
-- Create: `backend/src/main/java/com/example/myagent/config/AgentScopeConfig.java`
-- Modify: `backend/src/main/java/com/example/myagent/chat/ChatAgentGateway.java`
+**文件：**
+- 新建：`backend/src/main/java/com/example/myagent/chat/AgentScopeChatAgentGateway.java`
+- 新建：`backend/src/main/java/com/example/myagent/chat/AgentEventMapper.java`
+- 新建：`backend/src/main/java/com/example/myagent/config/AgentScopeConfig.java`
+- 修改：`backend/src/main/java/com/example/myagent/chat/ChatAgentGateway.java`
 
-**Interfaces:**
-- Consumes: `ChatAgentGateway.stream(ChatAgentRequest)`
-- Produces: AgentScope-backed implementation selected outside test profile.
-- Produces: `AgentEventMapper.map(Object agentEvent): StreamEventDto`
+**接口与产物：**
+- 消费：`ChatAgentGateway.stream(ChatAgentRequest)`
+- 产出：非测试 profile 下使用 AgentScope 的实现。
+- 产出：`AgentEventMapper.map(Object agentEvent): StreamEventDto`
 
-- [ ] **Step 1: Add adapter boundary**
+- [ ] **步骤 1：添加适配层边界**
 
-Keep all direct AgentScope Java imports inside `AgentScopeChatAgentGateway`, `AgentEventMapper`, and `AgentScopeConfig`.
+所有 AgentScope Java 直接 import 只允许出现在 `AgentScopeChatAgentGateway`、`AgentEventMapper`、`AgentScopeConfig` 中。
 
-- [ ] **Step 2: Implement model factory inside config**
+- [ ] **步骤 2：在 config 中实现模型工厂**
 
-Read `AgentProperties.model`. For `dashscope`, construct model id `dashscope:qwen-plus`. For `openai-compatible`, require `baseUrl`, `name`, and API key env.
+读取 `AgentProperties.model`。`dashscope` 使用模型 id `dashscope:qwen-plus`。`openai-compatible` 要求配置 `baseUrl`、`name` 和 API key env。
 
-- [ ] **Step 3: Implement runtime context creation**
+- [ ] **步骤 3：实现 RuntimeContext 创建**
 
-Create AgentScope `RuntimeContext` with:
+用请求创建 AgentScope `RuntimeContext`：
 
-```java
+```text
 userId = request.userId().toString()
 sessionId = request.sessionId()
 ```
 
-- [ ] **Step 4: Map core events**
+- [ ] **步骤 4：映射核心事件**
 
-Map AgentScope events to stable frontend events:
+映射规则：
 
 ```text
 reply_start -> reply_start
@@ -470,66 +498,73 @@ end         -> done
 exception   -> error
 ```
 
-- [ ] **Step 5: Add fallback behavior**
+- [ ] **步骤 5：保留稳定前端协议**
 
-If AgentScope event class names differ, keep `StreamEventDto` stable and adjust only `AgentEventMapper`.
+如果 AgentScope 实际事件类名与预期不同，只修改 `AgentEventMapper`，不修改前端事件协议。
 
-- [ ] **Step 6: Compile**
+- [ ] **步骤 6：编译**
 
-Run: `cd backend && mvn -DskipTests compile`
+运行：
 
-Expected: compile succeeds with actual AgentScope Java API.
+```bash
+cd backend
+mvn -DskipTests compile
+```
 
-- [ ] **Step 7: Commit**
+预期：使用真实 AgentScope Java API 编译通过。
+
+- [ ] **步骤 7：提交**
 
 ```bash
 git add backend/src/main/java/com/example/myagent/chat/AgentScopeChatAgentGateway.java backend/src/main/java/com/example/myagent/chat/AgentEventMapper.java backend/src/main/java/com/example/myagent/config/AgentScopeConfig.java
-git commit -m "feat: wire agentscope chat gateway"
+git commit -m "feat: 接入 AgentScope 聊天网关"
 ```
 
-### Task 7: MySQL Skill File Tree
+## 任务 7：MySQL Skill 文件树
 
-**Files:**
-- Create: `backend/src/main/java/com/example/myagent/skill/*`
-- Create: `backend/src/test/java/com/example/myagent/skill/SkillValidatorTest.java`
+**文件：**
+- 新建：`backend/src/main/java/com/example/myagent/skill/*`
+- 新建：`backend/src/test/java/com/example/myagent/skill/SkillValidatorTest.java`
 
-**Interfaces:**
-- Produces: `SkillService.listSystemSkills(CurrentUser)`
-- Produces: `SkillService.listMySkills(CurrentUser)`
-- Produces: `SkillService.createMySkill(CurrentUser, SkillCreateRequest)`
-- Produces: `SkillService.upsertFile(CurrentUser, Long skillId, String path, String content)`
-- Produces: `SkillValidator.validatePath(String path)`
-- Produces: `SkillValidator.validateSkillMarkdown(String content)`
+**接口与产物：**
+- 产出：`SkillService.listSystemSkills(CurrentUser)`
+- 产出：`SkillService.listMySkills(CurrentUser)`
+- 产出：`SkillService.createMySkill(CurrentUser, SkillCreateRequest)`
+- 产出：`SkillService.upsertFile(CurrentUser, Long skillId, String path, String content)`
+- 产出：`SkillValidator.validatePath(String path)`
+- 产出：`SkillValidator.validateSkillMarkdown(String content)`
 
-- [ ] **Step 1: Write path validation tests**
+- [ ] **步骤 1：编写路径校验测试**
 
-Cases:
-- accepts `SKILL.md`
-- accepts `references/checklist.md`
-- accepts `scripts/analyze.java`
-- rejects `../secret`
-- rejects `/etc/passwd`
-- rejects `C:\Users\a`
-- rejects empty path
+测试用例：
 
-- [ ] **Step 2: Write SKILL.md validation tests**
+- 接受 `SKILL.md`
+- 接受 `references/checklist.md`
+- 接受 `scripts/analyze.java`
+- 拒绝 `../secret`
+- 拒绝 `/etc/passwd`
+- 拒绝 `C:\Users\a`
+- 拒绝空路径
 
-Cases:
-- accepts frontmatter with `name` and `description`
-- rejects missing `name`
-- rejects missing `description`
+- [ ] **步骤 2：编写 `SKILL.md` 校验测试**
 
-- [ ] **Step 3: Implement entities and mappers**
+测试用例：
 
-Map `skills`, `skill_files`, `user_skill_settings`.
+- 接受包含 `name` 和 `description` 的 frontmatter。
+- 拒绝缺少 `name`。
+- 拒绝缺少 `description`。
 
-- [ ] **Step 4: Implement validator**
+- [ ] **步骤 3：实现 entities 和 mappers**
 
-Normalize path with `/`, reject traversal, absolute paths, and drive letters. Require first segment to be `SKILL.md`, `references`, `scripts`, or `assets`.
+映射 `skills`、`skill_files`、`user_skill_settings`。
 
-- [ ] **Step 5: Implement service and controller**
+- [ ] **步骤 4：实现 validator**
 
-Endpoints:
+统一使用 `/` 分隔路径，拒绝目录穿越、绝对路径和盘符。首段只允许 `SKILL.md`、`references`、`scripts`、`assets`。
+
+- [ ] **步骤 5：实现 service 和 controller**
+
+接口：
 
 ```text
 GET    /api/skills/system
@@ -543,121 +578,136 @@ DELETE /api/skills/{skillId}/files/{path}
 PUT    /api/skills/{skillId}/enabled
 ```
 
-- [ ] **Step 6: Run tests**
+- [ ] **步骤 6：运行测试**
 
-Run: `cd backend && mvn -Dtest=SkillValidatorTest test`
+运行：
 
-Expected: validator tests pass.
+```bash
+cd backend
+mvn -Dtest=SkillValidatorTest test
+```
 
-- [ ] **Step 7: Commit**
+预期：skill 校验测试通过。
+
+- [ ] **步骤 7：提交**
 
 ```bash
 git add backend/src/main/java/com/example/myagent/skill backend/src/test/java/com/example/myagent/skill
-git commit -m "feat: add mysql skill file tree"
+git commit -m "feat: 添加 MySQL skill 文件树"
 ```
 
-### Task 8: Skill Materializer
+## 任务 8：Skill Materializer
 
-**Files:**
-- Create: `backend/src/main/java/com/example/myagent/skill/SkillMaterializer.java`
-- Create: `backend/src/test/java/com/example/myagent/skill/SkillMaterializerTest.java`
+**文件：**
+- 新建：`backend/src/main/java/com/example/myagent/skill/SkillMaterializer.java`
+- 新建：`backend/src/test/java/com/example/myagent/skill/SkillMaterializerTest.java`
 
-**Interfaces:**
-- Consumes: `SkillService` enabled SYSTEM and USER skills.
-- Produces: `SkillMaterializer.materializeForUser(Long userId): Path`
-- Produces: local cache layout readable by AgentScope Harness.
+**接口与产物：**
+- 消费：`SkillService` 中启用的 SYSTEM 和 USER skills。
+- 产出：`SkillMaterializer.materializeForUser(Long userId): Path`
+- 产出：AgentScope Harness 可读取的本机 skill 缓存目录。
 
-- [ ] **Step 1: Write materializer test**
+- [ ] **步骤 1：编写 materializer 测试**
 
-Given a system skill and user skill with same name, assert user skill wins. Assert files are written:
+给定同名 system skill 和 user skill，断言 user skill 覆盖 system skill。断言写出文件：
 
 ```text
 <cache>/<userId>/<skillName>/SKILL.md
 <cache>/<userId>/<skillName>/references/checklist.md
 ```
 
-- [ ] **Step 2: Implement cache key**
+- [ ] **步骤 2：实现缓存 key**
 
-Use `skillId + "-" + updatedAtEpochMillis` to decide whether a skill directory needs rewriting.
+使用 `skillId + "-" + updatedAtEpochMillis` 判断 skill 目录是否需要重写。
 
-- [ ] **Step 3: Implement safe file write**
+- [ ] **步骤 3：实现安全写文件**
 
-Resolve target path under cache root and assert normalized target starts with cache root before writing.
+目标 path 必须 resolve 到 cache root 下，normalize 后必须仍以 cache root 开头。
 
-- [ ] **Step 4: Integrate with AgentScope config**
+- [ ] **步骤 4：集成 AgentScope config**
 
-Before each chat request, materialize current user's enabled skills and pass the resulting skill root to AgentScope gateway.
+每次聊天请求前 materialize 当前用户启用的 skills，并把 skill root 交给 AgentScope gateway。
 
-- [ ] **Step 5: Run tests**
+- [ ] **步骤 5：运行测试**
 
-Run: `cd backend && mvn -Dtest=SkillMaterializerTest test`
+运行：
 
-Expected: materializer tests pass.
+```bash
+cd backend
+mvn -Dtest=SkillMaterializerTest test
+```
 
-- [ ] **Step 6: Commit**
+预期：materializer 测试通过。
+
+- [ ] **步骤 6：提交**
 
 ```bash
 git add backend/src/main/java/com/example/myagent/skill/SkillMaterializer.java backend/src/test/java/com/example/myagent/skill/SkillMaterializerTest.java
-git commit -m "feat: materialize skills for agentscope"
+git commit -m "feat: 为 AgentScope materialize skills"
 ```
 
-### Task 9: Permissions And Memory APIs
+## 任务 9：权限与记忆接口
 
-**Files:**
-- Create: `backend/src/main/java/com/example/myagent/permission/*`
-- Create: `backend/src/main/java/com/example/myagent/memory/*`
+**文件：**
+- 新建：`backend/src/main/java/com/example/myagent/permission/*`
+- 新建：`backend/src/main/java/com/example/myagent/memory/*`
 
-**Interfaces:**
-- Produces: `PermissionService.getMode(CurrentUser, String sessionId): PermissionModeDto`
-- Produces: `PermissionService.setMode(CurrentUser, String sessionId, PermissionModeDto): PermissionModeDto`
-- Produces: `MemoryService.getSummary(CurrentUser): String`
-- Produces: `MemoryService.listDaily(CurrentUser): List<String>`
-- Produces: `MemoryService.getDaily(CurrentUser, LocalDate): String`
+**接口与产物：**
+- 产出：`PermissionService.getMode(CurrentUser, String sessionId): PermissionModeDto`
+- 产出：`PermissionService.setMode(CurrentUser, String sessionId, PermissionModeDto): PermissionModeDto`
+- 产出：`MemoryService.getSummary(CurrentUser): String`
+- 产出：`MemoryService.listDaily(CurrentUser): List<String>`
+- 产出：`MemoryService.getDaily(CurrentUser, LocalDate): String`
 
-- [ ] **Step 1: Add permission mode enum DTO**
+- [ ] **步骤 1：添加权限模式 DTO**
 
-Allowed values: `DEFAULT`, `EXPLORE`, `ACCEPT_EDITS`, `DONT_ASK`, `BYPASS`.
+允许值：`DEFAULT`、`EXPLORE`、`ACCEPT_EDITS`、`DONT_ASK`、`BYPASS`。
 
-- [ ] **Step 2: Implement permission endpoints**
+- [ ] **步骤 2：实现权限接口**
 
-Validate session ownership before reading or updating mode.
+读取或更新模式前必须校验会话归属。
 
-- [ ] **Step 3: Implement memory read endpoints**
+- [ ] **步骤 3：实现记忆只读接口**
 
-Use shared storage abstraction. For first implementation, read through application-owned MySQL or AgentScope shared storage adapter; expose stable controller contract either way.
+通过共享存储抽象读取。第一版可以使用应用自有 MySQL 存储或 AgentScope 共享状态适配层；Controller 契约保持稳定。
 
-- [ ] **Step 4: Add tests for invalid mode and ownership**
+- [ ] **步骤 4：添加无效模式和归属测试**
 
-Invalid mode returns `400`. Access to another user's session returns `404` or `403`.
+无效模式返回 `400`。访问其他用户会话返回 `404` 或 `403`。
 
-- [ ] **Step 5: Run tests**
+- [ ] **步骤 5：运行测试**
 
-Run: `cd backend && mvn test`
+运行：
 
-Expected: all current backend tests pass.
+```bash
+cd backend
+mvn test
+```
 
-- [ ] **Step 6: Commit**
+预期：当前后端测试全部通过。
+
+- [ ] **步骤 6：提交**
 
 ```bash
 git add backend/src/main/java/com/example/myagent/permission backend/src/main/java/com/example/myagent/memory backend/src/test/java/com/example/myagent
-git commit -m "feat: add permission and memory APIs"
+git commit -m "feat: 添加权限和记忆接口"
 ```
 
-### Task 10: Evolution Proposals
+## 任务 10：自我进化提案流程
 
-**Files:**
-- Create: `backend/src/main/java/com/example/myagent/evolution/*`
-- Create: `backend/src/test/java/com/example/myagent/evolution/EvolutionServiceTest.java`
+**文件：**
+- 新建：`backend/src/main/java/com/example/myagent/evolution/*`
+- 新建：`backend/src/test/java/com/example/myagent/evolution/EvolutionServiceTest.java`
 
-**Interfaces:**
-- Produces: `EvolutionService.createProposal(CurrentUser, EvolutionCreateRequest)`
-- Produces: `EvolutionService.approve(CurrentUser, Long id)`
-- Produces: `EvolutionService.reject(CurrentUser, Long id)`
-- Produces: `EvolutionService.apply(CurrentUser, Long id)`
+**接口与产物：**
+- 产出：`EvolutionService.createProposal(CurrentUser, EvolutionCreateRequest)`
+- 产出：`EvolutionService.approve(CurrentUser, Long id)`
+- 产出：`EvolutionService.reject(CurrentUser, Long id)`
+- 产出：`EvolutionService.apply(CurrentUser, Long id)`
 
-- [ ] **Step 1: Write proposal state transition tests**
+- [ ] **步骤 1：编写状态流转测试**
 
-Allowed transitions:
+允许流转：
 
 ```text
 DRAFT -> APPROVED
@@ -665,24 +715,24 @@ DRAFT -> REJECTED
 APPROVED -> APPLIED
 ```
 
-Reject:
+拒绝流转：
 
 ```text
 REJECTED -> APPLIED
 APPLIED -> REJECTED
 ```
 
-- [ ] **Step 2: Implement entity and mapper**
+- [ ] **步骤 2：实现 entity 和 mapper**
 
-Map `agent_evolution_proposals`.
+映射 `agent_evolution_proposals`。
 
-- [ ] **Step 3: Implement service**
+- [ ] **步骤 3：实现 service**
 
-For `SKILL` proposals, `apply` creates or updates a USER skill only. For `MEMORY`, append to user memory store. For `TOOL_POLICY`, only apply low-risk suggestions. For `PROMPT` and `CODE_PATCH`, require ADMIN.
+`SKILL` proposal 的 `apply` 只能创建或更新 USER skill。`MEMORY` 追加到用户记忆。`TOOL_POLICY` 只应用低风险建议。`PROMPT` 和 `CODE_PATCH` 需要 ADMIN。
 
-- [ ] **Step 4: Implement controller**
+- [ ] **步骤 4：实现 controller**
 
-Endpoints:
+接口：
 
 ```text
 GET  /api/evolution/proposals
@@ -691,233 +741,269 @@ POST /api/evolution/proposals/{id}/reject
 POST /api/evolution/proposals/{id}/apply
 ```
 
-- [ ] **Step 5: Run tests**
+- [ ] **步骤 5：运行测试**
 
-Run: `cd backend && mvn -Dtest=EvolutionServiceTest test`
+运行：
 
-Expected: evolution tests pass.
+```bash
+cd backend
+mvn -Dtest=EvolutionServiceTest test
+```
 
-- [ ] **Step 6: Commit**
+预期：进化提案测试通过。
+
+- [ ] **步骤 6：提交**
 
 ```bash
 git add backend/src/main/java/com/example/myagent/evolution backend/src/test/java/com/example/myagent/evolution
-git commit -m "feat: add evolution proposal workflow"
+git commit -m "feat: 添加自我进化提案流程"
 ```
 
-### Task 11: Vue App Foundation
+## 任务 11：Vue 应用基础与登录
 
-**Files:**
-- Create: `frontend/src/main.ts`
-- Create: `frontend/src/router.ts`
-- Create: `frontend/src/App.vue`
-- Create: `frontend/src/api/client.ts`
-- Create: `frontend/src/api/auth.ts`
-- Create: `frontend/src/stores/auth.ts`
-- Create: `frontend/src/views/LoginView.vue`
+**文件：**
+- 新建：`frontend/src/main.ts`
+- 新建：`frontend/src/router.ts`
+- 新建：`frontend/src/App.vue`
+- 新建：`frontend/src/api/client.ts`
+- 新建：`frontend/src/api/auth.ts`
+- 新建：`frontend/src/stores/auth.ts`
+- 新建：`frontend/src/views/LoginView.vue`
 
-**Interfaces:**
-- Produces: auth store with `token`, `user`, `login`, `register`, `loadMe`, `logout`.
-- Produces: route guard redirecting unauthenticated users to `/login`.
+**接口与产物：**
+- 产出 auth store：`token`、`user`、`login`、`register`、`loadMe`、`logout`。
+- 产出路由守卫：未登录用户跳转 `/login`。
 
-- [ ] **Step 1: Create Vue entry**
+- [ ] **步骤 1：创建 Vue 入口**
 
-Mount app with Pinia, router, and Element Plus.
+挂载 app，安装 Pinia、router 和 Element Plus。
 
-- [ ] **Step 2: Implement API client**
+- [ ] **步骤 2：实现 API client**
 
-Wrap `fetch`, attach JWT, parse JSON errors, and expose `apiGet`, `apiPost`, `apiPut`, `apiDelete`.
+封装 `fetch`，自动附加 JWT，解析 JSON 错误，暴露 `apiGet`、`apiPost`、`apiPut`、`apiDelete`。
 
-- [ ] **Step 3: Implement auth store**
+- [ ] **步骤 3：实现 auth store**
 
-Persist token to `localStorage`. `loadMe` calls `/api/auth/me`.
+token 保存到 `localStorage`。`loadMe` 调用 `/api/auth/me`。
 
-- [ ] **Step 4: Implement login/register view**
+- [ ] **步骤 4：实现登录/注册页面**
 
-Use Element Plus form. Login success routes to `/chat`.
+使用 Element Plus 表单。登录成功跳转 `/chat`。
 
-- [ ] **Step 5: Run frontend typecheck/build**
+- [ ] **步骤 5：运行前端构建**
 
-Run: `cd frontend && npm install && npm run build`
+运行：
 
-Expected: build succeeds.
+```bash
+cd frontend
+npm install
+npm run build
+```
 
-- [ ] **Step 6: Commit**
+预期：构建成功。
+
+- [ ] **步骤 6：提交**
 
 ```bash
 git add frontend/src frontend/package.json frontend/vite.config.ts
-git commit -m "feat: add vue auth foundation"
+git commit -m "feat: 添加 Vue 登录基础"
 ```
 
-### Task 12: Vue Chat Workspace And Stream Parser
+## 任务 12：Vue 聊天工作台与流解析
 
-**Files:**
-- Create: `frontend/src/api/chat.ts`
-- Create: `frontend/src/stores/sessions.ts`
-- Create: `frontend/src/stores/chat.ts`
-- Create: `frontend/src/views/ChatView.vue`
-- Create: `frontend/src/components/SessionSidebar.vue`
-- Create: `frontend/src/components/ChatTranscript.vue`
-- Create: `frontend/src/components/Composer.vue`
-- Create: `frontend/src/components/ToolEventCard.vue`
+**文件：**
+- 新建：`frontend/src/api/chat.ts`
+- 新建：`frontend/src/stores/sessions.ts`
+- 新建：`frontend/src/stores/chat.ts`
+- 新建：`frontend/src/views/ChatView.vue`
+- 新建：`frontend/src/components/SessionSidebar.vue`
+- 新建：`frontend/src/components/ChatTranscript.vue`
+- 新建：`frontend/src/components/Composer.vue`
+- 新建：`frontend/src/components/ToolEventCard.vue`
 
-**Interfaces:**
-- Produces: `streamChat(sessionId: string, message: string, onEvent: (event) => void): Promise<void>`
-- Produces: chat store message model with events `text_delta`, `tool_call`, `tool_result`, `permission_required`, `evolution_proposal`, `done`, `error`.
+**接口与产物：**
+- 产出：`streamChat(sessionId: string, message: string, onEvent: (event) => void): Promise<void>`
+- 产出 chat store 消息模型，支持事件：`text_delta`、`tool_call`、`tool_result`、`permission_required`、`evolution_proposal`、`done`、`error`。
 
-- [ ] **Step 1: Implement session API and store**
+- [ ] **步骤 1：实现 session API 和 store**
 
-Load, create, delete sessions using `/api/chat/sessions`.
+通过 `/api/chat/sessions` 加载、创建、删除会话。
 
-- [ ] **Step 2: Implement NDJSON parser**
+- [ ] **步骤 2：实现 NDJSON parser**
 
-Buffer chunks, split on `\n`, parse full lines, keep partial line for next chunk.
+缓存 chunk，按 `\n` 切分，解析完整行，保留半截行到下一个 chunk。
 
-- [ ] **Step 3: Implement chat store**
+- [ ] **步骤 3：实现 chat store**
 
-Append user message, create assistant draft, append deltas, attach tool cards, show errors.
+追加用户消息，创建 assistant draft，追加 delta，挂载工具卡片，显示错误。
 
-- [ ] **Step 4: Implement chat workspace components**
+- [ ] **步骤 4：实现聊天工作台组件**
 
-Left sidebar for sessions, center transcript, bottom composer.
+左侧会话列表，中间 transcript，底部输入框。
 
-- [ ] **Step 5: Run frontend build**
+- [ ] **步骤 5：运行前端构建**
 
-Run: `cd frontend && npm run build`
+运行：
 
-Expected: build succeeds.
+```bash
+cd frontend
+npm run build
+```
 
-- [ ] **Step 6: Commit**
+预期：构建成功。
+
+- [ ] **步骤 6：提交**
 
 ```bash
 git add frontend/src/api/chat.ts frontend/src/stores/sessions.ts frontend/src/stores/chat.ts frontend/src/views/ChatView.vue frontend/src/components
-git commit -m "feat: add streaming chat workspace"
+git commit -m "feat: 添加流式聊天工作台"
 ```
 
-### Task 13: Vue Skill, Permission, Memory, Evolution Panels
+## 任务 13：Vue Skill、权限、记忆、进化面板
 
-**Files:**
-- Create: `frontend/src/api/skills.ts`
-- Create: `frontend/src/api/memory.ts`
-- Create: `frontend/src/api/permissions.ts`
-- Create: `frontend/src/api/evolution.ts`
-- Create: `frontend/src/stores/skills.ts`
-- Create: `frontend/src/stores/evolution.ts`
-- Create: `frontend/src/components/PermissionPanel.vue`
-- Create: `frontend/src/components/SkillPanel.vue`
-- Create: `frontend/src/components/SkillFileTree.vue`
-- Create: `frontend/src/components/MemoryPanel.vue`
-- Create: `frontend/src/components/ModelInfoPanel.vue`
-- Create: `frontend/src/components/EvolutionPanel.vue`
+**文件：**
+- 新建：`frontend/src/api/skills.ts`
+- 新建：`frontend/src/api/memory.ts`
+- 新建：`frontend/src/api/permissions.ts`
+- 新建：`frontend/src/api/evolution.ts`
+- 新建：`frontend/src/stores/skills.ts`
+- 新建：`frontend/src/stores/evolution.ts`
+- 新建：`frontend/src/components/PermissionPanel.vue`
+- 新建：`frontend/src/components/SkillPanel.vue`
+- 新建：`frontend/src/components/SkillFileTree.vue`
+- 新建：`frontend/src/components/MemoryPanel.vue`
+- 新建：`frontend/src/components/ModelInfoPanel.vue`
+- 新建：`frontend/src/components/EvolutionPanel.vue`
 
-**Interfaces:**
-- Consumes: backend skill, memory, permission, evolution endpoints.
-- Produces: right-side panels in `ChatView`.
+**接口与产物：**
+- 消费：后端 skill、memory、permission、evolution endpoints。
+- 产出：`ChatView` 右侧控制面板。
 
-- [ ] **Step 1: Implement API modules**
+- [ ] **步骤 1：实现 API 模块**
 
-Create typed functions for all endpoints listed in spec.
+为 spec 中所有相关接口创建 typed functions。
 
-- [ ] **Step 2: Implement Skill panel**
+- [ ] **步骤 2：实现 Skill 面板**
 
-Tabs: `公共 Skill`, `我的 Skill`. Public skills read-only except enable toggle. My skills support create/edit/delete/file tree.
+tabs：`公共 Skill`、`我的 Skill`。公共 skill 除启用开关外只读。我的 skill 支持创建、编辑、删除和文件树。
 
-- [ ] **Step 3: Implement Permission panel**
+- [ ] **步骤 3：实现权限面板**
 
-Select mode from exact values: `DEFAULT`, `EXPLORE`, `ACCEPT_EDITS`, `DONT_ASK`, `BYPASS`.
+模式下拉值必须是：`DEFAULT`、`EXPLORE`、`ACCEPT_EDITS`、`DONT_ASK`、`BYPASS`。
 
-- [ ] **Step 4: Implement Memory panel**
+- [ ] **步骤 4：实现记忆面板**
 
-Read-only summary and daily list.
+只读展示长期记忆摘要和每日记忆列表。
 
-- [ ] **Step 5: Implement Evolution panel**
+- [ ] **步骤 5：实现进化面板**
 
-List proposals, approve, reject, apply. Show status chips.
+展示 proposals，支持 approve、reject、apply，显示状态标签。
 
-- [ ] **Step 6: Run frontend build**
+- [ ] **步骤 6：运行前端构建**
 
-Run: `cd frontend && npm run build`
+运行：
 
-Expected: build succeeds.
+```bash
+cd frontend
+npm run build
+```
 
-- [ ] **Step 7: Commit**
+预期：构建成功。
+
+- [ ] **步骤 7：提交**
 
 ```bash
 git add frontend/src/api frontend/src/stores frontend/src/components frontend/src/views/ChatView.vue
-git commit -m "feat: add assistant control panels"
+git commit -m "feat: 添加助手控制面板"
 ```
 
-### Task 14: End-To-End Docker Verification And README
+## 任务 14：端到端 Docker 验证和 README
 
-**Files:**
-- Create: `README.md`
-- Modify: `.env.example`
-- Modify: `docker-compose.yml`
-- Modify: `docker/mysql/init.sql`
+**文件：**
+- 新建：`README.md`
+- 修改：`.env.example`
+- 修改：`docker-compose.yml`
+- 修改：`docker/mysql/init.sql`
 
-**Interfaces:**
-- Produces: documented startup path `cp .env.example .env && docker compose up -d`.
-- Produces: documented local dev startup path for backend and frontend.
+**接口与产物：**
+- 产出启动路径：`cp .env.example .env && docker compose up -d`。
+- 产出本地后端和前端启动说明。
 
-- [ ] **Step 1: Add README**
+- [ ] **步骤 1：编写 README**
 
-README sections:
-- prerequisites
-- environment variables
-- Docker startup
-- local backend startup
-- local frontend startup
-- MySQL/Redis notes
-- model provider switching
-- safety notes for high-permission tools
+README 必须包含：
 
-- [ ] **Step 2: Verify Docker Compose**
+- 前置条件。
+- 环境变量。
+- Docker 启动。
+- 后端本地启动。
+- 前端本地启动。
+- MySQL/Redis 说明。
+- 模型供应商切换。
+- 高权限工具安全说明。
 
-Run: `docker compose up -d --build`
+- [ ] **步骤 2：验证 Docker Compose**
 
-Expected: MySQL, Redis, backend, frontend containers start.
+运行：
 
-- [ ] **Step 3: Verify health manually**
+```bash
+docker compose up -d --build
+```
 
-Open `http://localhost:5173`, register, login, create a session, send a message. If API key is missing, UI must show a clear model configuration error.
+预期：MySQL、Redis、backend、frontend 容器启动。
 
-- [ ] **Step 4: Run full backend tests**
+- [ ] **步骤 3：手动验证健康状态**
 
-Run: `cd backend && mvn test`
+打开 `http://localhost:5173`，注册、登录、创建会话、发送消息。如果缺少 API key，UI 必须显示清晰的模型配置错误。
 
-Expected: all backend tests pass.
+- [ ] **步骤 4：运行全部后端测试**
 
-- [ ] **Step 5: Run frontend build**
+运行：
 
-Run: `cd frontend && npm run build`
+```bash
+cd backend
+mvn test
+```
 
-Expected: build succeeds.
+预期：全部后端测试通过。
 
-- [ ] **Step 6: Commit**
+- [ ] **步骤 5：运行前端构建**
+
+运行：
+
+```bash
+cd frontend
+npm run build
+```
+
+预期：构建成功。
+
+- [ ] **步骤 6：提交**
 
 ```bash
 git add README.md .env.example docker-compose.yml docker/mysql/init.sql backend frontend
-git commit -m "docs: add startup guide and verify docker deployment"
+git commit -m "docs: 添加启动指南并验证 Docker 部署"
 ```
 
-## Self-Review
+## 自检结果
 
-Spec coverage:
+规格覆盖：
 
-- Docker-first startup is covered by Tasks 1 and 14.
-- Login and user isolation are covered by Tasks 3 and 4.
-- Streaming chat is covered by Tasks 5 and 6.
-- AgentScope Java integration is covered by Task 6.
-- MySQL skill file tree and materialization are covered by Tasks 7 and 8.
-- Permissions and memory are covered by Task 9.
-- Self-evolution proposals are covered by Task 10.
-- Vue auth/chat/control panels are covered by Tasks 11, 12, and 13.
-- Tests and README are covered across each task and Task 14.
+- Docker-first 启动由任务 1 和任务 14 覆盖。
+- 登录和用户隔离由任务 3 和任务 4 覆盖。
+- 流式聊天由任务 5 和任务 6 覆盖。
+- AgentScope Java 集成由任务 6 覆盖。
+- MySQL skill 文件树和 materialize 由任务 7 和任务 8 覆盖。
+- 权限和记忆由任务 9 覆盖。
+- 自我进化 proposal 由任务 10 覆盖。
+- Vue 登录、聊天、控制面板由任务 11、12、13 覆盖。
+- 测试和 README 分布在各任务中，并由任务 14 收尾验证。
 
-Placeholder scan:
+计划文本检查：
 
-- No unfinished markers or intentionally vague implementation instructions remain.
-- AgentScope SDK class-name uncertainty is isolated behind `ChatAgentGateway` and `AgentEventMapper`, with compile verification in Task 6.
+- 没有未完成标记或含糊实现指令。
+- AgentScope SDK 类名不确定性被隔离在 `ChatAgentGateway` 和 `AgentEventMapper`，任务 6 通过编译验证真实 API。
 
-Type consistency:
+类型一致性：
 
-- `CurrentUser`, `ChatAgentGateway`, `StreamEventDto`, `SkillMaterializer`, and `EvolutionService` names are consistent across producer and consumer tasks.
+- `CurrentUser`、`ChatAgentGateway`、`ChatAgentRequest`、`StreamEventDto`、`SkillMaterializer`、`EvolutionService` 在生产任务和消费任务中的命名保持一致。
