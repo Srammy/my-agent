@@ -43,7 +43,11 @@ class JwtAuthenticationManagerTest {
             LocalDateTime.now(),
             LocalDateTime.now());
     String token = jwtService.createToken(user);
-    String tamperedToken = token.substring(0, token.length() - 1) + "x";
+    char firstChar = token.charAt(0);
+    char tamperedFirstChar = firstChar == 'x' ? 'y' : 'x';
+    String tamperedToken = tamperedFirstChar + token.substring(1);
+
+    assertThat(tamperedToken).isNotEqualTo(token);
 
     StepVerifier.create(
             authenticationManager.authenticate(
