@@ -4,21 +4,9 @@
 
 ## 目标
 
-使用 AgentScope Java 官方 SDK 构建一个 Java 技术栈的通用助手。系统需要支持：
+使用 AgentScope Java 官方 SDK 构建一个 Java 技术栈的通用助手。系统支持登录、多会话、流式输出、工具调用、公共和个人 skill、权限控制、长期记忆、多机部署和可审计的自我进化。
 
-- 浏览器对话 UI。
-- 流式输出。
-- 登录系统。
-- 根据登录用户隔离数据。
-- 多会话隔离。
-- 工具调用。
-- 用户可配置 skill。
-- 权限控制。
-- 长期记忆。
-- 默认接入 DashScope/Qwen。
-- 通过配置切换到 OpenAI-compatible 模型服务。
-
-默认模型为 `dashscope:qwen-plus`，API key 从环境变量 `DASHSCOPE_API_KEY` 读取。
+默认模型为 `dashscope:qwen-plus`，API key 从环境变量 `DASHSCOPE_API_KEY` 读取。系统也支持通过配置切换到 OpenAI-compatible 模型服务。
 
 ## 官方依据
 
@@ -35,50 +23,37 @@
 - Harness Skill：https://java.agentscope.io/v2/en/docs/harness/skill.html
 - Maven 元数据：https://maven.aliyun.com/repository/public/io/agentscope/agentscope-harness/maven-metadata.xml
 
-## 范围
-
-首版包含：
-
-- Spring Boot 后端。
-- Vue 3 前端。
-- MySQL 存储用户账号和会话元数据。
-- JWT 登录认证。
-- AgentScope Java `HarnessAgent`。
-- 流式聊天接口。
-- 基于登录用户和会话的隔离。
-- 默认 DashScope/Qwen 模型配置。
-- OpenAI-compatible 模型配置。
-- 基础工具和可配置高权限工具。
-- 用户 skill 管理。
-- 权限模式管理。
-- 长期记忆只读查看。
-- 面向核心流程的测试。
-- README 启动说明。
-
-首版不包含：
-
-- OAuth、MFA、刷新令牌轮换、管理员后台等完整生产认证体系。
-- 多节点部署。
-- AgentState 的 Redis/MySQL 存储改造，除非 AgentScope Java SDK 已提供可直接接入的实现。
-- 在 UI 中编辑长期记忆。
-- 完整 MCP 市场或插件市场。后端先预留配置扩展点。
-
 ## 总体架构
 
-系统采用前后端分离架构。
+系统采用前后端分离架构，并支持本地开发和生产多机两种部署模式。
 
-后端技术栈：
+```text
+Vue 3 前端
+  -> Nginx / SLB
+    -> Spring Boot 多副本
+      -> MySQL：用户、会话、skills、skill 文件、进化建议
+      -> Redis：AgentState、分布式状态、会话恢复
+      -> 本机缓存目录：运行时 materialize skill 文件
+      -> DashScope / OpenAI-compatible 模型服务
+```
+
+后端多副本保持无状态。请求打到任意机器，都通过 JWT 获取当前用户，通过 MySQL 读取业务数据，通过 Redis 恢复 AgentScope 状态。
+
+## 技术栈
+
+后端：
 
 - Java 21。
 - Spring Boot 3。
-- Spring WebFlux，用于流式响应。
+- Spring WebFlux。
 - Spring Security + JWT。
-- MySQL，存储用户和会话元数据。
-- MyBatis-Plus，简化数据库访问。
+- MySQL。
+- Redis。
+- MyBatis-Plus。
 - AgentScope Java `io.agentscope:agentscope-harness:2.0.0-RC4`。
 - Maven。
 
-前端技术栈：
+前端：
 
 - Vue 3。
 - Vite。
@@ -86,88 +61,7 @@
 - Pinia。
 - Vue Router。
 - Element Plus。
-- `fetch` + `ReadableStream` 处理流式输出。
-
-后端负责：
-
-- 登录认证。
-- 当前用户解析。
-- 模型配置。
-- AgentScope runtime 构造。
-- 会话归属校验。
-- skill 文件访问。
-- 权限模式更新。
-- 记忆读取。
-
-前端负责：
-
-- 登录/注册页面。
-- 聊天工作台。
-- 会话列表。
-- 流式消息渲染。
-- 工具调用展示。
-- 权限确认交互。
-- skill 管理界面。
-- 记忆只读查看。
-
-前端不允许用户手动选择 `userId`。`userId` 由后端从 JWT 登录态解析。
-
-## 后端项目结构
-
-```text
-backend/
-  pom.xml
-  src/main/java/com/example/myagent/
-    MyAgentApplication.java
-    config/
-      AgentProperties.java
-      SecurityConfig.java
-      CorsConfig.java
-      AgentScopeConfig.java
-    auth/
-      AuthController.java
-      AuthService.java
-      JwtService.java
-      CurrentUser.java
-      LoginRequest.java
-      RegisterRequest.java
-      AuthResponse.java
-    user/
-      UserEntity.java
-      UserMapper.java
-      UserService.java
-    session/
-      ChatSessionEntity.java
-      ChatSessionMapper.java
-      SessionController.java
-      SessionService.java
-    chat/
-      ChatController.java
-      ChatService.java
-      ChatRequest.java
-      StreamEventDto.java
-      AgentEventMapper.java
-    model/
-      ModelFactory.java
-      ModelProviderType.java
-    skill/
-      SkillController.java
-      SkillService.java
-      SkillDto.java
-      SkillValidator.java
-    memory/
-      MemoryController.java
-      MemoryService.java
-    permission/
-      PermissionController.java
-      PermissionService.java
-      PermissionModeDto.java
-    tools/
-      BasicTools.java
-      TimeTool.java
-      CalculatorTool.java
-      SessionSummaryTool.java
-```
+- `fetch` + `ReadableStream` 处理 NDJSON 流式输出。
 
 ## Maven 配置
 
@@ -195,9 +89,11 @@ backend/
 </repository>
 ```
 
+生产多机模式需要 Redis 状态存储扩展。实现时以 AgentScope Java 实际发布的 Redis 扩展 artifact 为准；如果 SDK 版本命名与文档不同，保留 `AgentStateStore` 适配层，避免业务代码直接依赖具体实现类。
+
 ## 应用配置
 
-默认配置：
+默认本地配置：
 
 ```yaml
 server:
@@ -210,6 +106,8 @@ spring:
     password: your_password
 
 agent:
+  deployment:
+    mode: local
   workspace:
     path: ./.agentscope/workspace
   model:
@@ -218,14 +116,27 @@ agent:
     api-key-env: DASHSCOPE_API_KEY
   permission:
     default-mode: DEFAULT
-  compaction:
-    trigger-messages: 30
-    keep-messages: 10
   tools:
     file-tools-enabled: false
     shell-enabled: false
     http-fetch-enabled: false
     mcp-enabled: false
+```
+
+生产多机配置：
+
+```yaml
+agent:
+  deployment:
+    mode: distributed
+  state-store:
+    type: redis
+    redis:
+      uri: redis://localhost:6379
+      key-prefix: myagent:agent-state:
+  skill:
+    storage: mysql
+    cache-dir: ./.agentscope/cache/skills
 ```
 
 OpenAI-compatible 配置示例：
@@ -258,17 +169,12 @@ GET  /api/auth/me
 1. 用户注册账号。
 2. 用户登录后获得 JWT。
 3. Vue 前端把 JWT 保存在 `localStorage`。
-4. 前端请求后端时携带请求头：
-
-```text
-Authorization: Bearer <token>
-```
-
+4. 前端请求后端时携带 `Authorization: Bearer <token>`。
 5. Spring Security 校验 JWT。
 6. Controller 通过当前登录态获取用户。
 7. 调用 AgentScope 时，使用当前用户 id 作为 `RuntimeContext.userId`。
 
-MySQL 表结构：
+核心表：
 
 ```sql
 create table users (
@@ -276,6 +182,7 @@ create table users (
   username varchar(64) not null unique,
   password_hash varchar(255) not null,
   display_name varchar(64),
+  role varchar(32) not null default 'USER',
   created_at datetime not null,
   updated_at datetime not null
 );
@@ -290,21 +197,11 @@ create table chat_sessions (
 );
 ```
 
-所有会话查询、修改、删除都必须带 `user_id` 条件。用户不能看到或操作其他用户的会话。
+所有会话、skill、记忆、权限、进化建议都按登录用户隔离。普通用户不能看到或操作其他用户数据。
 
 ## AgentScope Runtime
 
-后端启动时创建一个单例 `HarnessAgent`。模型由 `agent.model` 配置决定。Agent 会挂载：
-
-- 模型。
-- 基础工具。
-- skill 支持。
-- memory 支持。
-- workspace 配置。
-- compaction 配置。
-- 默认权限模式。
-
-每一轮聊天都从当前登录用户和当前会话构造 `RuntimeContext`：
+后端启动时创建 `HarnessAgent` 或通过工厂创建可复用 agent 实例。模型由 `agent.model` 配置决定。每轮聊天从当前登录用户和当前会话构造 `RuntimeContext`：
 
 ```java
 RuntimeContext runtimeContext = RuntimeContext.builder()
@@ -319,16 +216,23 @@ RuntimeContext runtimeContext = RuntimeContext.builder()
 Flux<AgentEvent> events = harnessAgent.streamEvents(userMessage, runtimeContext);
 ```
 
-AgentScope 根据 `(userId, sessionId)` 隔离：
+AgentScope 根据 `(userId, sessionId)` 隔离 AgentState、上下文、权限、记忆、工具状态和会话执行。同一个会话串行执行，不同会话可以并行执行。
 
-- AgentState。
-- 上下文。
-- 权限上下文。
-- 记忆。
-- 工具状态。
-- 会话执行。
+## 多机部署
 
-同一个会话串行执行，不同会话可以并行执行。
+支持两种模式：
+
+- `local`：开发环境，本地 workspace，本地状态存储。
+- `distributed`：生产多机，Redis 存 AgentState 和分布式状态，MySQL 存业务数据，后端多副本无状态部署。
+
+多机部署要求：
+
+- 不能依赖某一台机器的本地 AgentState。
+- skill 源数据存 MySQL。
+- skill 运行时 materialize 到当前机器本机缓存目录。
+- 一次流式请求固定在一个后端节点直到结束。
+- 下一轮请求可以命中另一台机器，并通过 Redis 恢复状态。
+- 负载均衡需要支持长连接或流式响应。
 
 ## 聊天接口
 
@@ -350,7 +254,7 @@ POST   /api/chat/sessions/{sessionId}/stream
 }
 ```
 
-流式响应使用 NDJSON。选择 NDJSON 的原因是它天然适合 `POST` 请求、JSON body 和 `Authorization` 请求头。
+流式响应使用 NDJSON，便于 `POST` 请求、JSON body 和 `Authorization` 请求头共存。
 
 示例事件：
 
@@ -360,38 +264,12 @@ POST   /api/chat/sessions/{sessionId}/stream
 {"type":"tool_call","name":"calculator","input":"..."}
 {"type":"tool_result","name":"calculator","output":"..."}
 {"type":"permission_required","toolCallId":"...","message":"..."}
+{"type":"evolution_proposal","proposalId":"...","title":"建议创建 Skill"}
 {"type":"done"}
-```
-
-错误事件：
-
-```json
 {"type":"error","message":"..."}
 ```
 
-错误事件发送后，流关闭。
-
-## 前端流式处理
-
-前端使用 `fetch` 和 `ReadableStream`：
-
-```ts
-const response = await fetch(`/api/chat/sessions/${sessionId}/stream`, {
-  method: "POST",
-  headers: {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({ message })
-});
-```
-
-流解析器负责：
-
-- 缓存半截 chunk。
-- 按换行切分。
-- 逐行解析 JSON。
-- 根据事件类型更新对话区。
+前端使用 `fetch` 和 `ReadableStream` 读取流，按换行切分并逐行解析 JSON。
 
 ## 工具系统
 
@@ -400,9 +278,10 @@ const response = await fetch(`/api/chat/sessions/${sessionId}/stream`, {
 - 当前时间工具。
 - 简单计算器工具。
 - 会话摘要/标题辅助工具。
-- 应用自有 todo/planning 工具，支持创建、列表、更新。
+- 应用自有 todo/planning 工具。
 - skill 加载工具。
 - 记忆读取和追加工具。
+- 进化建议生成工具。
 
 可配置开启的高权限工具：
 
@@ -413,7 +292,7 @@ const response = await fetch(`/api/chat/sessions/${sessionId}/stream`, {
 - HTTP fetch。
 - MCP tools。
 
-高权限工具默认关闭。开启后仍然受 AgentScope 权限模式和规则控制。
+高权限工具默认关闭。开启后仍然受 AgentScope 权限模式和规则控制。自我进化流程不能自动打开高权限工具。
 
 ## 权限控制
 
@@ -427,7 +306,7 @@ PUT  /api/permissions/sessions/{sessionId}
 POST /api/permissions/sessions/{sessionId}/confirm
 ```
 
-支持的模式：
+支持模式：
 
 - `DEFAULT`：默认安全模式，敏感工具调用需要确认。
 - `EXPLORE`：只读探索模式。
@@ -435,53 +314,144 @@ POST /api/permissions/sessions/{sessionId}/confirm
 - `DONT_ASK`：无人值守模式，需要确认的操作直接拒绝。
 - `BYPASS`：可信 sandbox 才使用的放行模式。
 
-权限模式属于会话的 AgentState，并按登录用户和会话隔离。
+权限模式属于会话 AgentState，并按登录用户和会话隔离。UI 展示工具调用确认卡片，用户批准或拒绝后由后端写回 AgentScope 对应确认流程。
 
-如果工具调用需要用户确认，后端把 AgentScope 确认事件映射成前端 `permission_required` 事件。UI 展示确认卡片。后端实现会适配 AgentScope Java 的具体确认事件类名，但前端事件协议保持稳定。高权限工具默认关闭，因此确认适配未完成时也不会意外放行危险操作。
+## Skill 设计
 
-## Skill 管理
+skill 分两类：
 
-skill 按用户隔离存储：
+- `SYSTEM`：公共 skill，所有用户可用。
+- `USER`：个人 skill，只属于当前用户。
+
+skill 全部存 MySQL，支持目录结构：
 
 ```text
-.agentscope/workspace/users/{userId}/skills/{skillName}/SKILL.md
+SKILL.md
+references/**
+scripts/**
+assets/**  后续扩展
 ```
+
+表结构：
+
+```sql
+create table skills (
+  id bigint primary key auto_increment,
+  owner_type varchar(16) not null,
+  owner_user_id bigint null,
+  name varchar(100) not null,
+  description varchar(255) not null,
+  enabled tinyint(1) not null default 1,
+  created_at datetime not null,
+  updated_at datetime not null,
+  unique key uk_skill_owner_name (owner_type, owner_user_id, name)
+);
+
+create table skill_files (
+  id bigint primary key auto_increment,
+  skill_id bigint not null,
+  path varchar(500) not null,
+  content mediumtext null,
+  content_type varchar(64) not null default 'text/markdown',
+  executable tinyint(1) not null default 0,
+  created_at datetime not null,
+  updated_at datetime not null,
+  unique key uk_skill_file_path (skill_id, path)
+);
+
+create table user_skill_settings (
+  id bigint primary key auto_increment,
+  user_id bigint not null,
+  skill_id bigint not null,
+  enabled tinyint(1) not null default 1,
+  unique key uk_user_skill_setting (user_id, skill_id)
+);
+```
+
+安全规则：
+
+- 每个 skill 必须存在 `SKILL.md`。
+- `SKILL.md` 必须包含 `name` 和 `description` frontmatter。
+- `path` 必须是相对路径。
+- 禁止 `../`。
+- 禁止绝对路径。
+- 禁止 Windows 盘符。
+- `scripts/**` 首版只作为文本给 agent 阅读，不直接执行。
+- 后续如果允许执行脚本，必须走权限系统确认。
+
+运行时加载：
+
+```text
+MySQL skills + skill_files
+  -> 加载当前用户启用的 SYSTEM skills
+  -> 加载当前用户启用的 USER skills
+  -> 用户同名 skill 覆盖公共 skill
+  -> materialize 到本机缓存目录
+  -> AgentScope Harness 读取 skill 目录
+```
+
+缓存 key 为 `skillId + updatedAt`。缓存目录可以安全删除，因为 MySQL 是源数据。
+
+## Skill 接口与 UI
 
 接口：
 
 ```text
-GET    /api/skills
-POST   /api/skills
-GET    /api/skills/{name}
-PUT    /api/skills/{name}
-DELETE /api/skills/{name}
+GET    /api/skills/system
+GET    /api/skills/mine
+POST   /api/skills/mine
+PUT    /api/skills/mine/{skillId}
+DELETE /api/skills/mine/{skillId}
+GET    /api/skills/{skillId}/files
+PUT    /api/skills/{skillId}/files/{path}
+DELETE /api/skills/{skillId}/files/{path}
+PUT    /api/skills/{skillId}/enabled
 ```
 
-保存 skill 时校验 `SKILL.md` frontmatter 至少包含：
+管理员接口可以复用同一套 service，但需要 `ADMIN` 角色才能创建、编辑、删除公共 skill。
 
-```yaml
----
-name: skill-name
-description: what this skill does
----
+右侧 Skill 面板分两个 tab：
+
+```text
+公共 Skill | 我的 Skill
 ```
 
-Agent 通过 AgentScope Harness 的 skill 支持加载用户 skill。用户 A 不能读取或修改用户 B 的 skill 文件。
+公共 Skill：
+
+- 普通用户可查看。
+- 普通用户可启用/停用对自己是否生效。
+- 普通用户不可编辑。
+- 管理员可创建、编辑、删除。
+
+我的 Skill：
+
+- 新建。
+- 编辑。
+- 删除。
+- 启用/停用。
+- 文件树管理。
+
+文件树示例：
+
+```text
+SKILL.md
+references/
+  checklist.md
+  style-guide.md
+scripts/
+  analyze.java
+```
 
 ## 长期记忆
 
-长期记忆按用户隔离：
+记忆按用户隔离。多机下不能只依赖某台机器本地文件。
 
-```text
-.agentscope/workspace/users/{userId}/MEMORY.md
-.agentscope/workspace/users/{userId}/memory/YYYY-MM-DD.md
-```
+首版采用共享存储策略：
 
-UI 提供只读记忆面板，用于查看：
-
-- 整理后的长期记忆 `MEMORY.md`。
-- 每日追加记忆文件列表。
-- 某一天的记忆内容。
+- 记忆内容优先存 MySQL，或通过 AgentScope 可共享状态存储写入 Redis/OSS。
+- UI 只读查看长期记忆。
+- 不允许直接编辑长期记忆。
+- 记忆修正通过“进化建议”审批后应用。
 
 接口：
 
@@ -491,9 +461,100 @@ GET /api/memory/daily
 GET /api/memory/daily/{date}
 ```
 
-首版不提供 UI 编辑记忆能力。原因是长期记忆会影响后续回答，错误编辑会污染 agent 行为。后续可以增加“删除/修正记忆”的受控操作。
+## 自我进化设计
 
-## Vue 前端结构
+自我进化采用提案制：可审计、可回滚、用户批准后应用。agent 不能在生产环境中偷偷修改自身代码、公共 skill 或高权限工具策略。
+
+首版支持四类进化：
+
+1. 记忆进化：总结用户偏好、业务术语、项目约定。
+2. Skill 进化：发现重复任务后生成个人 skill 草稿。
+3. 工具策略进化：建议启用或停用工具，但不自动打开高权限工具。
+4. Prompt/配置进化：生成 system prompt、模型参数、权限模式建议。
+
+代码层进化不自动执行。agent 只能生成 patch 或建议，后续接 PR、测试、人工 review 流程。
+
+表结构：
+
+```sql
+create table agent_evolution_proposals (
+  id bigint primary key auto_increment,
+  user_id bigint not null,
+  session_id varchar(64) null,
+  type varchar(32) not null,
+  title varchar(200) not null,
+  summary varchar(1000) null,
+  content mediumtext not null,
+  status varchar(32) not null,
+  created_at datetime not null,
+  updated_at datetime not null,
+  applied_at datetime null
+);
+```
+
+`type` 可取值：
+
+- `MEMORY`
+- `SKILL`
+- `TOOL_POLICY`
+- `PROMPT`
+- `CODE_PATCH`
+
+`status` 可取值：
+
+- `DRAFT`
+- `APPROVED`
+- `REJECTED`
+- `APPLIED`
+
+进化流程：
+
+```text
+Agent 发现可改进点
+  -> 生成 evolution proposal
+  -> UI 展示给用户
+  -> 用户批准或拒绝
+  -> 批准后应用到 memory / user skill / tool policy / prompt config
+  -> 记录 applied_at
+```
+
+首版允许自动应用的内容：
+
+- 用户批准后的个人记忆更新。
+- 用户批准后的个人 skill 创建或修改。
+- 用户批准后的低风险工具策略建议。
+
+需要管理员批准的内容：
+
+- 公共 skill 修改。
+- 系统 prompt 修改。
+- 代码 patch。
+- 高权限工具策略变更。
+
+进化接口：
+
+```text
+GET  /api/evolution/proposals
+POST /api/evolution/proposals/{id}/approve
+POST /api/evolution/proposals/{id}/reject
+POST /api/evolution/proposals/{id}/apply
+```
+
+## Vue 前端
+
+页面：
+
+- 登录/注册页。
+- 聊天工作台。
+
+聊天工作台布局：
+
+- 左侧：会话列表。
+- 中间：消息流、工具卡片、错误提示、进化建议卡片。
+- 底部：输入框、发送按钮、停止按钮。
+- 右侧：模型信息、权限模式、公共 Skill、我的 Skill、记忆查看、进化建议。
+
+前端结构：
 
 ```text
 frontend/
@@ -509,10 +570,13 @@ frontend/
       skills.ts
       memory.ts
       permissions.ts
+      evolution.ts
     stores/
       auth.ts
       sessions.ts
       chat.ts
+      skills.ts
+      evolution.ts
     views/
       LoginView.vue
       ChatView.vue
@@ -523,21 +587,11 @@ frontend/
       ToolEventCard.vue
       PermissionPanel.vue
       SkillPanel.vue
+      SkillFileTree.vue
       MemoryPanel.vue
       ModelInfoPanel.vue
+      EvolutionPanel.vue
 ```
-
-页面：
-
-- 登录/注册页。
-- 聊天工作台。
-
-聊天工作台布局：
-
-- 左侧：会话列表、新建会话、删除会话。
-- 中间：消息流、流式输出、工具调用卡片、错误提示。
-- 底部：输入框、发送按钮、停止按钮。
-- 右侧：模型信息、权限模式、skill 管理、记忆只读查看。
 
 UI 风格采用面向工作台的紧凑布局，不做 landing page。
 
@@ -546,12 +600,13 @@ UI 风格采用面向工作台的紧凑布局，不做 landing page。
 后端：
 
 - 缺少或无效 JWT 返回 `401`。
-- 访问其他用户会话返回 `404` 或 `403`。
+- 访问其他用户资源返回 `404` 或 `403`。
 - 缺少模型 API key 返回清晰的模型配置错误。
 - 模型流式调用失败时发送 `error` 流事件。
 - skill 校验失败返回 `400`。
-- MySQL 启动失败时应用启动失败，并输出 Spring 数据源错误。
-- 用户 workspace 文件不存在时按需创建。
+- 非法 skill 文件路径返回 `400`。
+- MySQL 或 Redis 不可用时，生产模式启动失败并输出明确错误。
+- 本机 skill 缓存目录缺失时按需创建。
 
 前端：
 
@@ -559,18 +614,22 @@ UI 风格采用面向工作台的紧凑布局，不做 landing page。
 - 流式错误显示在对话区。
 - 权限确认显示为确认卡片。
 - skill 校验错误显示在编辑器旁边。
+- 进化建议应用失败时保留原 proposal 状态并显示错误。
 
 ## 测试计划
 
 后端测试：
 
-- 注册和登录。
-- JWT 校验。
+- 注册、登录、JWT 校验。
 - 会话归属过滤。
-- DashScope 配置解析。
-- OpenAI-compatible 配置解析。
+- DashScope 与 OpenAI-compatible 配置解析。
 - `RuntimeContext` 使用当前登录用户 id 和 session id。
+- Redis state store 配置选择。
 - skill frontmatter 校验。
+- skill 文件路径安全校验。
+- SYSTEM/USER skill 加载优先级。
+- skill materialize 缓存更新。
+- 进化建议创建、批准、拒绝、应用。
 - 使用 mock `ChatAgentGateway` 的聊天流接口 smoke test。
 
 前端测试或手动 smoke check：
@@ -581,20 +640,23 @@ UI 风格采用面向工作台的紧凑布局，不做 landing page。
 - `text_delta` 事件更新对话区。
 - 工具事件渲染。
 - 权限模式选择。
-- skill 编辑器校验。
+- skill 文件树编辑。
+- 进化建议审批。
 
-手动验收流程：
+手动验收：
 
-1. 启动 MySQL。
+1. 启动 MySQL 和 Redis。
 2. 启动后端。
 3. 启动 Vue dev server。
 4. 注册并登录。
 5. 创建会话。
 6. 发送消息，确认浏览器中实时流式输出。
 7. 用第二个账号验证会话隔离。
-8. 创建和编辑 skill。
-9. 查看记忆面板。
-10. 切换权限模式。
+8. 创建个人 skill，并添加 `references/**` 和 `scripts/**` 文件。
+9. 启用或停用公共 skill。
+10. 查看记忆面板。
+11. 生成并批准一个 skill 进化建议。
+12. 多副本后端下验证会话状态可恢复。
 
 ## 开发命令
 
@@ -623,30 +685,40 @@ Backend:  http://localhost:8080
 ## 实现顺序
 
 1. 创建后端 Maven 项目。
-2. 添加 Spring Boot、MySQL、MyBatis-Plus、Spring Security、JWT、AgentScope Harness 依赖。
+2. 添加 Spring Boot、MySQL、Redis、MyBatis-Plus、Spring Security、JWT、AgentScope Harness 依赖。
 3. 实现数据库 schema 和登录认证。
 4. 实现会话元数据接口。
 5. 接入 AgentScope Java 模型和 `HarnessAgent`。
-6. 实现流式聊天接口和事件映射。
-7. 创建 Vue 3 前端项目。
-8. 实现登录 UI 和路由守卫。
-9. 实现聊天工作台和 NDJSON 流解析。
-10. 实现 skill 管理。
-11. 实现记忆只读查看。
-12. 实现权限模式 UI 和后端接口。
-13. 增加核心测试。
-14. 编写 README 启动说明。
+6. 接入 local/distributed 状态存储配置。
+7. 实现流式聊天接口和事件映射。
+8. 实现 MySQL skill、skill 文件树、materialize 缓存。
+9. 实现权限模式接口。
+10. 实现记忆只读查看。
+11. 实现自我进化 proposal 流程。
+12. 创建 Vue 3 前端项目。
+13. 实现登录 UI 和路由守卫。
+14. 实现聊天工作台和 NDJSON 流解析。
+15. 实现公共 Skill、我的 Skill、文件树编辑。
+16. 实现权限、记忆、进化建议面板。
+17. 增加核心测试。
+18. 编写 README 启动说明。
 
 ## 验收标准
 
 - 用户可以注册和登录。
 - 登录用户只能看到自己的会话。
-- 登录用户可以创建会话并与助手对话。
-- 助手回复可以实时流式显示在浏览器 UI。
+- 多副本后端下，会话状态可通过 Redis 恢复。
 - 默认模型为 DashScope `qwen-plus`。
 - 可以通过配置切换到 OpenAI-compatible 模型。
-- 基础工具调用事件可以在 UI 中展示。
-- skill 文件可以按用户创建、查看、编辑、删除。
+- 浏览器可以流式显示助手回复。
+- 工具调用事件可以在 UI 展示。
+- 权限确认可以展示和处理。
+- skills 支持 `SYSTEM` 和 `USER` 两类。
+- skills 支持 `SKILL.md`、`references/**`、`scripts/**`。
+- skill 数据存 MySQL，多机可用。
 - 长期记忆可以按用户只读查看。
-- 权限模式可以按会话查看和切换。
+- agent 可以生成进化建议。
+- 用户批准后可以应用记忆或个人 skill 进化。
+- 公共 skill、系统 prompt、代码 patch、高权限工具策略变更需要管理员批准。
+- 高权限工具默认关闭，不能被进化流程自动打开。
 - 缺少 API key、未登录、越权访问时都有清晰错误。
