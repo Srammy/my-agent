@@ -2,6 +2,7 @@ package com.example.myagent.config;
 
 import com.example.myagent.auth.JwtAuthenticationManager;
 import com.example.myagent.auth.ServerBearerTokenAuthenticationConverter;
+import org.springframework.http.HttpMethod;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
@@ -12,6 +13,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.authentication.AuthenticationWebFilter;
 import org.springframework.security.web.server.context.NoOpServerSecurityContextRepository;
+import org.springframework.security.web.server.util.matcher.AndServerWebExchangeMatcher;
+import org.springframework.security.web.server.util.matcher.NegatedServerWebExchangeMatcher;
+import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher;
+import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatchers;
 
 @Configuration
 @EnableWebFluxSecurity
@@ -27,11 +32,20 @@ public class SecurityConfig {
       ServerHttpSecurity http,
       JwtAuthenticationManager jwtAuthenticationManager,
       ServerBearerTokenAuthenticationConverter authenticationConverter) {
+    ServerWebExchangeMatcher publicAuthEndpoints =
+        ServerWebExchangeMatchers.pathMatchers(
+            HttpMethod.POST, "/api/auth/register", "/api/auth/login");
+    ServerWebExchangeMatcher protectedApiEndpoints =
+        new AndServerWebExchangeMatcher(
+            ServerWebExchangeMatchers.pathMatchers("/api/**"),
+            new NegatedServerWebExchangeMatcher(publicAuthEndpoints));
+
     AuthenticationWebFilter authenticationWebFilter =
         new AuthenticationWebFilter(jwtAuthenticationManager);
     authenticationWebFilter.setServerAuthenticationConverter(authenticationConverter);
     authenticationWebFilter.setSecurityContextRepository(
         NoOpServerSecurityContextRepository.getInstance());
+    authenticationWebFilter.setRequiresAuthenticationMatcher(protectedApiEndpoints);
 
     return http
         .csrf(ServerHttpSecurity.CsrfSpec::disable)
