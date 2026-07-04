@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -21,12 +22,14 @@ public class AuthController {
 
   @PostMapping("/register")
   public Mono<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
-    return Mono.fromSupplier(() -> authService.register(request));
+    return Mono.fromCallable(() -> authService.register(request))
+        .subscribeOn(Schedulers.boundedElastic());
   }
 
   @PostMapping("/login")
   public Mono<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
-    return Mono.fromSupplier(() -> authService.login(request));
+    return Mono.fromCallable(() -> authService.login(request))
+        .subscribeOn(Schedulers.boundedElastic());
   }
 
   @GetMapping("/me")
