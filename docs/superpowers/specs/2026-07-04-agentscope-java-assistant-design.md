@@ -1,83 +1,118 @@
-# AgentScope Java Assistant Design
+# AgentScope Java 通用助手设计方案
 
-Date: 2026-07-04
+日期：2026-07-04
 
-## Purpose
+## 目标
 
-Build a Java-based general assistant with AgentScope Java official SDK. The assistant must support streaming chat, login-based user isolation, isolated sessions, tool calling, user-configurable skills, permission control, long-term memory, and a browser UI implemented with Vue.
+使用 AgentScope Java 官方 SDK 构建一个 Java 技术栈的通用助手。系统需要支持：
 
-The default model provider is DashScope Qwen, using `dashscope:qwen-plus`. The system must also support switching to an OpenAI-compatible model provider through configuration.
+- 浏览器对话 UI。
+- 流式输出。
+- 登录系统。
+- 根据登录用户隔离数据。
+- 多会话隔离。
+- 工具调用。
+- 用户可配置 skill。
+- 权限控制。
+- 长期记忆。
+- 默认接入 DashScope/Qwen。
+- 通过配置切换到 OpenAI-compatible 模型服务。
 
-## Official Sources
+默认模型为 `dashscope:qwen-plus`，API key 从环境变量 `DASHSCOPE_API_KEY` 读取。
 
-The design is based on the AgentScope Java documentation and Maven metadata:
+## 官方依据
 
-- AgentScope Java quickstart: https://java.agentscope.io/v2/en/docs/quickstart.html
-- Agent building block: https://java.agentscope.io/v2/en/docs/building-blocks/agent.html
-- Message and event streaming: https://java.agentscope.io/v2/en/docs/building-blocks/message-and-event.html
-- Tool system: https://java.agentscope.io/v2/en/docs/building-blocks/tool.html
-- Permission system: https://java.agentscope.io/v2/en/docs/building-blocks/permission-system.html
-- Context and AgentState: https://java.agentscope.io/v2/en/docs/building-blocks/context.html
-- Harness workspace: https://java.agentscope.io/v2/en/docs/harness/workspace.html
-- Harness memory: https://java.agentscope.io/v2/en/docs/harness/memory.html
-- Harness skill: https://java.agentscope.io/v2/en/docs/harness/skill.html
-- Maven artifact metadata: https://maven.aliyun.com/repository/public/io/agentscope/agentscope-harness/maven-metadata.xml
+设计基于 AgentScope Java 官方文档和 Maven 元数据：
 
-## Scope
+- AgentScope Java 快速开始：https://java.agentscope.io/v2/en/docs/quickstart.html
+- Agent 构建块：https://java.agentscope.io/v2/en/docs/building-blocks/agent.html
+- Message 与 Event 流式事件：https://java.agentscope.io/v2/en/docs/building-blocks/message-and-event.html
+- Tool 工具系统：https://java.agentscope.io/v2/en/docs/building-blocks/tool.html
+- Permission 权限系统：https://java.agentscope.io/v2/en/docs/building-blocks/permission-system.html
+- Context 与 AgentState：https://java.agentscope.io/v2/en/docs/building-blocks/context.html
+- Harness Workspace：https://java.agentscope.io/v2/en/docs/harness/workspace.html
+- Harness Memory：https://java.agentscope.io/v2/en/docs/harness/memory.html
+- Harness Skill：https://java.agentscope.io/v2/en/docs/harness/skill.html
+- Maven 元数据：https://maven.aliyun.com/repository/public/io/agentscope/agentscope-harness/maven-metadata.xml
 
-In scope:
+## 范围
 
-- Spring Boot backend.
-- Vue 3 frontend.
-- MySQL-backed user accounts and chat session metadata.
-- JWT authentication.
-- AgentScope Java `HarnessAgent`.
-- Streaming chat response.
-- Per-user and per-session isolation.
-- Default DashScope Qwen model configuration.
-- OpenAI-compatible model configuration.
-- Basic tools and optional higher-permission tool groups.
-- User skill management.
-- Permission mode management.
-- Read-only long-term memory view.
-- Focused tests and developer README.
+首版包含：
 
-Out of scope for the first implementation:
+- Spring Boot 后端。
+- Vue 3 前端。
+- MySQL 存储用户账号和会话元数据。
+- JWT 登录认证。
+- AgentScope Java `HarnessAgent`。
+- 流式聊天接口。
+- 基于登录用户和会话的隔离。
+- 默认 DashScope/Qwen 模型配置。
+- OpenAI-compatible 模型配置。
+- 基础工具和可配置高权限工具。
+- 用户 skill 管理。
+- 权限模式管理。
+- 长期记忆只读查看。
+- 面向核心流程的测试。
+- README 启动说明。
 
-- Full production auth features such as OAuth, MFA, refresh-token rotation, or admin console.
-- Multi-node deployment.
-- Redis/MySQL AgentState store unless AgentScope Java provides a directly usable implementation that is straightforward to wire.
-- Editing long-term memory in the UI.
-- Full MCP marketplace UI. The backend will reserve a configuration extension point.
+首版不包含：
 
-## Architecture
+- OAuth、MFA、刷新令牌轮换、管理员后台等完整生产认证体系。
+- 多节点部署。
+- AgentState 的 Redis/MySQL 存储改造，除非 AgentScope Java SDK 已提供可直接接入的实现。
+- 在 UI 中编辑长期记忆。
+- 完整 MCP 市场或插件市场。后端先预留配置扩展点。
 
-The system uses a split frontend/backend architecture.
+## 总体架构
 
-Backend:
+系统采用前后端分离架构。
 
-- Java 21.
-- Spring Boot 3.
-- Spring WebFlux for streaming responses.
-- Spring Security with JWT.
-- MySQL for users and chat session metadata.
-- MyBatis-Plus for persistence.
-- AgentScope Java `io.agentscope:agentscope-harness:2.0.0-RC4`.
-- Maven.
+后端技术栈：
 
-Frontend:
+- Java 21。
+- Spring Boot 3。
+- Spring WebFlux，用于流式响应。
+- Spring Security + JWT。
+- MySQL，存储用户和会话元数据。
+- MyBatis-Plus，简化数据库访问。
+- AgentScope Java `io.agentscope:agentscope-harness:2.0.0-RC4`。
+- Maven。
 
-- Vue 3.
-- Vite.
-- TypeScript.
-- Pinia.
-- Vue Router.
-- Element Plus.
-- `fetch` plus `ReadableStream` for streaming chat.
+前端技术栈：
 
-The backend owns authentication, model configuration, AgentScope runtime construction, session ownership checks, skill file access, permission updates, and memory reads. The frontend is a browser chat workspace that never manually selects `userId`; it receives the current user from the login session.
+- Vue 3。
+- Vite。
+- TypeScript。
+- Pinia。
+- Vue Router。
+- Element Plus。
+- `fetch` + `ReadableStream` 处理流式输出。
 
-## Backend Project Structure
+后端负责：
+
+- 登录认证。
+- 当前用户解析。
+- 模型配置。
+- AgentScope runtime 构造。
+- 会话归属校验。
+- skill 文件访问。
+- 权限模式更新。
+- 记忆读取。
+
+前端负责：
+
+- 登录/注册页面。
+- 聊天工作台。
+- 会话列表。
+- 流式消息渲染。
+- 工具调用展示。
+- 权限确认交互。
+- skill 管理界面。
+- 记忆只读查看。
+
+前端不允许用户手动选择 `userId`。`userId` 由后端从 JWT 登录态解析。
+
+## 后端项目结构
 
 ```text
 backend/
@@ -134,9 +169,9 @@ backend/
       SessionSummaryTool.java
 ```
 
-## Maven Configuration
+## Maven 配置
 
-The backend depends on AgentScope Java Harness:
+后端依赖 AgentScope Java Harness：
 
 ```xml
 <properties>
@@ -151,7 +186,7 @@ The backend depends on AgentScope Java Harness:
 </dependency>
 ```
 
-The artifact is available from the Aliyun Maven public repository, so the backend `pom.xml` includes:
+当前 Maven Central 没查到该 artifact，但阿里云 Maven public 仓库存在 `io.agentscope:agentscope-harness`。后端 `pom.xml` 需要配置仓库：
 
 ```xml
 <repository>
@@ -160,9 +195,9 @@ The artifact is available from the Aliyun Maven public repository, so the backen
 </repository>
 ```
 
-## Configuration
+## 应用配置
 
-Default configuration:
+默认配置：
 
 ```yaml
 server:
@@ -193,7 +228,7 @@ agent:
     mcp-enabled: false
 ```
 
-OpenAI-compatible configuration:
+OpenAI-compatible 配置示例：
 
 ```yaml
 agent:
@@ -204,13 +239,13 @@ agent:
     api-key-env: OPENAI_API_KEY
 ```
 
-API keys are read only from environment variables. They are not stored in MySQL and are not entered in the frontend.
+API key 只从环境变量读取，不写入 MySQL，也不在前端输入。
 
-## Authentication And User Isolation
+## 登录与用户隔离
 
-The application includes a login system backed by MySQL.
+系统内置登录系统，用户信息存储在 MySQL。
 
-Endpoints:
+认证接口：
 
 ```text
 POST /api/auth/register
@@ -218,15 +253,22 @@ POST /api/auth/login
 GET  /api/auth/me
 ```
 
-The frontend stores the JWT in `localStorage` and sends it as:
+认证流程：
+
+1. 用户注册账号。
+2. 用户登录后获得 JWT。
+3. Vue 前端把 JWT 保存在 `localStorage`。
+4. 前端请求后端时携带请求头：
 
 ```text
 Authorization: Bearer <token>
 ```
 
-Spring Security validates the token and exposes the current user to controllers. The UI shows the current account but does not allow manual user switching.
+5. Spring Security 校验 JWT。
+6. Controller 通过当前登录态获取用户。
+7. 调用 AgentScope 时，使用当前用户 id 作为 `RuntimeContext.userId`。
 
-MySQL schema:
+MySQL 表结构：
 
 ```sql
 create table users (
@@ -248,13 +290,21 @@ create table chat_sessions (
 );
 ```
 
-All session reads and writes include `user_id`. A logged-in user cannot see or operate on another user's sessions.
+所有会话查询、修改、删除都必须带 `user_id` 条件。用户不能看到或操作其他用户的会话。
 
 ## AgentScope Runtime
 
-The backend creates a singleton `HarnessAgent` at startup. The model is constructed from `agent.model`. The agent receives basic tools, skill support, memory support, workspace configuration, compaction configuration, and default permission mode.
+后端启动时创建一个单例 `HarnessAgent`。模型由 `agent.model` 配置决定。Agent 会挂载：
 
-Each chat turn constructs a runtime context from the authenticated user and selected session:
+- 模型。
+- 基础工具。
+- skill 支持。
+- memory 支持。
+- workspace 配置。
+- compaction 配置。
+- 默认权限模式。
+
+每一轮聊天都从当前登录用户和当前会话构造 `RuntimeContext`：
 
 ```java
 RuntimeContext runtimeContext = RuntimeContext.builder()
@@ -263,17 +313,26 @@ RuntimeContext runtimeContext = RuntimeContext.builder()
     .build();
 ```
 
-The assistant streams events with AgentScope Java:
+流式调用：
 
 ```java
 Flux<AgentEvent> events = harnessAgent.streamEvents(userMessage, runtimeContext);
 ```
 
-AgentScope uses `(userId, sessionId)` for isolated `AgentState`, context, permissions, memory, and execution ordering. The application relies on AgentScope's same-session serialization while allowing different sessions to run independently.
+AgentScope 根据 `(userId, sessionId)` 隔离：
 
-## Chat API
+- AgentState。
+- 上下文。
+- 权限上下文。
+- 记忆。
+- 工具状态。
+- 会话执行。
 
-Endpoints:
+同一个会话串行执行，不同会话可以并行执行。
+
+## 聊天接口
+
+会话接口：
 
 ```text
 POST   /api/chat/sessions
@@ -283,36 +342,38 @@ DELETE /api/chat/sessions/{sessionId}
 POST   /api/chat/sessions/{sessionId}/stream
 ```
 
-`POST /stream` accepts:
+发送消息请求：
 
 ```json
 {
-  "message": "Hello"
+  "message": "你好"
 }
 ```
 
-The response uses newline-delimited JSON because it works naturally with `POST`, JSON request bodies, and authorization headers:
+流式响应使用 NDJSON。选择 NDJSON 的原因是它天然适合 `POST` 请求、JSON body 和 `Authorization` 请求头。
+
+示例事件：
 
 ```json
 {"type":"reply_start","replyId":"..."}
-{"type":"text_delta","delta":"Hello"}
+{"type":"text_delta","delta":"你好"}
 {"type":"tool_call","name":"calculator","input":"..."}
 {"type":"tool_result","name":"calculator","output":"..."}
 {"type":"permission_required","toolCallId":"...","message":"..."}
 {"type":"done"}
 ```
 
-If the model call or agent execution fails, the stream emits:
+错误事件：
 
 ```json
 {"type":"error","message":"..."}
 ```
 
-and then closes.
+错误事件发送后，流关闭。
 
-## Frontend Streaming
+## 前端流式处理
 
-The frontend uses `fetch` and `ReadableStream`:
+前端使用 `fetch` 和 `ReadableStream`：
 
 ```ts
 const response = await fetch(`/api/chat/sessions/${sessionId}/stream`, {
@@ -325,35 +386,40 @@ const response = await fetch(`/api/chat/sessions/${sessionId}/stream`, {
 });
 ```
 
-The stream parser buffers partial chunks, splits on newline, parses each JSON object, and updates the chat transcript incrementally.
+流解析器负责：
 
-## Tool System
+- 缓存半截 chunk。
+- 按换行切分。
+- 逐行解析 JSON。
+- 根据事件类型更新对话区。
 
-Default enabled tools:
+## 工具系统
 
-- Current time.
-- Calculator.
-- Session summary/title helper.
-- A small application-owned todo/planning tool with create, list, and update operations.
-- Skill loading.
-- Memory read and append operations exposed through the application's memory service and wired into the agent toolkit.
+默认开启的安全工具：
 
-Configurable higher-permission tools:
+- 当前时间工具。
+- 简单计算器工具。
+- 会话摘要/标题辅助工具。
+- 应用自有 todo/planning 工具，支持创建、列表、更新。
+- skill 加载工具。
+- 记忆读取和追加工具。
 
-- File read.
-- File search.
-- File write/edit.
-- Shell or bash execution.
-- HTTP fetch.
-- MCP tools.
+可配置开启的高权限工具：
 
-High-permission tools are disabled by default. Enabling them requires backend configuration and still respects AgentScope permission mode and rules.
+- 文件读取。
+- 文件搜索。
+- 文件写入/编辑。
+- shell/bash 执行。
+- HTTP fetch。
+- MCP tools。
 
-## Permission Control
+高权限工具默认关闭。开启后仍然受 AgentScope 权限模式和规则控制。
 
-Default permission mode is `DEFAULT`.
+## 权限控制
 
-Endpoints:
+默认权限模式为 `DEFAULT`。
+
+接口：
 
 ```text
 GET  /api/permissions/sessions/{sessionId}
@@ -361,27 +427,27 @@ PUT  /api/permissions/sessions/{sessionId}
 POST /api/permissions/sessions/{sessionId}/confirm
 ```
 
-Supported modes:
+支持的模式：
 
-- `DEFAULT`: safe default; unmatched sensitive actions require confirmation.
-- `EXPLORE`: read-only exploration.
-- `ACCEPT_EDITS`: allows edits in the configured workspace.
-- `DONT_ASK`: converts confirmation prompts to denial.
-- `BYPASS`: trusted sandbox mode only.
+- `DEFAULT`：默认安全模式，敏感工具调用需要确认。
+- `EXPLORE`：只读探索模式。
+- `ACCEPT_EDITS`：允许在工作区内编辑。
+- `DONT_ASK`：无人值守模式，需要确认的操作直接拒绝。
+- `BYPASS`：可信 sandbox 才使用的放行模式。
 
-Permission mode is part of the session's AgentState and is isolated by authenticated user and session.
+权限模式属于会话的 AgentState，并按登录用户和会话隔离。
 
-If a tool call requires confirmation, the backend maps AgentScope confirmation events to a frontend `permission_required` event. The UI renders an approval card. The backend keeps the frontend event contract stable while adapting to the exact AgentScope Java confirmation class names during implementation. High-permission tools remain disabled by default, so an incomplete confirmation adapter cannot accidentally allow unsafe operations.
+如果工具调用需要用户确认，后端把 AgentScope 确认事件映射成前端 `permission_required` 事件。UI 展示确认卡片。后端实现会适配 AgentScope Java 的具体确认事件类名，但前端事件协议保持稳定。高权限工具默认关闭，因此确认适配未完成时也不会意外放行危险操作。
 
-## Skill Management
+## Skill 管理
 
-Skills are stored per user:
+skill 按用户隔离存储：
 
 ```text
 .agentscope/workspace/users/{userId}/skills/{skillName}/SKILL.md
 ```
 
-Endpoints:
+接口：
 
 ```text
 GET    /api/skills
@@ -391,7 +457,7 @@ PUT    /api/skills/{name}
 DELETE /api/skills/{name}
 ```
 
-The backend validates that `SKILL.md` contains frontmatter with at least:
+保存 skill 时校验 `SKILL.md` frontmatter 至少包含：
 
 ```yaml
 ---
@@ -400,20 +466,24 @@ description: what this skill does
 ---
 ```
 
-The agent loads user skills through AgentScope Harness skill support. User A cannot read or edit User B's skill files.
+Agent 通过 AgentScope Harness 的 skill 支持加载用户 skill。用户 A 不能读取或修改用户 B 的 skill 文件。
 
-## Memory
+## 长期记忆
 
-Memory is stored per user under the AgentScope workspace:
+长期记忆按用户隔离：
 
 ```text
 .agentscope/workspace/users/{userId}/MEMORY.md
 .agentscope/workspace/users/{userId}/memory/YYYY-MM-DD.md
 ```
 
-The UI includes a read-only memory panel. It shows the consolidated long-term memory and the daily memory files. The first implementation does not allow editing memory from the UI because incorrect manual edits can distort future assistant behavior.
+UI 提供只读记忆面板，用于查看：
 
-Endpoints:
+- 整理后的长期记忆 `MEMORY.md`。
+- 每日追加记忆文件列表。
+- 某一天的记忆内容。
+
+接口：
 
 ```text
 GET /api/memory
@@ -421,9 +491,9 @@ GET /api/memory/daily
 GET /api/memory/daily/{date}
 ```
 
-## Vue Frontend
+首版不提供 UI 编辑记忆能力。原因是长期记忆会影响后续回答，错误编辑会污染 agent 行为。后续可以增加“删除/修正记忆”的受控操作。
 
-Project structure:
+## Vue 前端结构
 
 ```text
 frontend/
@@ -457,84 +527,85 @@ frontend/
       ModelInfoPanel.vue
 ```
 
-Views:
+页面：
 
-- Login/register page.
-- Main chat workspace.
+- 登录/注册页。
+- 聊天工作台。
 
-Main chat workspace:
+聊天工作台布局：
 
-- Left sidebar: chat sessions, create session, delete session.
-- Center: transcript, streaming assistant output, tool event cards, errors.
-- Bottom composer: input, send, stop.
-- Right side: model info, permission mode, skill management, read-only memory view.
+- 左侧：会话列表、新建会话、删除会话。
+- 中间：消息流、流式输出、工具调用卡片、错误提示。
+- 底部：输入框、发送按钮、停止按钮。
+- 右侧：模型信息、权限模式、skill 管理、记忆只读查看。
 
-The UI uses Element Plus components with a dense work-focused layout. It is not a landing page.
+UI 风格采用面向工作台的紧凑布局，不做 landing page。
 
-## Error Handling
+## 错误处理
 
-Backend behavior:
+后端：
 
-- Missing or invalid JWT returns `401`.
-- Access to another user's session returns `404` or `403`.
-- Missing model API key returns a clear model configuration error.
-- Model stream failures emit an error stream event.
-- Skill validation failures return `400`.
-- MySQL startup failure stops the app with Spring's normal datasource error.
-- Missing user workspace files are created lazily.
+- 缺少或无效 JWT 返回 `401`。
+- 访问其他用户会话返回 `404` 或 `403`。
+- 缺少模型 API key 返回清晰的模型配置错误。
+- 模型流式调用失败时发送 `error` 流事件。
+- skill 校验失败返回 `400`。
+- MySQL 启动失败时应用启动失败，并输出 Spring 数据源错误。
+- 用户 workspace 文件不存在时按需创建。
 
-Frontend behavior:
+前端：
 
-- Auth errors route to login.
-- Stream errors appear in the transcript.
-- Permission prompts appear as approval cards.
-- Skill validation errors appear next to the editor.
+- 认证错误跳转登录页。
+- 流式错误显示在对话区。
+- 权限确认显示为确认卡片。
+- skill 校验错误显示在编辑器旁边。
 
-## Testing
+## 测试计划
 
-Backend tests:
+后端测试：
 
-- Auth registration and login.
-- JWT validation.
-- Session ownership filtering.
-- Configuration parsing for DashScope and OpenAI-compatible providers.
-- RuntimeContext construction uses authenticated user id and session id.
-- Skill frontmatter validation.
-- Chat stream endpoint smoke test with a mocked `ChatAgentGateway` adapter.
+- 注册和登录。
+- JWT 校验。
+- 会话归属过滤。
+- DashScope 配置解析。
+- OpenAI-compatible 配置解析。
+- `RuntimeContext` 使用当前登录用户 id 和 session id。
+- skill frontmatter 校验。
+- 使用 mock `ChatAgentGateway` 的聊天流接口 smoke test。
 
-Frontend tests or smoke checks:
+前端测试或手动 smoke check：
 
-- Login and token storage.
-- Session list rendering.
-- NDJSON stream parser.
-- Transcript update from text delta events.
-- Tool event rendering.
-- Permission mode selection.
-- Skill editor validation.
+- 登录和 token 保存。
+- 会话列表渲染。
+- NDJSON 流解析。
+- `text_delta` 事件更新对话区。
+- 工具事件渲染。
+- 权限模式选择。
+- skill 编辑器校验。
 
-Manual verification:
+手动验收流程：
 
-- Start MySQL.
-- Start backend.
-- Start Vue dev server.
-- Register/login.
-- Create a session.
-- Send a message and observe streaming output.
-- Check session isolation with a second account.
-- Create and edit a skill.
-- View memory panel.
-- Switch permission mode.
+1. 启动 MySQL。
+2. 启动后端。
+3. 启动 Vue dev server。
+4. 注册并登录。
+5. 创建会话。
+6. 发送消息，确认浏览器中实时流式输出。
+7. 用第二个账号验证会话隔离。
+8. 创建和编辑 skill。
+9. 查看记忆面板。
+10. 切换权限模式。
 
-## Development Commands
+## 开发命令
 
-Backend:
+后端：
 
 ```bash
 cd backend
 mvn spring-boot:run
 ```
 
-Frontend:
+前端：
 
 ```bash
 cd frontend
@@ -542,40 +613,40 @@ npm install
 npm run dev
 ```
 
-URLs:
+访问地址：
 
 ```text
 Frontend: http://localhost:5173
 Backend:  http://localhost:8080
 ```
 
-## Implementation Order
+## 实现顺序
 
-1. Scaffold backend Maven project.
-2. Add Spring Boot, MySQL, MyBatis-Plus, Spring Security, JWT, and AgentScope Harness dependencies.
-3. Implement database schema and auth.
-4. Implement session metadata APIs.
-5. Wire AgentScope Java model and HarnessAgent.
-6. Implement streaming chat endpoint and event mapping.
-7. Scaffold Vue 3 frontend.
-8. Implement auth UI and route guards.
-9. Implement chat workspace and NDJSON stream parser.
-10. Implement skill management.
-11. Implement read-only memory view.
-12. Implement permission mode UI and backend endpoint.
-13. Add focused tests.
-14. Add README with setup instructions.
+1. 创建后端 Maven 项目。
+2. 添加 Spring Boot、MySQL、MyBatis-Plus、Spring Security、JWT、AgentScope Harness 依赖。
+3. 实现数据库 schema 和登录认证。
+4. 实现会话元数据接口。
+5. 接入 AgentScope Java 模型和 `HarnessAgent`。
+6. 实现流式聊天接口和事件映射。
+7. 创建 Vue 3 前端项目。
+8. 实现登录 UI 和路由守卫。
+9. 实现聊天工作台和 NDJSON 流解析。
+10. 实现 skill 管理。
+11. 实现记忆只读查看。
+12. 实现权限模式 UI 和后端接口。
+13. 增加核心测试。
+14. 编写 README 启动说明。
 
-## Acceptance Criteria
+## 验收标准
 
-- A user can register and log in.
-- A logged-in user sees only their sessions.
-- A logged-in user can create a session and chat with the assistant.
-- Assistant responses stream into the browser UI.
-- The default model is DashScope `qwen-plus`.
-- OpenAI-compatible model settings can be configured.
-- Basic tool events render in the UI.
-- Skill files can be created, viewed, edited, and deleted per user.
-- Long-term memory can be viewed per user.
-- Permission mode can be viewed and changed per session.
-- Missing API keys and unauthorized access produce clear errors.
+- 用户可以注册和登录。
+- 登录用户只能看到自己的会话。
+- 登录用户可以创建会话并与助手对话。
+- 助手回复可以实时流式显示在浏览器 UI。
+- 默认模型为 DashScope `qwen-plus`。
+- 可以通过配置切换到 OpenAI-compatible 模型。
+- 基础工具调用事件可以在 UI 中展示。
+- skill 文件可以按用户创建、查看、编辑、删除。
+- 长期记忆可以按用户只读查看。
+- 权限模式可以按会话查看和切换。
+- 缺少 API key、未登录、越权访问时都有清晰错误。
