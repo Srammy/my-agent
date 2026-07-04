@@ -330,6 +330,7 @@ public class SkillService {
     if (!StringUtils.hasText(rawName)) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Skill name is required");
     }
+    rejectLineBreaks(rawName, "Skill name");
     String name = rawName.trim();
     if (name.length() > NAME_MAX_LENGTH) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Skill name is too long");
@@ -341,11 +342,19 @@ public class SkillService {
     if (!StringUtils.hasText(rawDescription)) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Skill description is required");
     }
+    rejectLineBreaks(rawDescription, "Skill description");
     String description = rawDescription.trim();
     if (description.length() > DESCRIPTION_MAX_LENGTH) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Skill description is too long");
     }
     return description;
+  }
+
+  private static void rejectLineBreaks(String value, String fieldName) {
+    if (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) {
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST, fieldName + " must not contain line breaks");
+    }
   }
 
   private static String buildSkillMarkdown(String name, String description, String body) {

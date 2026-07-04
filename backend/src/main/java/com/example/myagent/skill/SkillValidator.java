@@ -95,9 +95,33 @@ public final class SkillValidator {
   private static String stripQuotes(String value) {
     if ((value.startsWith("\"") && value.endsWith("\""))
         || (value.startsWith("'") && value.endsWith("'"))) {
-      return value.substring(1, value.length() - 1);
+      String quotedValue = value.substring(1, value.length() - 1);
+      if (value.startsWith("\"") && value.endsWith("\"")) {
+        return unescapeDoubleQuotedValue(quotedValue);
+      }
+      return quotedValue;
     }
     return value;
+  }
+
+  private static String unescapeDoubleQuotedValue(String value) {
+    StringBuilder builder = new StringBuilder(value.length());
+    boolean escaping = false;
+    for (int index = 0; index < value.length(); index++) {
+      char current = value.charAt(index);
+      if (escaping) {
+        builder.append(current);
+        escaping = false;
+      } else if (current == '\\') {
+        escaping = true;
+      } else {
+        builder.append(current);
+      }
+    }
+    if (escaping) {
+      builder.append('\\');
+    }
+    return builder.toString();
   }
 
   private static ResponseStatusException badRequest(String reason) {

@@ -50,6 +50,21 @@ class SkillValidatorTest {
   }
 
   @Test
+  void validateSkillMarkdownUnescapesQuotedValuesWrittenByTheService() {
+    SkillValidator.SkillMarkdownMetadata metadata =
+        SkillValidator.validateSkillMarkdown(
+            """
+            ---
+            name: "mysql \\"helper\\" \\\\ core"
+            description: "Useful \\\\ helper \\"skill\\""
+            ---
+            """);
+
+    assertThat(metadata.name()).isEqualTo("mysql \"helper\" \\ core");
+    assertThat(metadata.description()).isEqualTo("Useful \\ helper \"skill\"");
+  }
+
+  @Test
   void validateSkillMarkdownRejectsMissingName() {
     assertBadRequestForMarkdown(
         """

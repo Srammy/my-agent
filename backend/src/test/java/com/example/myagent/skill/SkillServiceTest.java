@@ -73,6 +73,81 @@ class SkillServiceTest {
   }
 
   @Test
+  void createAndUpdateSkillMarkdownRoundTripsEscapedMetadata() {
+    when(skillMapper.selectCount(any())).thenReturn(0L);
+    when(skillMapper.insert(any(SkillEntity.class)))
+        .thenAnswer(
+            invocation -> {
+              SkillEntity entity = invocation.getArgument(0);
+              entity.setId(42L);
+              return 1;
+            });
+    when(skillFileMapper.insert(any(SkillFileEntity.class))).thenReturn(1);
+
+    String name = "mysql \"helper\" \\ core";
+    String description = "Useful \\ helper \"skill\"";
+    skillService.createMySkill(USER, new SkillCreateRequest(name, description));
+
+    ArgumentCaptor<SkillFileEntity> fileCaptor = ArgumentCaptor.forClass(SkillFileEntity.class);
+    verify(skillFileMapper).insert(fileCaptor.capture());
+    String markdown = fileCaptor.getValue().getContent();
+    SkillValidator.SkillMarkdownMetadata metadata = SkillValidator.validateSkillMarkdown(markdown);
+    assertThat(metadata.name()).isEqualTo(name);
+    assertThat(metadata.description()).isEqualTo(description);
+
+    SkillEntity ownedSkill = new SkillEntity();
+    ownedSkill.setId(99L);
+    ownedSkill.setOwnerType(SkillService.OWNER_TYPE_USER);
+    ownedSkill.setOwnerUserId(USER.id());
+    ownedSkill.setName("old-name");
+    ownedSkill.setDescription("Old description");
+    ownedSkill.setEnabled(true);
+
+    SkillFileEntity existingFile = new SkillFileEntity();
+    existingFile.setSkillId(99L);
+    existingFile.setPath("SKILL.md");
+    existingFile.setContent("legacy");
+    existingFile.setContentType("text/markdown");
+    existingFile.setExecutable(false);
+
+    when(skillMapper.selectById(99L)).thenReturn(ownedSkill);
+    when(skillFileMapper.selectOne(any())).thenReturn(existingFile);
+    when(skillMapper.updateById(any(SkillEntity.class))).thenReturn(1);
+    when(skillFileMapper.updateById(any(SkillFileEntity.class))).thenReturn(1);
+
+    SkillFileDto updatedFile = skillService.upsertFile(USER, 99L, "SKILL.md", markdown);
+
+    ArgumentCaptor<SkillEntity> updateCaptor = ArgumentCaptor.forClass(SkillEntity.class);
+    verify(skillMapper).updateById(updateCaptor.capture());
+    SkillEntity updatedSkill = updateCaptor.getValue();
+    assertThat(updatedSkill.getName()).isEqualTo(name);
+    assertThat(updatedSkill.getDescription()).isEqualTo(description);
+    assertThat(updatedFile.content()).isEqualTo(markdown);
+  }
+
+  @Test
+  void createMySkillRejectsNewlineInName() {
+    assertThatThrownBy(
+            () -> skillService.createMySkill(USER, new SkillCreateRequest("bad\nname", "Useful")))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(
+            error ->
+                assertThat(((ResponseStatusException) error).getStatusCode())
+                    .isEqualTo(HttpStatus.BAD_REQUEST));
+  }
+
+  @Test
+  void createMySkillRejectsNewlineInDescription() {
+    assertThatThrownBy(
+            () -> skillService.createMySkill(USER, new SkillCreateRequest("mysql-helper", "bad\r\ndesc")))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(
+            error ->
+                assertThat(((ResponseStatusException) error).getStatusCode())
+                    .isEqualTo(HttpStatus.BAD_REQUEST));
+  }
+
+  @Test
   void listSystemSkillsAppliesCurrentUsersEnablementOverride() {
     SkillEntity systemSkill = new SkillEntity();
     systemSkill.setId(10L);
