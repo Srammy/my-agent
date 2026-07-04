@@ -31,6 +31,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: docker
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      AGENT_MODEL_PROVIDER: ${AGENT_MODEL_PROVIDER:-dashscope}
+      AGENT_MODEL_NAME: ${AGENT_MODEL_NAME:-qwen-plus}
       MYSQL_HOST: ${MYSQL_HOST:-mysql}
       REDIS_HOST: ${REDIS_HOST:-redis}
     depends_on:

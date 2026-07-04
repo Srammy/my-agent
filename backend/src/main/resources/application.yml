@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: myagent
+
+server:
+  port: 8080
+
+agent:
+  model:
+    provider: ${AGENT_MODEL_PROVIDER:dashscope}
+    name: ${AGENT_MODEL_NAME:qwen-plus}
+
+dashscope:
+  api-key: ${DASHSCOPE_API_KEY:}
