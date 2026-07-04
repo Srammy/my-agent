@@ -71,4 +71,12 @@ class AgentEventMapperTest {
     assertThat(event.type()).isEqualTo("done");
     assertThat(event.payload()).isEmpty();
   }
+
+  @Test
+  void mapsThrowableEventsToError() {
+    StreamEventDto event = mapper.map(new IllegalStateException("sdk exploded"));
+
+    assertThat(event.type()).isEqualTo("error");
+    assertThat(event.payload()).containsEntry("message", "sdk exploded");
+  }
 }

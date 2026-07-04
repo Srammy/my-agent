@@ -6,6 +6,8 @@ import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.harness.agent.HarnessAgent;
+import java.util.Locale;
+import java.util.function.Function;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -13,10 +15,20 @@ import org.springframework.core.env.Environment;
 @Configuration
 public class AgentScopeConfig {
 
+  private final Function<String, String> environmentVariableResolver;
+
+  public AgentScopeConfig() {
+    this(System::getenv);
+  }
+
+  AgentScopeConfig(Function<String, String> environmentVariableResolver) {
+    this.environmentVariableResolver = environmentVariableResolver;
+  }
+
   @Bean
   Model agentScopeModel(AgentProperties agentProperties, Environment environment) {
     AgentProperties.Model modelProperties = agentProperties.model();
-    String apiKey = resolveRequiredSecret(modelProperties.apiKeyEnv(), environment);
+    String apiKey = resolveRequiredSecret(modelProperties.apiKeyEnv());
 
     return switch (modelProperties.provider()) {
       case "dashscope" -> buildDashScopeModel(modelProperties, apiKey);
@@ -64,7 +76,10 @@ public class AgentScopeConfig {
 
   private Model buildDashScopeModel(AgentProperties.Model modelProperties, String apiKey) {
     DashScopeChatModel.Builder builder =
-        DashScopeChatModel.builder().apiKey(apiKey).modelName(modelProperties.name()).stream(true);
+        DashScopeChatModel.builder()
+            .apiKey(apiKey)
+            .modelName(resolveDashScopeModelName(modelProperties))
+            .stream(true);
     if (!modelProperties.baseUrl().isBlank()) {
       builder.baseUrl(modelProperties.baseUrl());
     }
@@ -84,17 +99,21 @@ public class AgentScopeConfig {
         .build();
   }
 
-  private String resolveRequiredSecret(String secretEnvName, Environment environment) {
-    String environmentValue = System.getenv(secretEnvName);
+  private String resolveRequiredSecret(String secretEnvName) {
+    String environmentValue = environmentVariableResolver.apply(secretEnvName);
     if (environmentValue != null && !environmentValue.isBlank()) {
       return environmentValue;
     }
 
-    String propertyValue = environment.getProperty(secretEnvName);
-    if (propertyValue != null && !propertyValue.isBlank()) {
-      return propertyValue;
-    }
-
     throw new IllegalStateException("Missing required API key in environment variable: " + secretEnvName);
+  }
+
+  private String resolveDashScopeModelName(AgentProperties.Model modelProperties) {
+    String configuredName = modelProperties.name();
+    String providerPrefix = modelProperties.provider().toLowerCase(Locale.ROOT) + ":";
+    if (configuredName.toLowerCase(Locale.ROOT).startsWith(providerPrefix)) {
+      return configuredName;
+    }
+    return modelProperties.provider() + ":" + configuredName;
   }
 }

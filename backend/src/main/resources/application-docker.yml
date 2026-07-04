@@ -18,7 +18,7 @@ agent:
     mode: distributed
   model:
     provider: ${AGENT_MODEL_PROVIDER:dashscope}
-    name: ${AGENT_MODEL_NAME:qwen-plus}
+    name: ${AGENT_MODEL_NAME:dashscope:qwen-plus}
     base-url: ${AGENT_MODEL_BASE_URL:}
     api-key-env: ${AGENT_MODEL_API_KEY_ENV:DASHSCOPE_API_KEY}
   state-store:

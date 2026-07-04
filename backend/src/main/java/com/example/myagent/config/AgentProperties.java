@@ -18,7 +18,7 @@ public record AgentProperties(
 
   public record Model(
       @DefaultValue("dashscope") String provider,
-      @DefaultValue("qwen-plus") String name,
+      @DefaultValue("dashscope:qwen-plus") String name,
       @DefaultValue("") String baseUrl,
       @DefaultValue("DASHSCOPE_API_KEY") String apiKeyEnv) {}
 

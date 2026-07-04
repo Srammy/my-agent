@@ -26,11 +26,11 @@ class AgentScopeConfigTest {
             new AgentProperties.Tools(false, false, false, false));
 
     Model model =
-        config.agentScopeModel(
-            properties, new MockEnvironment().withProperty("DASHSCOPE_API_KEY", "dashscope-test-key"));
+        new AgentScopeConfig(name -> "DASHSCOPE_API_KEY".equals(name) ? "dashscope-test-key" : null)
+            .agentScopeModel(properties, new MockEnvironment());
 
     assertThat(model).isInstanceOf(DashScopeChatModel.class);
-    assertThat(model.getModelName()).isEqualTo("qwen-plus");
+    assertThat(model.getModelName()).isEqualTo("dashscope:qwen-plus");
   }
 
   @Test
@@ -50,8 +50,8 @@ class AgentScopeConfigTest {
             new AgentProperties.Tools(false, false, false, false));
 
     Model model =
-        config.agentScopeModel(
-            properties, new MockEnvironment().withProperty("OPENAI_API_KEY", "openai-test-key"));
+        new AgentScopeConfig(name -> "OPENAI_API_KEY".equals(name) ? "openai-test-key" : null)
+            .agentScopeModel(properties, new MockEnvironment());
 
     assertThat(model).isInstanceOf(OpenAIChatModel.class);
     assertThat(model.getModelName()).isEqualTo("gpt-4.1-mini");
@@ -70,6 +70,28 @@ class AgentScopeConfigTest {
             new AgentProperties.Tools(false, false, false, false));
 
     assertThatThrownBy(() -> config.agentScopeModel(properties, new MockEnvironment()))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("DASHSCOPE_API_KEY");
+  }
+
+  @Test
+  void rejectsApiKeyProvidedOnlyAsSpringProperty() {
+    AgentProperties properties =
+        new AgentProperties(
+            new AgentProperties.Deployment("local"),
+            new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
+            new AgentProperties.StateStore(
+                "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
+            new AgentProperties.Skill("mysql", "./.agentscope/cache/skills"),
+            new AgentProperties.Permission("DEFAULT"),
+            new AgentProperties.Tools(false, false, false, false));
+
+    assertThatThrownBy(
+            () ->
+                new AgentScopeConfig(name -> null)
+                    .agentScopeModel(
+                        properties,
+                        new MockEnvironment().withProperty("DASHSCOPE_API_KEY", "property-only-key")))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("DASHSCOPE_API_KEY");
   }

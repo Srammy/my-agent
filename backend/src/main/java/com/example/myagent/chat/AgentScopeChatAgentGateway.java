@@ -32,7 +32,13 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
         .flatMap(
             agentEvent -> {
               StreamEventDto mapped = agentEventMapper.map(agentEvent);
-              return mapped == null ? Flux.empty() : Flux.just(mapped);
+              if (mapped != null) {
+                return Flux.just(mapped);
+              }
+              if (agentEvent instanceof Throwable throwable) {
+                return Flux.just(StreamEventDto.error(errorMessage(throwable)));
+              }
+              return Flux.empty();
             })
         .onErrorResume(
             throwable -> Flux.just(StreamEventDto.error(errorMessage(throwable))));

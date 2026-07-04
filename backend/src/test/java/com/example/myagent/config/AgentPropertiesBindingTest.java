@@ -38,7 +38,7 @@ class AgentPropertiesBindingTest {
           AgentProperties agentProperties = context.getBean(AgentProperties.class);
           assertThat(agentProperties.deployment().mode()).isEqualTo("local");
           assertThat(agentProperties.model().provider()).isEqualTo("dashscope");
-          assertThat(agentProperties.model().name()).isEqualTo("qwen-plus");
+          assertThat(agentProperties.model().name()).isEqualTo("dashscope:qwen-plus");
           assertThat(agentProperties.model().apiKeyEnv()).isEqualTo("DASHSCOPE_API_KEY");
           assertThat(agentProperties.stateStore().type()).isEqualTo("redis");
           assertThat(agentProperties.stateStore().redis().uri())

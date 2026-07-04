@@ -62,4 +62,19 @@ class AgentScopeChatAgentGatewayTest {
       assertThat(event.payload()).containsEntry("message", "boom");
     });
   }
+
+  @Test
+  void convertsSdkThrowableEventsToProtocolErrorEventInsteadOfDroppingThem() {
+    when(executor.stream(eq("hello"), any()))
+        .thenReturn(Flux.just(new IllegalArgumentException("sdk error event")));
+
+    AgentScopeChatAgentGateway gateway = new AgentScopeChatAgentGateway(executor, new AgentEventMapper());
+
+    var events = gateway.stream(new ChatAgentRequest(7L, "s_123", "hello")).collectList().block();
+
+    assertThat(events).singleElement().satisfies(event -> {
+      assertThat(event.type()).isEqualTo("error");
+      assertThat(event.payload()).containsEntry("message", "sdk error event");
+    });
+  }
 }

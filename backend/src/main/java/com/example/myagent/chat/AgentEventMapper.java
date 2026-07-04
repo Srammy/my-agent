@@ -20,6 +20,9 @@ public class AgentEventMapper {
     if (agentEvent instanceof AgentStartEvent) {
       return StreamEventDto.replyStart();
     }
+    if (agentEvent instanceof Throwable throwable) {
+      return StreamEventDto.error(errorMessage(throwable));
+    }
     if (agentEvent instanceof TextBlockDeltaEvent textBlockDeltaEvent) {
       return StreamEventDto.textDelta(textBlockDeltaEvent.getDelta());
     }
@@ -41,6 +44,12 @@ public class AgentEventMapper {
       return StreamEventDto.done();
     }
     return null;
+  }
+
+  private String errorMessage(Throwable throwable) {
+    return throwable.getMessage() == null || throwable.getMessage().isBlank()
+        ? throwable.getClass().getSimpleName()
+        : throwable.getMessage();
   }
 
   private String firstToolName(List<ToolUseBlock> toolCalls) {
