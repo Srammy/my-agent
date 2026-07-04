@@ -170,6 +170,47 @@ class SkillServiceTest {
   }
 
   @Test
+  void listEnabledSkillsForUserLetsUserSkillOverrideSystemSkillWithSameName() {
+    SkillEntity systemSkill = new SkillEntity();
+    systemSkill.setId(10L);
+    systemSkill.setOwnerType(SkillService.OWNER_TYPE_SYSTEM);
+    systemSkill.setName("shared");
+    systemSkill.setDescription("System shared");
+    systemSkill.setEnabled(true);
+    systemSkill.setUpdatedAt(java.time.LocalDateTime.of(2026, 7, 4, 9, 0));
+
+    SkillEntity userSkill = new SkillEntity();
+    userSkill.setId(11L);
+    userSkill.setOwnerType(SkillService.OWNER_TYPE_USER);
+    userSkill.setOwnerUserId(USER.id());
+    userSkill.setName("shared");
+    userSkill.setDescription("User shared");
+    userSkill.setEnabled(true);
+    userSkill.setUpdatedAt(java.time.LocalDateTime.of(2026, 7, 4, 10, 0));
+
+    SkillFileEntity userSkillMarkdown = new SkillFileEntity();
+    userSkillMarkdown.setSkillId(11L);
+    userSkillMarkdown.setPath("SKILL.md");
+    userSkillMarkdown.setContent("user markdown");
+
+    when(skillMapper.selectList(any())).thenReturn(List.of(systemSkill), List.of(userSkill));
+    when(userSkillSettingMapper.selectList(any())).thenReturn(List.of());
+    when(skillFileMapper.selectList(any())).thenReturn(List.of(userSkillMarkdown));
+
+    List<SkillService.MaterializedSkill> skills = skillService.listEnabledSkillsForUser(USER.id());
+
+    assertThat(skills)
+        .singleElement()
+        .satisfies(
+            skill -> {
+              assertThat(skill.skillId()).isEqualTo(11L);
+              assertThat(skill.name()).isEqualTo("shared");
+              assertThat(skill.ownerType()).isEqualTo(SkillService.OWNER_TYPE_USER);
+              assertThat(skill.files()).extracting(SkillFileEntity::getPath).containsExactly("SKILL.md");
+            });
+  }
+
+  @Test
   void upsertSkillMarkdownUpdatesSkillMetadataForOwnedSkill() {
     SkillEntity ownedSkill = new SkillEntity();
     ownedSkill.setId(42L);

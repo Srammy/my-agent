@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.example.myagent.auth.CurrentUser;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -54,6 +56,46 @@ public class SkillService {
   public List<SkillDto> listMySkills(CurrentUser currentUser) {
     return skillMapper.selectList(userSkillsQuery(currentUser.id())).stream()
         .map(skill -> toDto(skill, Boolean.TRUE.equals(skill.getEnabled()), true))
+        .toList();
+  }
+
+  List<MaterializedSkill> listEnabledSkillsForUser(Long userId) {
+    List<SkillEntity> systemSkills =
+        skillMapper.selectList(
+            Wrappers.<SkillEntity>lambdaQuery()
+                .eq(SkillEntity::getOwnerType, OWNER_TYPE_SYSTEM)
+                .eq(SkillEntity::getEnabled, true)
+                .orderByAsc(SkillEntity::getName));
+    List<SkillEntity> userSkills =
+        skillMapper.selectList(
+            Wrappers.<SkillEntity>lambdaQuery()
+                .eq(SkillEntity::getOwnerType, OWNER_TYPE_USER)
+                .eq(SkillEntity::getOwnerUserId, userId)
+                .eq(SkillEntity::getEnabled, true)
+                .orderByAsc(SkillEntity::getName));
+
+    Map<Long, UserSkillSettingEntity> settingsBySkillId = loadSettingsBySkillId(userId, systemSkills);
+    Map<String, SkillEntity> mergedByName = new LinkedHashMap<>();
+    systemSkills.stream()
+        .filter(skill -> isSystemSkillEnabled(skill, settingsBySkillId.get(skill.getId())))
+        .forEach(skill -> mergedByName.put(skill.getName(), skill));
+    userSkills.forEach(skill -> mergedByName.put(skill.getName(), skill));
+
+    List<SkillEntity> mergedSkills = new ArrayList<>(mergedByName.values());
+    if (mergedSkills.isEmpty()) {
+      return List.of();
+    }
+
+    Map<Long, List<SkillFileEntity>> filesBySkillId = loadFilesBySkillId(mergedSkills);
+    return mergedSkills.stream()
+        .map(
+            skill ->
+                new MaterializedSkill(
+                    skill.getId(),
+                    skill.getName(),
+                    skill.getOwnerType(),
+                    skill.getUpdatedAt(),
+                    filesBySkillId.getOrDefault(skill.getId(), List.of())))
         .toList();
   }
 
@@ -230,6 +272,11 @@ public class SkillService {
 
   private Map<Long, UserSkillSettingEntity> loadSettingsBySkillId(
       CurrentUser currentUser, List<SkillEntity> skills) {
+    return loadSettingsBySkillId(currentUser.id(), skills);
+  }
+
+  private Map<Long, UserSkillSettingEntity> loadSettingsBySkillId(
+      Long userId, List<SkillEntity> skills) {
     Map<Long, UserSkillSettingEntity> settingsBySkillId = new HashMap<>();
     if (skills.isEmpty()) {
       return settingsBySkillId;
@@ -238,10 +285,23 @@ public class SkillService {
     userSkillSettingMapper
         .selectList(
             Wrappers.<UserSkillSettingEntity>lambdaQuery()
-                .eq(UserSkillSettingEntity::getUserId, currentUser.id())
+                .eq(UserSkillSettingEntity::getUserId, userId)
                 .in(UserSkillSettingEntity::getSkillId, skillIds))
         .forEach(setting -> settingsBySkillId.put(setting.getSkillId(), setting));
     return settingsBySkillId;
+  }
+
+  private Map<Long, List<SkillFileEntity>> loadFilesBySkillId(List<SkillEntity> skills) {
+    List<Long> skillIds = skills.stream().map(SkillEntity::getId).toList();
+    Map<Long, List<SkillFileEntity>> filesBySkillId = new HashMap<>();
+    skillFileMapper
+        .selectList(
+            Wrappers.<SkillFileEntity>lambdaQuery()
+                .in(SkillFileEntity::getSkillId, skillIds)
+                .orderByAsc(SkillFileEntity::getSkillId, SkillFileEntity::getPath))
+        .forEach(
+            file -> filesBySkillId.computeIfAbsent(file.getSkillId(), ignored -> new ArrayList<>()).add(file));
+    return filesBySkillId;
   }
 
   private boolean isSystemSkillEnabled(SkillEntity skill, UserSkillSettingEntity setting) {
@@ -402,4 +462,7 @@ public class SkillService {
   private static String quoteYaml(String value) {
     return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
   }
+
+  record MaterializedSkill(
+      Long skillId, String name, String ownerType, LocalDateTime updatedAt, List<SkillFileEntity> files) {}
 }
