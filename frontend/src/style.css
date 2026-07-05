@@ -143,7 +143,7 @@ textarea {
 .chat-workspace {
   display: grid;
   flex: 1;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr) 360px;
   min-height: 0;
 }
 
@@ -253,6 +253,185 @@ textarea {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+}
+
+.assistant-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid #dbe3ee;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.assistant-tabs {
+  min-width: 0;
+}
+
+.assistant-tabs .el-tabs__content,
+.assistant-inner-tabs .el-tabs__content {
+  min-width: 0;
+}
+
+.assistant-panel-section {
+  min-width: 0;
+}
+
+.panel-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.panel-row strong,
+.panel-block strong,
+.skill-item strong,
+.proposal-item strong {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.panel-row p,
+.panel-block p,
+.skill-item p,
+.proposal-item p,
+.model-info p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.panel-control {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.panel-block {
+  margin-bottom: 18px;
+}
+
+.panel-pre {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid #e5eaf1;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
+.panel-muted {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.panel-error {
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.panel-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.model-info {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.memory-date-list,
+.proposal-actions,
+.skill-actions,
+.skill-file-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.memory-date-item,
+.skill-file-item,
+.skill-list-item {
+  min-width: 0;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.memory-date-item:hover,
+.skill-file-item:hover,
+.skill-file-item--active,
+.skill-list-item:hover,
+.skill-list-item--active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.proposal-item,
+.skill-item {
+  min-width: 0;
+  border-bottom: 1px solid #e5eaf1;
+  padding: 12px 0;
+}
+
+.skill-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.skill-layout,
+.skill-files {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.skill-list,
+.skill-file-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skill-list-item,
+.skill-file-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-editor,
+.skill-file-editor {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skill-files {
+  border-top: 1px solid #e5eaf1;
+  padding-top: 12px;
 }
 
 .chat-error {
@@ -437,6 +616,17 @@ textarea {
     border-bottom: 1px solid #dbe3ee;
   }
 
+  .assistant-panel {
+    max-height: 520px;
+    border-left: 0;
+    border-top: 1px solid #dbe3ee;
+  }
+
+  .skill-layout,
+  .skill-files {
+    grid-template-columns: 1fr;
+  }
+
   .chat-transcript {
     padding: 18px 14px;
   }
@@ -452,5 +642,18 @@ textarea {
 
   .composer__send {
     width: 100%;
+  }
+}
+
+@media (min-width: 521px) and (max-width: 1180px) {
+  .chat-workspace {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .assistant-panel {
+    grid-column: 1 / -1;
+    max-height: 420px;
+    border-left: 0;
+    border-top: 1px solid #dbe3ee;
   }
 }

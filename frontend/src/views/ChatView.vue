@@ -3,7 +3,12 @@ import { computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ChatTranscript from '../components/ChatTranscript.vue'
 import Composer from '../components/Composer.vue'
+import EvolutionPanel from '../components/EvolutionPanel.vue'
+import MemoryPanel from '../components/MemoryPanel.vue'
+import ModelInfoPanel from '../components/ModelInfoPanel.vue'
+import PermissionPanel from '../components/PermissionPanel.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
+import SkillPanel from '../components/SkillPanel.vue'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
 import { useSessionsStore } from '../stores/sessions'
@@ -106,6 +111,26 @@ async function logout() {
           @send="sendMessage"
         />
       </div>
+
+      <aside class="assistant-panel">
+        <el-tabs class="assistant-tabs" stretch>
+          <el-tab-pane label="Model">
+            <ModelInfoPanel />
+          </el-tab-pane>
+          <el-tab-pane label="Permission">
+            <PermissionPanel :session-id="currentSessionId" />
+          </el-tab-pane>
+          <el-tab-pane label="Skill">
+            <SkillPanel />
+          </el-tab-pane>
+          <el-tab-pane label="Memory">
+            <MemoryPanel />
+          </el-tab-pane>
+          <el-tab-pane label="Evolution">
+            <EvolutionPanel />
+          </el-tab-pane>
+        </el-tabs>
+      </aside>
     </section>
   </main>
 </template>
