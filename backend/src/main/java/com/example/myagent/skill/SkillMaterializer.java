@@ -237,7 +237,10 @@ public class SkillMaterializer {
     if (".".equals(sanitized) || "..".equals(sanitized) || sanitized.isBlank()) {
       return fallbackDirectoryName(skill);
     }
-    if (!sanitized.equals(name) || isWindowsReservedName(sanitized)) {
+    if (isWindowsReservedName(sanitized)) {
+      return fallbackDirectoryName(skill);
+    }
+    if (!sanitized.equals(name)) {
       return sanitized + "--" + skill.skillId();
     }
     return sanitized;

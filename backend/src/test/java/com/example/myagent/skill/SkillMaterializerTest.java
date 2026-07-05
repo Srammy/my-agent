@@ -265,7 +265,36 @@ class SkillMaterializerTest {
             });
     assertThat(skillDirectories)
         .extracting(path -> path.getFileName().toString())
-        .contains("CON_--11", "LPT1--12");
+        .contains("CON_--11", "system-12");
+  }
+
+  @Test
+  void materializeForUserFallsBackForWindowsReservedBaseNamesWithExtensions() throws IOException {
+    Path cacheDir = tempDir.resolve("skill-cache");
+    SkillMaterializer materializer = new SkillMaterializer(skillService, properties(cacheDir));
+
+    when(skillService.listEnabledSkillsForUser(7L))
+        .thenReturn(
+            List.of(
+                snapshot(
+                    13L,
+                    "CON.txt",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 10, 0),
+                    file("SKILL.md", "---\nname: con\ndescription: user\n---\n")),
+                snapshot(
+                    14L,
+                    "LPT1.foo",
+                    SkillService.OWNER_TYPE_SYSTEM,
+                    LocalDateTime.of(2026, 7, 4, 10, 5),
+                    file("SKILL.md", "---\nname: lpt\ndescription: system\n---\n"))));
+
+    Path materializedRoot = materializer.materializeForUser(7L);
+
+    assertThat(materializedRoot.resolve("user-13/SKILL.md")).exists();
+    assertThat(materializedRoot.resolve("system-14/SKILL.md")).exists();
+    assertThat(materializedRoot.resolve("CON.txt--13")).doesNotExist();
+    assertThat(materializedRoot.resolve("LPT1.foo--14")).doesNotExist();
   }
 
   private static SkillService.MaterializedSkill snapshot(
