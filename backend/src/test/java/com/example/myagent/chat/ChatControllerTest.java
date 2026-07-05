@@ -6,6 +6,8 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
 import com.example.myagent.auth.CurrentUser;
+import com.example.myagent.permission.PermissionMode;
+import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.ChatSessionEntity;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.skill.SkillMaterializer;
@@ -37,6 +39,7 @@ class ChatControllerTest {
 
   @MockBean private SessionService sessionService;
   @MockBean private SkillMaterializer skillMaterializer;
+  @MockBean private PermissionService permissionService;
 
   @Test
   void postStreamRejectsUnknownFields() {
@@ -74,6 +77,7 @@ class ChatControllerTest {
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
     when(skillMaterializer.materializeForUser(USER.id()))
         .thenReturn(Path.of("/tmp/materialized-skills"));
+    when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
 
     authenticatedClient()
         .post()

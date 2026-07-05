@@ -2,11 +2,11 @@ package com.example.myagent.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.myagent.agent.AgentScopeStreamExecutor;
+import com.example.myagent.permission.PermissionMode;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEndEvent;
 import io.agentscope.core.event.AgentStartEvent;
@@ -23,12 +23,14 @@ class AgentScopeChatAgentGatewayTest {
 
   private static final String MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY =
       ChatAgentRequest.MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY;
+  private static final String PERMISSION_MODE_CONTEXT_KEY =
+      ChatAgentRequest.PERMISSION_MODE_CONTEXT_KEY;
 
   @Mock private AgentScopeStreamExecutor executor;
 
   @Test
   void mapsAgentScopeEventsAndBuildsRuntimeContextFromRequest() {
-    when(executor.stream(eq("hello"), any()))
+    when(executor.stream(any(ChatAgentRequest.class), any()))
         .thenReturn(
             Flux.just(
                 new AgentStartEvent("s_123", "reply-1", "assistant"),
@@ -39,7 +41,13 @@ class AgentScopeChatAgentGatewayTest {
 
     var events =
         gateway
-            .stream(new ChatAgentRequest(7L, "s_123", "hello", java.util.List.of("/tmp/skills/7")))
+            .stream(
+                new ChatAgentRequest(
+                    7L,
+                    "s_123",
+                    "hello",
+                    java.util.List.of("/tmp/skills/7"),
+                    PermissionMode.DEFAULT))
             .collectList()
             .block();
 
@@ -49,24 +57,35 @@ class AgentScopeChatAgentGatewayTest {
     assertThat(events.get(1).payload()).containsEntry("delta", "world");
 
     ArgumentCaptor<Object> runtimeContextCaptor = ArgumentCaptor.forClass(Object.class);
-    verify(executor).stream(eq("hello"), runtimeContextCaptor.capture());
+    ArgumentCaptor<ChatAgentRequest> requestCaptor = ArgumentCaptor.forClass(ChatAgentRequest.class);
+    verify(executor).stream(requestCaptor.capture(), runtimeContextCaptor.capture());
+    assertThat(requestCaptor.getValue().message()).isEqualTo("hello");
     assertThat(runtimeContextCaptor.getValue()).isInstanceOf(RuntimeContext.class);
     RuntimeContext runtimeContext = (RuntimeContext) runtimeContextCaptor.getValue();
     assertThat(runtimeContext.getUserId()).isEqualTo("7");
     assertThat(runtimeContext.getSessionId()).isEqualTo("s_123");
     assertThat(runtimeContext.get(MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY, java.util.List.class))
         .containsExactly("/tmp/skills/7");
+    assertThat(runtimeContext.get(PERMISSION_MODE_CONTEXT_KEY, String.class))
+        .isEqualTo(PermissionMode.DEFAULT.name());
   }
 
   @Test
   void convertsAgentFailuresToProtocolErrorEvent() {
-    when(executor.stream(eq("hello"), any())).thenReturn(Flux.error(new IllegalStateException("boom")));
+    when(executor.stream(any(ChatAgentRequest.class), any()))
+        .thenReturn(Flux.error(new IllegalStateException("boom")));
 
     AgentScopeChatAgentGateway gateway = new AgentScopeChatAgentGateway(executor, new AgentEventMapper());
 
     var events =
         gateway
-            .stream(new ChatAgentRequest(7L, "s_123", "hello", java.util.List.of("/tmp/skills/7")))
+            .stream(
+                new ChatAgentRequest(
+                    7L,
+                    "s_123",
+                    "hello",
+                    java.util.List.of("/tmp/skills/7"),
+                    PermissionMode.BYPASS))
             .collectList()
             .block();
 
@@ -78,14 +97,20 @@ class AgentScopeChatAgentGatewayTest {
 
   @Test
   void convertsSdkThrowableEventsToProtocolErrorEventInsteadOfDroppingThem() {
-    when(executor.stream(eq("hello"), any()))
+    when(executor.stream(any(ChatAgentRequest.class), any()))
         .thenReturn(Flux.just(new IllegalArgumentException("sdk error event")));
 
     AgentScopeChatAgentGateway gateway = new AgentScopeChatAgentGateway(executor, new AgentEventMapper());
 
     var events =
         gateway
-            .stream(new ChatAgentRequest(7L, "s_123", "hello", java.util.List.of("/tmp/skills/7")))
+            .stream(
+                new ChatAgentRequest(
+                    7L,
+                    "s_123",
+                    "hello",
+                    java.util.List.of("/tmp/skills/7"),
+                    PermissionMode.EXPLORE))
             .collectList()
             .block();
 

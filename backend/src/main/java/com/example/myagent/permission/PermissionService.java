@@ -17,11 +17,15 @@ public class PermissionService {
 
   public PermissionModeDto getMode(CurrentUser currentUser, String sessionId) {
     sessionService.requireOwnedSession(currentUser, sessionId);
+    return new PermissionModeDto(getModeForOwnedSession(sessionId));
+  }
+
+  public PermissionMode getModeForOwnedSession(String sessionId) {
     PermissionModeEntity entity = permissionModeMapper.findBySessionId(sessionId);
     if (entity == null) {
-      return new PermissionModeDto(PermissionMode.DEFAULT);
+      return PermissionMode.DEFAULT;
     }
-    return new PermissionModeDto(PermissionMode.valueOf(entity.getMode()));
+    return PermissionMode.valueOf(entity.getMode());
   }
 
   public PermissionModeDto setMode(CurrentUser currentUser, String sessionId, PermissionModeDto mode) {

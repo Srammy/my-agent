@@ -5,15 +5,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.myagent.chat.AgentEventMapper;
 import com.example.myagent.chat.AgentScopeChatAgentGateway;
+import com.example.myagent.chat.ChatAgentRequest;
 import com.example.myagent.chat.ChatAgentGateway;
 import com.example.myagent.chat.StubChatAgentGateway;
+import com.example.myagent.permission.PermissionMode;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
+import io.agentscope.core.permission.PermissionContextState;
+import io.agentscope.core.skill.repository.FileSystemSkillRepository;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.tools.ToolsConfig;
+import java.nio.file.Path;
 import java.lang.reflect.Field;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -23,6 +29,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.mock.env.MockEnvironment;
 
 class AgentScopeConfigTest {
+
+  @TempDir Path tempDir;
 
   private final AgentScopeConfig config = new AgentScopeConfig();
   private final ApplicationContextRunner contextRunner =
@@ -186,6 +194,28 @@ class AgentScopeConfigTest {
   }
 
   @Test
+  void requestScopeAddsMaterializedSkillsAndPermissionContextToHarnessBuilder()
+      throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+    ChatAgentRequest request =
+        new ChatAgentRequest(
+            7L,
+            "s_123",
+            "hello",
+            java.util.List.of(tempDir.toString()),
+            PermissionMode.ACCEPT_EDITS);
+
+    config.applyRequestScope(builder, request);
+
+    assertThat((java.util.List<?>) objectField(builder, "skillRepositories"))
+        .singleElement()
+        .isInstanceOf(FileSystemSkillRepository.class);
+    PermissionContextState permissionContext = config.permissionContext(request);
+    assertThat(permissionContext.getMode())
+        .isEqualTo(io.agentscope.core.permission.PermissionMode.ACCEPT_EDITS);
+  }
+
+  @Test
   void contextUsesStubGatewayWhenAgentScopeDisabledWithoutApiKey() {
     contextRunner.run(
         context -> {
@@ -229,15 +259,29 @@ class AgentScopeConfigTest {
   }
 
   private boolean booleanField(Object target, String fieldName) throws Exception {
-    Field field = target.getClass().getDeclaredField(fieldName);
-    field.setAccessible(true);
-    return field.getBoolean(target);
+    return field(target, fieldName).getBoolean(target);
   }
 
   private ToolsConfig toolsConfig(HarnessAgent.Builder builder) throws Exception {
-    Field field = builder.getClass().getDeclaredField("toolsConfigOverride");
-    field.setAccessible(true);
-    return (ToolsConfig) field.get(builder);
+    return (ToolsConfig) objectField(builder, "toolsConfigOverride");
+  }
+
+  private Object objectField(Object target, String fieldName) throws Exception {
+    return field(target, fieldName).get(target);
+  }
+
+  private Field field(Object target, String fieldName) throws Exception {
+    Class<?> type = target.getClass();
+    while (type != null) {
+      try {
+        Field field = type.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return field;
+      } catch (NoSuchFieldException exception) {
+        type = type.getSuperclass();
+      }
+    }
+    throw new NoSuchFieldException(fieldName);
   }
 
   @Configuration(proxyBeanMethods = false)

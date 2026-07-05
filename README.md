@@ -28,6 +28,7 @@ Important variables:
 - `AGENT_MODEL_NAME`: defaults to `dashscope:qwen-plus`.
 - `AGENT_MODEL_BASE_URL`: optional base URL for OpenAI-compatible providers.
 - `AGENT_MODEL_API_KEY_ENV`: name of the environment variable that contains the model API key. Defaults to `DASHSCOPE_API_KEY`.
+- `VITE_API_PROXY_TARGET`: optional local Vite dev proxy target. Defaults to `http://localhost:8080`.
 
 ## Docker Startup
 
@@ -67,7 +68,7 @@ npm install
 npm run dev
 ```
 
-The development server defaults to `http://localhost:5173`. Run the backend separately on `http://localhost:8080` for API calls.
+The development server defaults to `http://localhost:5173`. Run the backend separately on `http://localhost:8080` for API calls. If your backend runs elsewhere, set `VITE_API_PROXY_TARGET` before `npm run dev`.
 
 ## MySQL and Redis
 

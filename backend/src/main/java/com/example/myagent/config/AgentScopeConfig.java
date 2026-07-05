@@ -1,19 +1,30 @@
 package com.example.myagent.config;
 
 import com.example.myagent.agent.AgentScopeStreamExecutor;
+import com.example.myagent.chat.ChatAgentRequest;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
+import io.agentscope.core.permission.PermissionContextState;
+import io.agentscope.core.permission.PermissionMode;
+import io.agentscope.core.skill.repository.FileSystemSkillRepository;
+import io.agentscope.core.state.AgentStateStore;
+import io.agentscope.core.state.JsonFileAgentStateStore;
+import io.agentscope.harness.agent.DistributedStore;
 import io.agentscope.harness.agent.HarnessAgent;
+import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
 import io.agentscope.harness.agent.tools.ToolsConfig;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 
 @Configuration
 public class AgentScopeConfig {
@@ -43,22 +54,23 @@ public class AgentScopeConfig {
     };
   }
 
-  @Bean(destroyMethod = "close")
-  @ConditionalOnProperty(prefix = "agent.agent-scope", name = "enabled", havingValue = "true")
-  HarnessAgent harnessAgent(Model agentScopeModel, AgentProperties agentProperties) {
-    HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
-    return configureHarnessAgentBuilder(builder, toolPolicy(agentProperties)).build();
-  }
-
   @Bean
   @ConditionalOnProperty(prefix = "agent.agent-scope", name = "enabled", havingValue = "true")
-  AgentScopeStreamExecutor agentScopeStreamExecutor(HarnessAgent harnessAgent) {
+  AgentScopeStreamExecutor agentScopeStreamExecutor(
+      Model agentScopeModel,
+      AgentProperties agentProperties,
+      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
     return new AgentScopeStreamExecutor() {
       @Override
-      public reactor.core.publisher.Flux<Object> stream(String message, Object runtimeContext) {
-        return harnessAgent
-            .streamEvents(message, (RuntimeContext) runtimeContext)
-            .cast(Object.class);
+      public reactor.core.publisher.Flux<Object> stream(
+          ChatAgentRequest request, Object runtimeContext) {
+        return reactor.core.publisher.Flux.using(
+            () -> buildHarnessAgent(agentScopeModel, agentProperties, redisTemplateProvider, request),
+            harnessAgent ->
+                harnessAgent
+                    .streamEvents(request.message(), (RuntimeContext) runtimeContext)
+                    .cast(Object.class),
+            HarnessAgent::close);
       }
     };
   }
@@ -88,6 +100,67 @@ public class AgentScopeConfig {
         .disableMemoryHooks()
         .disableSubagents()
         .disableDynamicSubagents();
+  }
+
+  HarnessAgent buildHarnessAgent(
+      Model agentScopeModel,
+      AgentProperties agentProperties,
+      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider,
+      ChatAgentRequest request) {
+    HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
+    configureHarnessAgentBuilder(builder, toolPolicy(agentProperties));
+    applyRequestScope(builder, request);
+    applyStateStore(builder, agentProperties, redisTemplateProvider);
+    return builder.build();
+  }
+
+  void applyRequestScope(HarnessAgent.Builder builder, ChatAgentRequest request) {
+    for (String skillRoot : request.materializedSkillRoots()) {
+      builder.skillRepository(new FileSystemSkillRepository(Path.of(skillRoot)));
+    }
+    builder.permissionContext(permissionContext(request));
+  }
+
+  PermissionContextState permissionContext(ChatAgentRequest request) {
+    return PermissionContextState.builder()
+        .mode(PermissionMode.valueOf(request.permissionMode().name()))
+        .build();
+  }
+
+  void applyStateStore(
+      HarnessAgent.Builder builder,
+      AgentProperties agentProperties,
+      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
+    AgentStateStore stateStore = buildAgentStateStore(agentProperties, redisTemplateProvider);
+    builder.stateStore(stateStore);
+    if ("distributed".equalsIgnoreCase(agentProperties.deployment().mode())) {
+      builder.distributedStore(
+          DistributedStore.builder()
+              .agentStateStore(stateStore)
+              .baseStore(buildBaseStore(agentProperties, redisTemplateProvider))
+              .build());
+    }
+  }
+
+  AgentStateStore buildAgentStateStore(
+      AgentProperties agentProperties,
+      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
+    ReactiveStringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
+    if ("redis".equalsIgnoreCase(agentProperties.stateStore().type()) && redisTemplate != null) {
+      return new RedisAgentStateStore(redisTemplate, agentProperties.stateStore().redis().keyPrefix());
+    }
+    return new JsonFileAgentStateStore(Path.of(".agentscope/state"));
+  }
+
+  BaseStore buildBaseStore(
+      AgentProperties agentProperties,
+      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
+    ReactiveStringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
+    if ("redis".equalsIgnoreCase(agentProperties.stateStore().type()) && redisTemplate != null) {
+      return new RedisBaseStore(
+          redisTemplate, agentProperties.stateStore().redis().keyPrefix() + "base:");
+    }
+    return new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
   }
 
   private Model buildDashScopeModel(AgentProperties.Model modelProperties, String apiKey) {

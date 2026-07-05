@@ -35,9 +35,10 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
           ChatAgentRequest.MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY,
           request.materializedSkillRoots());
     }
+    runtimeContext.put(ChatAgentRequest.PERMISSION_MODE_CONTEXT_KEY, request.permissionMode().name());
 
     return executor
-        .stream(request.message(), runtimeContext)
+        .stream(request, runtimeContext)
         .flatMap(
             agentEvent -> {
               StreamEventDto mapped = agentEventMapper.map(agentEvent);

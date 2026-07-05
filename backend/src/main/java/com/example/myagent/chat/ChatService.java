@@ -1,6 +1,7 @@
 package com.example.myagent.chat;
 
 import com.example.myagent.auth.CurrentUser;
+import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.skill.SkillMaterializer;
 import java.util.List;
@@ -15,14 +16,17 @@ public class ChatService {
   private final SessionService sessionService;
   private final ChatAgentGateway chatAgentGateway;
   private final SkillMaterializer skillMaterializer;
+  private final PermissionService permissionService;
 
   public ChatService(
       SessionService sessionService,
       ChatAgentGateway chatAgentGateway,
-      SkillMaterializer skillMaterializer) {
+      SkillMaterializer skillMaterializer,
+      PermissionService permissionService) {
     this.sessionService = sessionService;
     this.chatAgentGateway = chatAgentGateway;
     this.skillMaterializer = skillMaterializer;
+    this.permissionService = permissionService;
   }
 
   public Flux<StreamEventDto> stream(CurrentUser currentUser, String sessionId, String message) {
@@ -33,7 +37,8 @@ public class ChatService {
                   currentUser.id(),
                   sessionId,
                   message,
-                  List.of(skillMaterializer.materializeForUser(currentUser.id()).toString()));
+                  List.of(skillMaterializer.materializeForUser(currentUser.id()).toString()),
+                  permissionService.getModeForOwnedSession(sessionId));
             })
         .subscribeOn(Schedulers.boundedElastic())
         .flatMapMany(chatAgentGateway::stream);

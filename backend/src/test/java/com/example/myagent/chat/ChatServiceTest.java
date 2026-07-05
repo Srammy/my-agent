@@ -5,6 +5,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.myagent.auth.CurrentUser;
+import com.example.myagent.permission.PermissionMode;
+import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.ChatSessionEntity;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.skill.SkillMaterializer;
@@ -28,6 +30,7 @@ class ChatServiceTest {
   @Mock private SessionService sessionService;
   @Mock private ChatAgentGateway chatAgentGateway;
   @Mock private SkillMaterializer skillMaterializer;
+  @Mock private PermissionService permissionService;
 
   @Test
   void streamMaterializesCurrentUserSkillsBeforeCallingGateway() {
@@ -35,10 +38,12 @@ class ChatServiceTest {
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
     when(skillMaterializer.materializeForUser(USER.id()))
         .thenReturn(Path.of("/tmp/materialized-skills"));
+    when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.ACCEPT_EDITS);
     when(chatAgentGateway.stream(org.mockito.ArgumentMatchers.any()))
         .thenReturn(Flux.just(StreamEventDto.replyStart(), StreamEventDto.done()));
 
-    ChatService chatService = new ChatService(sessionService, chatAgentGateway, skillMaterializer);
+    ChatService chatService =
+        new ChatService(sessionService, chatAgentGateway, skillMaterializer, permissionService);
 
     List<StreamEventDto> events = chatService.stream(USER, "s_123", "hello").collectList().block();
 
@@ -46,9 +51,11 @@ class ChatServiceTest {
 
     ArgumentCaptor<ChatAgentRequest> requestCaptor = ArgumentCaptor.forClass(ChatAgentRequest.class);
     org.mockito.InOrder inOrder =
-        org.mockito.Mockito.inOrder(sessionService, skillMaterializer, chatAgentGateway);
+        org.mockito.Mockito.inOrder(
+            sessionService, skillMaterializer, permissionService, chatAgentGateway);
     inOrder.verify(sessionService).requireOwnedSession(USER, "s_123");
     inOrder.verify(skillMaterializer).materializeForUser(USER.id());
+    inOrder.verify(permissionService).getModeForOwnedSession("s_123");
     inOrder.verify(chatAgentGateway).stream(requestCaptor.capture());
     assertThat(requestCaptor.getValue())
         .isEqualTo(
@@ -56,6 +63,7 @@ class ChatServiceTest {
                 USER.id(),
                 "s_123",
                 "hello",
-                List.of(Path.of("/tmp/materialized-skills").toString())));
+                List.of(Path.of("/tmp/materialized-skills").toString()),
+                PermissionMode.ACCEPT_EDITS));
   }
 }
