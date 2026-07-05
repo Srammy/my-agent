@@ -2,3 +2,5 @@
 .superpowers/
 backend/target/
 .idea/
+frontend/dist/
+frontend/node_modules/
