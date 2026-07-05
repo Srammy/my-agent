@@ -60,13 +60,15 @@ class RedisAgentStateStore implements AgentStateStore {
 
   @Override
   public boolean exists(String agentId, String sessionId) {
-    List<String> keys = redisTemplate.keys(sessionPrefix(agentId, sessionId) + "*").collectList().block();
+    List<String> keys = keysByPrefix(sessionPrefix(agentId, sessionId));
     return keys != null && !keys.isEmpty();
   }
 
   @Override
   public void delete(String agentId, String sessionId) {
-    redisTemplate.delete(redisTemplate.keys(sessionPrefix(agentId, sessionId) + "*")).block();
+    redisTemplate
+        .delete(reactor.core.publisher.Flux.fromIterable(keysByPrefix(sessionPrefix(agentId, sessionId))))
+        .block();
   }
 
   @Override
@@ -76,7 +78,7 @@ class RedisAgentStateStore implements AgentStateStore {
 
   @Override
   public Set<String> listSessionIds(String agentId) {
-    List<String> keys = redisTemplate.keys(agentPrefix(agentId) + "*").collectList().block();
+    List<String> keys = keysByPrefix(agentPrefix(agentId));
     Set<String> sessionIds = new LinkedHashSet<>();
     if (keys == null) {
       return sessionIds;
@@ -89,6 +91,10 @@ class RedisAgentStateStore implements AgentStateStore {
       }
     }
     return sessionIds;
+  }
+
+  private List<String> keysByPrefix(String prefix) {
+    return redisTemplate.scan().filter(key -> key.startsWith(prefix)).collectList().block();
   }
 
   private String serializeState(State state) {

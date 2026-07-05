@@ -10,10 +10,31 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 
 class RedisBaseStore implements BaseStore {
 
   private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+  private static final RedisScript<Long> PUT_IF_VERSION_SCRIPT =
+      RedisScript.of(
+          """
+          local current = redis.call('GET', KEYS[1])
+          local expected = tonumber(ARGV[1])
+          if not current then
+            if expected ~= 0 then
+              return 0
+            end
+            redis.call('SET', KEYS[1], ARGV[2])
+            return 1
+          end
+          local currentVersion = tonumber(cjson.decode(current)['version'])
+          if currentVersion ~= expected then
+            return 0
+          end
+          redis.call('SET', KEYS[1], ARGV[2])
+          return 1
+          """,
+          Long.class);
 
   private final ReactiveStringRedisTemplate redisTemplate;
   private final String keyPrefix;
@@ -43,30 +64,29 @@ class RedisBaseStore implements BaseStore {
   @Override
   public boolean putIfVersion(
       List<String> namespace, String key, Map<String, Object> value, long version) {
-    StoreItem current = get(namespace, key);
-    if (current == null || current.version() != version) {
-      return false;
-    }
-    redisTemplate
-        .opsForValue()
-        .set(redisKey(namespace, key), writeJson(new StoredItem(value, version + 1)))
-        .block();
-    return true;
+    Long result =
+        redisTemplate
+            .execute(
+                PUT_IF_VERSION_SCRIPT,
+                List.of(redisKey(namespace, key)),
+                List.of(String.valueOf(version), writeJson(new StoredItem(value, version + 1))))
+            .single(0L)
+            .block();
+    return Long.valueOf(1L).equals(result);
   }
 
   @Override
-  public List<StoreItem> search(List<String> namespace, int offset, int limit) {
+  public List<StoreItem> search(List<String> namespace, int limit, int offset) {
     List<String> keys =
         redisTemplate.keys(namespacePrefix(namespace) + "*").collectList().block();
     if (keys == null || keys.isEmpty()) {
       return List.of();
     }
     return keys.stream()
-        .sorted()
-        .skip(offset)
-        .limit(limit)
         .map(this::toStoreItem)
         .sorted(Comparator.comparing(StoreItem::key))
+        .skip(offset)
+        .limit(limit)
         .toList();
   }
 
