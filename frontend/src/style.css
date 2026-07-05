@@ -1,7 +1,9 @@
 :root {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #1f2937;
-  background: #f8fafc;
+  background: #eef2f7;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
 html,
@@ -12,11 +14,152 @@ body,
 }
 
 body {
-  display: grid;
-  place-items: center;
+  min-width: 320px;
 }
 
-.shell {
-  padding: 2rem;
-  text-align: center;
+* {
+  box-sizing: border-box;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app-page {
+  min-height: 100%;
+}
+
+.auth-page {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-panel {
+  width: min(100%, 420px);
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 20px 50px rgb(15 23 42 / 10%);
+}
+
+.auth-header {
+  border-bottom: 1px solid #e5eaf1;
+  padding: 24px 24px 16px;
+}
+
+.auth-header h1 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 24px;
+  letter-spacing: 0;
+}
+
+.auth-header p {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.auth-body {
+  padding: 22px 24px 24px;
+}
+
+.auth-tabs {
+  margin-bottom: 22px;
+}
+
+.auth-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 22px;
+}
+
+.auth-submit {
+  width: 100%;
+}
+
+.chat-page {
+  min-height: 100%;
+  background: #f6f8fb;
+}
+
+.chat-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #dbe3ee;
+  background: #ffffff;
+  padding: 14px 24px;
+}
+
+.chat-brand {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-brand strong {
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.chat-brand span {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-workspace {
+  display: grid;
+  min-height: calc(100vh - 65px);
+  place-items: center;
+  padding: 24px;
+}
+
+.chat-placeholder {
+  width: min(100%, 760px);
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 28px;
+}
+
+.chat-placeholder h1 {
+  margin: 0 0 8px;
+  color: #0f172a;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.chat-placeholder p {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+@media (max-width: 520px) {
+  .auth-page,
+  .chat-workspace {
+    padding: 16px;
+  }
+
+  .auth-header,
+  .auth-body,
+  .chat-placeholder {
+    padding: 20px;
+  }
+
+  .chat-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 14px 16px;
+  }
 }
