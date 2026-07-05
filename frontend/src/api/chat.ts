@@ -1,0 +1,146 @@
+import { apiDelete, apiGet, apiPost, TOKEN_KEY } from './client'
+
+export interface ChatSession {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type StreamEventType =
+  | 'reply_start'
+  | 'text_delta'
+  | 'tool_call'
+  | 'tool_result'
+  | 'permission_required'
+  | 'evolution_proposal'
+  | 'done'
+  | 'error'
+
+export interface StreamEvent {
+  type: StreamEventType | string
+  delta?: string
+  tool?: string
+  input?: unknown
+  output?: unknown
+  permission?: string
+  summary?: string
+  message?: string
+  [key: string]: unknown
+}
+
+export function listSessions() {
+  return apiGet<ChatSession[]>('/api/chat/sessions')
+}
+
+export function createSession(title?: string) {
+  const body = title?.trim() ? { title: title.trim() } : undefined
+  return apiPost<ChatSession>('/api/chat/sessions', body)
+}
+
+export function deleteSession(sessionId: string) {
+  return apiDelete<null>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`)
+}
+
+export function createNdjsonParser(onEvent: (event: StreamEvent) => void) {
+  let buffer = ''
+
+  function parseLine(line: string) {
+    const trimmed = line.trim()
+
+    if (!trimmed) {
+      return
+    }
+
+    try {
+      const event = JSON.parse(trimmed) as StreamEvent
+
+      if (!event || typeof event !== 'object' || typeof event.type !== 'string') {
+        throw new Error('event must be an object with a string type')
+      }
+
+      onEvent(event)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new Error(`Invalid NDJSON stream event: ${detail}. Line: ${trimmed}`)
+    }
+  }
+
+  return {
+    push(chunk: string) {
+      buffer += chunk
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      lines.forEach(parseLine)
+    },
+    flush() {
+      parseLine(buffer)
+      buffer = ''
+    }
+  }
+}
+
+async function readError(response: Response) {
+  const text = await response.text()
+
+  if (!text) {
+    return `Stream request failed with status ${response.status}`
+  }
+
+  try {
+    const data = JSON.parse(text) as Record<string, unknown>
+    const message = data.message ?? data.error ?? data.detail
+
+    if (typeof message === 'string' && message.trim()) {
+      return message
+    }
+  } catch {
+    return text
+  }
+
+  return text
+}
+
+export async function streamChat(
+  sessionId: string,
+  message: string,
+  onEvent: (event: StreamEvent) => void
+): Promise<void> {
+  const headers = new Headers({ 'Content-Type': 'application/json' })
+  const token = localStorage.getItem(TOKEN_KEY)
+
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  const response = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message })
+  })
+
+  if (!response.ok) {
+    throw new Error(await readError(response))
+  }
+
+  if (!response.body) {
+    throw new Error('Stream response did not include a readable body')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const parser = createNdjsonParser(onEvent)
+
+  while (true) {
+    const { value, done } = await reader.read()
+
+    if (done) {
+      break
+    }
+
+    parser.push(decoder.decode(value, { stream: true }))
+  }
+
+  parser.push(decoder.decode())
+  parser.flush()
+}

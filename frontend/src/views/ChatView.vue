@@ -1,9 +1,64 @@
 <script setup lang="ts">
+import { computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import ChatTranscript from '../components/ChatTranscript.vue'
+import Composer from '../components/Composer.vue'
+import SessionSidebar from '../components/SessionSidebar.vue'
 import { useAuthStore } from '../stores/auth'
+import { useChatStore } from '../stores/chat'
+import { useSessionsStore } from '../stores/sessions'
 
 const auth = useAuthStore()
+const chat = useChatStore()
 const router = useRouter()
+const sessions = useSessionsStore()
+
+const currentSessionId = computed(() => sessions.currentSessionId)
+const currentMessages = computed(() =>
+  currentSessionId.value ? chat.messages(currentSessionId.value) : []
+)
+const isSending = computed(() => chat.loadingSessionId === currentSessionId.value)
+
+watch(
+  currentSessionId,
+  (sessionId) => {
+    if (sessionId) {
+      chat.useSession(sessionId)
+    }
+  },
+  { immediate: true }
+)
+
+onMounted(async () => {
+  await sessions.loadSessions()
+})
+
+async function createSession() {
+  const session = await sessions.createSession()
+  chat.useSession(session.id)
+}
+
+function selectSession(sessionId: string) {
+  sessions.selectSession(sessionId)
+  chat.useSession(sessionId)
+}
+
+async function deleteSession(sessionId: string) {
+  await sessions.deleteSession(sessionId)
+  chat.clearSession(sessionId)
+}
+
+async function sendMessage(message: string) {
+  let sessionId = currentSessionId.value
+
+  if (!sessionId) {
+    const session = await sessions.createSession()
+    sessionId = session.id
+    chat.useSession(sessionId)
+  }
+
+  await chat.sendMessage(sessionId, message)
+}
 
 async function logout() {
   auth.logout()
@@ -18,13 +73,38 @@ async function logout() {
         <strong>MyAgent</strong>
         <span>{{ auth.user?.username }}</span>
       </div>
-      <el-button @click="logout">退出登录</el-button>
+      <div class="chat-topbar__actions">
+        <span v-if="sessions.currentSession" class="chat-topbar__session">
+          {{ sessions.currentSession.title || '新会话' }}
+        </span>
+        <el-button @click="logout">退出登录</el-button>
+      </div>
     </header>
 
     <section class="chat-workspace">
-      <div class="chat-placeholder">
-        <h1>工作台已就绪</h1>
-        <p>登录状态和路由守卫已接入，聊天工作流将在后续任务中完成。</p>
+      <SessionSidebar
+        :sessions="sessions.sessions"
+        :current-session-id="currentSessionId"
+        :loading="sessions.loading"
+        @create="createSession"
+        @select="selectSession"
+        @delete="deleteSession"
+      />
+
+      <div class="chat-main">
+        <div v-if="sessions.error || chat.error" class="chat-error">
+          {{ sessions.error || chat.error }}
+        </div>
+        <ChatTranscript
+          :messages="currentMessages"
+          :loading="isSending"
+          :has-session="Boolean(currentSessionId)"
+        />
+        <Composer
+          :disabled="isSending || sessions.loading"
+          :has-session="Boolean(currentSessionId)"
+          @send="sendMessage"
+        />
       </div>
     </section>
   </main>
