@@ -2,7 +2,7 @@ services:
   mysql:
     image: mysql:8.4
     environment:
-      MYSQL_DATABASE: myagent
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-myagent}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me}
     volumes:
       - mysql_data:/var/lib/mysql
@@ -30,11 +30,20 @@ services:
       context: ./backend
     environment:
       SPRING_PROFILES_ACTIVE: docker
+      SECURITY_JWT_SECRET: ${SECURITY_JWT_SECRET:-dev-only-change-me-to-a-long-random-secret}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      AGENT_SCOPE_ENABLED: ${AGENT_SCOPE_ENABLED:-false}
       AGENT_MODEL_PROVIDER: ${AGENT_MODEL_PROVIDER:-dashscope}
-      AGENT_MODEL_NAME: ${AGENT_MODEL_NAME:-qwen-plus}
+      AGENT_MODEL_NAME: ${AGENT_MODEL_NAME:-dashscope:qwen-plus}
+      AGENT_MODEL_BASE_URL: ${AGENT_MODEL_BASE_URL:-}
+      AGENT_MODEL_API_KEY_ENV: ${AGENT_MODEL_API_KEY_ENV:-DASHSCOPE_API_KEY}
       MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-myagent}
+      MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
       REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_DATABASE: ${REDIS_DATABASE:-0}
     depends_on:
       mysql:
         condition: service_healthy
