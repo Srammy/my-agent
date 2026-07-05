@@ -222,6 +222,49 @@ class SkillMaterializerTest {
   }
 
   @Test
+  void materializeForUserKeepsExistingStagingNamedSkillWhenAnotherSkillFails() throws IOException {
+    Path cacheDir = tempDir.resolve("skill-cache");
+    SkillMaterializer materializer = new SkillMaterializer(skillService, properties(cacheDir));
+
+    when(skillService.listEnabledSkillsForUser(7L))
+        .thenReturn(
+            List.of(
+                snapshot(
+                    11L,
+                    "foo.staging",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 10, 0),
+                    file("SKILL.md", "---\nname: foo.staging\ndescription: old\n---\n"),
+                    file("references/keep.md", "old cache"))),
+            List.of(
+                snapshot(
+                    12L,
+                    "foo",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 11, 0),
+                    file("references/foo.md", "missing skill markdown")),
+                snapshot(
+                    11L,
+                    "foo.staging",
+                    SkillService.OWNER_TYPE_USER,
+                    LocalDateTime.of(2026, 7, 4, 10, 0),
+                    file("SKILL.md", "---\nname: foo.staging\ndescription: old\n---\n"),
+                    file("references/keep.md", "old cache"))));
+
+    Path materializedRoot = materializer.materializeForUser(7L);
+    Path stagingNamedSkillRoot = materializedRoot.resolve("foo.staging");
+    assertThat(Files.readString(stagingNamedSkillRoot.resolve("references/keep.md")))
+        .isEqualTo("old cache");
+
+    assertThatThrownBy(() -> materializer.materializeForUser(7L))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("missing SKILL.md");
+    assertThat(Files.readString(stagingNamedSkillRoot.resolve("references/keep.md")))
+        .isEqualTo("old cache");
+    assertThat(stagingNamedSkillRoot.resolve("SKILL.md")).exists();
+  }
+
+  @Test
   void materializeForUserSanitizesWindowsUnsafeDirectoryNamesIntoCacheRoot() throws IOException {
     Path cacheDir = tempDir.resolve("skill-cache");
     SkillMaterializer materializer = new SkillMaterializer(skillService, properties(cacheDir));

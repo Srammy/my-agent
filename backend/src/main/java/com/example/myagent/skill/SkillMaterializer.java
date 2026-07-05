@@ -21,8 +21,9 @@ import org.springframework.util.StringUtils;
 public class SkillMaterializer {
 
   private static final String MATERIALIZED_KEY_FILE = ".materialized-key";
-  private static final String STAGING_SUFFIX = ".staging";
-  private static final String BACKUP_SUFFIX = ".backup";
+  private static final String TEMP_ROOT_DIRECTORY = ".materializer-tmp";
+  private static final String STAGING_DIRECTORY = "staging";
+  private static final String BACKUP_DIRECTORY = "backup";
   private static final Set<String> WINDOWS_RESERVED_NAMES =
       Set.of(
           "CON",
@@ -60,13 +61,16 @@ public class SkillMaterializer {
     try {
       Files.createDirectories(cacheRoot);
       Path userRoot = resolveDirectory(cacheRoot, userId.toString());
+      Path tempUserRoot =
+          resolveDirectory(resolveDirectory(cacheRoot, TEMP_ROOT_DIRECTORY), userId.toString());
       Files.createDirectories(userRoot);
 
       Set<String> activeDirectories = new HashSet<>();
       for (SkillService.MaterializedSkill skill : skillService.listEnabledSkillsForUser(userId)) {
         Path skillRoot = resolveDirectory(userRoot, sanitizeDirectoryName(skill));
         activeDirectories.add(skillRoot.getFileName().toString());
-        materializeSkill(skillRoot, skill);
+        materializeSkill(
+            skillRoot, resolveDirectory(tempUserRoot, skillRoot.getFileName().toString()), skill);
       }
 
       cleanupStaleDirectories(userRoot, activeDirectories);
@@ -76,16 +80,15 @@ public class SkillMaterializer {
     }
   }
 
-  private void materializeSkill(Path skillRoot, SkillService.MaterializedSkill skill) throws IOException {
+  private void materializeSkill(Path skillRoot, Path tempSkillRoot, SkillService.MaterializedSkill skill)
+      throws IOException {
     String materializedKey = buildMaterializedKey(skill);
     if (Files.isDirectory(skillRoot) && materializedKey.equals(readMaterializedKey(skillRoot))) {
       return;
     }
 
-    Path parent = skillRoot.getParent();
-    String directoryName = skillRoot.getFileName().toString();
-    Path stagingRoot = resolveDirectory(parent, directoryName + STAGING_SUFFIX);
-    Path backupRoot = resolveDirectory(parent, directoryName + BACKUP_SUFFIX);
+    Path stagingRoot = resolveDirectory(tempSkillRoot, STAGING_DIRECTORY);
+    Path backupRoot = resolveDirectory(tempSkillRoot, BACKUP_DIRECTORY);
 
     deleteRecursively(stagingRoot);
     deleteRecursively(backupRoot);
