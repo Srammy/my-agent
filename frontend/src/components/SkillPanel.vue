@@ -33,6 +33,7 @@ watch(
 
 function beginCreate() {
   editingSkillId.value = null
+  selectedMySkillId.value = null
   nameDraft.value = ''
   descriptionDraft.value = ''
 }

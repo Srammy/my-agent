@@ -57,31 +57,51 @@ export const useSkillsStore = defineStore('skills', {
     },
     async toggleEnabled(skill: Skill, enabled: boolean) {
       this.error = ''
-      const updated = await setSkillEnabled(skill.id, enabled)
+      try {
+        const updated = await setSkillEnabled(skill.id, enabled)
 
-      if (skill.ownerType === 'SYSTEM') {
-        this.systemSkills = replaceSkill(this.systemSkills, updated)
-      } else {
-        this.mySkills = replaceSkill(this.mySkills, updated)
+        if (skill.ownerType === 'SYSTEM') {
+          this.systemSkills = replaceSkill(this.systemSkills, updated)
+        } else {
+          this.mySkills = replaceSkill(this.mySkills, updated)
+        }
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
       }
     },
     async createSkill(payload: SkillCreatePayload) {
       this.error = ''
-      const skill = await createMySkill(payload)
-      this.mySkills = [skill, ...this.mySkills]
-      return skill
+      try {
+        const skill = await createMySkill(payload)
+        this.mySkills = [skill, ...this.mySkills]
+        return skill
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      }
     },
     async updateSkill(skillId: number, payload: SkillCreatePayload) {
       this.error = ''
-      const skill = await updateMySkill(skillId, payload)
-      this.mySkills = replaceSkill(this.mySkills, skill)
-      return skill
+      try {
+        const skill = await updateMySkill(skillId, payload)
+        this.mySkills = replaceSkill(this.mySkills, skill)
+        return skill
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      }
     },
     async deleteSkill(skillId: number) {
       this.error = ''
-      await deleteMySkill(skillId)
-      this.mySkills = this.mySkills.filter((skill) => skill.id !== skillId)
-      delete this.filesBySkillId[skillId]
+      try {
+        await deleteMySkill(skillId)
+        this.mySkills = this.mySkills.filter((skill) => skill.id !== skillId)
+        delete this.filesBySkillId[skillId]
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      }
     },
     async loadFiles(skillId: number) {
       this.filesLoading = true
@@ -97,20 +117,30 @@ export const useSkillsStore = defineStore('skills', {
     },
     async saveFile(skillId: number, path: string, content: string) {
       this.error = ''
-      const file = await upsertSkillFile(skillId, path, content)
-      const files = this.filesBySkillId[skillId] ?? []
-      this.filesBySkillId[skillId] = [
-        file,
-        ...files.filter((item) => item.path !== file.path)
-      ].sort((left, right) => left.path.localeCompare(right.path))
-      return file
+      try {
+        const file = await upsertSkillFile(skillId, path, content)
+        const files = this.filesBySkillId[skillId] ?? []
+        this.filesBySkillId[skillId] = [
+          file,
+          ...files.filter((item) => item.path !== file.path)
+        ].sort((left, right) => left.path.localeCompare(right.path))
+        return file
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      }
     },
     async deleteFile(skillId: number, path: string) {
       this.error = ''
-      await deleteSkillFile(skillId, path)
-      this.filesBySkillId[skillId] = (this.filesBySkillId[skillId] ?? []).filter(
-        (file) => file.path !== path
-      )
+      try {
+        await deleteSkillFile(skillId, path)
+        this.filesBySkillId[skillId] = (this.filesBySkillId[skillId] ?? []).filter(
+          (file) => file.path !== path
+        )
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      }
     }
   }
 })

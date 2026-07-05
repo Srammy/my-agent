@@ -42,18 +42,33 @@ export const useEvolutionStore = defineStore('evolution', {
     },
     async approve(id: number) {
       this.error = ''
-      const proposal = await approveEvolutionProposal(id)
-      this.proposals = replaceProposal(this.proposals, proposal)
+      try {
+        const proposal = await approveEvolutionProposal(id)
+        this.proposals = replaceProposal(this.proposals, proposal)
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      }
     },
     async reject(id: number) {
       this.error = ''
-      const proposal = await rejectEvolutionProposal(id)
-      this.proposals = replaceProposal(this.proposals, proposal)
+      try {
+        const proposal = await rejectEvolutionProposal(id)
+        this.proposals = replaceProposal(this.proposals, proposal)
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      }
     },
     async apply(id: number) {
       this.error = ''
-      const proposal = await applyEvolutionProposal(id)
-      this.proposals = replaceProposal(this.proposals, proposal)
+      try {
+        const proposal = await applyEvolutionProposal(id)
+        this.proposals = replaceProposal(this.proposals, proposal)
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      }
     }
   }
 })
