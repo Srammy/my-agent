@@ -1,53 +1,53 @@
 # MyAgent
 
-MyAgent is a Java/Spring Boot backend and Vue frontend for an AgentScope-based assistant. The default Docker path starts MySQL, Redis, the backend, and the frontend.
+MyAgent 是一个基于 AgentScope 的助手项目，后端使用 Java/Spring Boot，前端使用 Vue。默认 Docker 启动路径会同时启动 MySQL、Redis、后端和前端。
 
-## Prerequisites
+## 前置要求
 
-- Docker and Docker Compose for the end-to-end path.
-- JDK 21 and Maven 3.9+ for local backend development.
-- Node.js 22+ and npm for local frontend development.
-- A DashScope API key if you want live model calls. Without a key, keep `AGENT_SCOPE_ENABLED=false` and use the stub or error-display path.
+- 如果要端到端启动，需要 Docker 和 Docker Compose。
+- 如果要本地开发后端，需要 JDK 21 和 Maven 3.9+。
+- 如果要本地开发前端，需要 Node.js 22+ 和 npm。
+- 如果要调用真实模型，需要 DashScope API key。没有 key 时，请保持 `AGENT_SCOPE_ENABLED=false`，使用占位实现或错误展示路径。
 
-## Environment Variables
+## 环境变量
 
-Copy the example file before starting Docker:
+启动 Docker 前，先复制示例配置文件：
 
 ```bash
 cp .env.example .env
 ```
 
-Important variables:
+重要变量：
 
-- `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USERNAME`, `MYSQL_PASSWORD`: MySQL settings. The example uses root with `change-me` for local development only.
-- `REDIS_HOST`, `REDIS_PORT`, `REDIS_DATABASE`: Redis settings.
-- `SECURITY_JWT_SECRET`: required by the backend. Replace the example value with a long random secret outside local development.
-- `AGENT_SCOPE_ENABLED`: defaults to `false`. Set to `true` only when model credentials and runtime behavior are ready.
-- `DASHSCOPE_API_KEY`: DashScope key used by the default model provider.
-- `AGENT_MODEL_PROVIDER`: defaults to `dashscope`.
-- `AGENT_MODEL_NAME`: defaults to `dashscope:qwen-plus`.
-- `AGENT_MODEL_BASE_URL`: optional base URL for OpenAI-compatible providers.
-- `AGENT_MODEL_API_KEY_ENV`: name of the environment variable that contains the model API key. Defaults to `DASHSCOPE_API_KEY`.
-- `VITE_API_PROXY_TARGET`: optional local Vite dev proxy target. Defaults to `http://localhost:8080`.
+- `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USERNAME`, `MYSQL_PASSWORD`：MySQL 配置。示例配置使用 root 用户和 `change-me`，仅适合本地开发。
+- `REDIS_HOST`, `REDIS_PORT`, `REDIS_DATABASE`：Redis 配置。
+- `SECURITY_JWT_SECRET`：后端必需配置。非本地开发环境请替换为足够长的随机密钥。
+- `AGENT_SCOPE_ENABLED`：默认值为 `false`。只有在模型凭证和运行时行为都准备好后，才设置为 `true`。
+- `DASHSCOPE_API_KEY`：默认模型提供方使用的 DashScope key。
+- `AGENT_MODEL_PROVIDER`：默认值为 `dashscope`。
+- `AGENT_MODEL_NAME`：默认值为 `dashscope:qwen-plus`。
+- `AGENT_MODEL_BASE_URL`：OpenAI-compatible 提供方可选的 base URL。
+- `AGENT_MODEL_API_KEY_ENV`：保存模型 API key 的环境变量名。默认值为 `DASHSCOPE_API_KEY`。
+- `VITE_API_PROXY_TARGET`：本地 Vite 开发代理目标，可选。默认值为 `http://localhost:8080`。
 
-## Docker Startup
+## Docker 启动
 
 ```bash
 cp .env.example .env && docker compose up -d
 ```
 
-The frontend is published at `http://localhost:5173`, and it proxies `/api/` requests to the backend container. The backend listens on `http://localhost:8080`.
+前端发布在 `http://localhost:5173`，并将 `/api/` 请求代理到后端容器。后端监听 `http://localhost:8080`。
 
-Use `docker compose logs -f backend` if the UI reports backend or model configuration errors.
+如果 UI 提示后端或模型配置错误，可以使用 `docker compose logs -f backend` 查看日志。
 
-## Backend Local Startup
+## 后端本地启动
 
-Start local MySQL and Redis first. The default local backend configuration expects:
+先启动本地 MySQL 和 Redis。默认后端本地配置要求：
 
-- MySQL: `localhost:3306`, database `myagent`, user `root`, password `root`.
-- Redis: `localhost:6379`, database `0`.
+- MySQL：`localhost:3306`，数据库 `myagent`，用户 `root`，密码 `root`。
+- Redis：`localhost:6379`，数据库 `0`。
 
-Then run:
+然后运行：
 
 ```bash
 cd backend
@@ -56,11 +56,11 @@ $env:AGENT_SCOPE_ENABLED="false"
 mvn spring-boot:run
 ```
 
-For PowerShell, the `$env:` assignments above apply to the current shell. In Bash, use `export SECURITY_JWT_SECRET=...` and `export AGENT_SCOPE_ENABLED=false`.
+在 PowerShell 中，上面的 `$env:` 赋值只对当前 shell 生效。在 Bash 中，请使用 `export SECURITY_JWT_SECRET=...` 和 `export AGENT_SCOPE_ENABLED=false`。
 
-## Frontend Local Startup
+## 前端本地启动
 
-Install dependencies and run Vite:
+安装依赖并启动 Vite：
 
 ```bash
 cd frontend
@@ -68,23 +68,23 @@ npm install
 npm run dev
 ```
 
-The development server defaults to `http://localhost:5173`. Run the backend separately on `http://localhost:8080` for API calls. If your backend runs elsewhere, set `VITE_API_PROXY_TARGET` before `npm run dev`.
+开发服务器默认地址为 `http://localhost:5173`。API 调用需要单独在 `http://localhost:8080` 启动后端。如果后端运行在其他地址，请在执行 `npm run dev` 前设置 `VITE_API_PROXY_TARGET`。
 
-## MySQL and Redis
+## MySQL 和 Redis
 
-Docker Compose starts MySQL 8.4 and Redis 7 with health checks. `docker/mysql/init.sql` only creates the `myagent` database and sets UTF-8 defaults. Application tables are owned by backend Flyway migrations under `backend/src/main/resources/db/migration`; do not duplicate table DDL in the Docker init script.
+Docker Compose 会启动 MySQL 8.4 和 Redis 7，并配置健康检查。`docker/mysql/init.sql` 只创建 `myagent` 数据库并设置 UTF-8 默认值。应用表结构由后端 Flyway 迁移管理，位置在 `backend/src/main/resources/db/migration`；不要在 Docker 初始化脚本中重复编写表 DDL。
 
-Compose persists MySQL data in the `mysql_data` volume. To reset local Docker data, stop the stack and remove the volume explicitly:
+Compose 会将 MySQL 数据持久化到 `mysql_data` volume。如果要重置本地 Docker 数据，请停止服务并显式删除 volume：
 
 ```bash
 docker compose down -v
 ```
 
-## Model Provider Switching
+## 模型提供方切换
 
-The default provider is DashScope with `AGENT_MODEL_NAME=dashscope:qwen-plus`.
+默认提供方是 DashScope，`AGENT_MODEL_NAME=dashscope:qwen-plus`。
 
-For an OpenAI-compatible provider, configure the provider, base URL, API key environment variable name, and model name in `.env`:
+如果使用 OpenAI-compatible 提供方，请在 `.env` 中配置提供方、base URL、API key 环境变量名和模型名：
 
 ```dotenv
 AGENT_MODEL_PROVIDER=openai-compatible
@@ -95,17 +95,17 @@ AGENT_MODEL_NAME=openai-compatible:your-model-name
 AGENT_SCOPE_ENABLED=true
 ```
 
-Keep `AGENT_SCOPE_ENABLED=false` when no usable API key is available.
+没有可用 API key 时，请保持 `AGENT_SCOPE_ENABLED=false`。
 
-## High-Privilege Tool Safety
+## 高权限工具安全
 
-The backend defaults keep high-privilege tools disabled:
+后端默认关闭高权限工具：
 
 - `agent.tools.file-tools-enabled=false`
 - `agent.tools.shell-enabled=false`
 - `agent.tools.http-fetch-enabled=false`
 - `agent.tools.mcp-enabled=false`
 
-File, shell, HTTP fetch, and MCP tools can access local files, execute commands, reach networks, or call external servers depending on the runtime. Enable them only in a trusted development environment.
+文件、shell、HTTP fetch 和 MCP 工具可能会根据运行时能力访问本地文件、执行命令、连接网络或调用外部服务。只应在可信的开发环境中启用这些工具。
 
-Permission modes also matter. `DEFAULT`, `EXPLORE`, and `ACCEPT_EDITS` are safer interactive modes. `DONT_ASK` and especially `BYPASS` reduce or remove confirmation boundaries and should only be used inside a trusted sandbox with disposable credentials and data.
+权限模式同样重要。`DEFAULT`、`EXPLORE` 和 `ACCEPT_EDITS` 是相对更安全的交互模式。`DONT_ASK`，尤其是 `BYPASS`，会降低或移除确认边界，只应在可信沙箱中配合可丢弃的凭证和数据使用。
