@@ -62,8 +62,7 @@ public class AgentScopeConfig {
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
     return new AgentScopeStreamExecutor() {
       @Override
-      public reactor.core.publisher.Flux<Object> stream(
-          ChatAgentRequest request, Object runtimeContext) {
+      public reactor.core.publisher.Flux<Object> stream(ChatAgentRequest request, Object runtimeContext) {
         return reactor.core.publisher.Flux.using(
             () -> buildHarnessAgent(agentScopeModel, agentProperties, redisTemplateProvider, request),
             harnessAgent ->
