@@ -57,6 +57,11 @@ public class SkillMaterializer {
     this.cacheRoot = Path.of(agentProperties.skill().cacheDir()).toAbsolutePath().normalize();
   }
 
+  /**
+   * 将指定用户当前启用的 Skill 从数据库同步到本地缓存目录，生成 AgentScope 可读取的
+   * Skill 文件树，并清理该用户已不再启用的旧 Skill 目录。返回值是该用户的本地 Skill
+   * 根目录路径，调用方会把它传入对话运行上下文。
+   */
   public Path materializeForUser(Long userId) {
     try {
       Files.createDirectories(cacheRoot);
