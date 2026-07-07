@@ -361,6 +361,8 @@ class SkillMaterializerTest {
     return new AgentProperties(
         new AgentProperties.Deployment("local"),
         new AgentProperties.AgentScope(false),
+        new AgentProperties.Workspace("./.agentscope/workspace"),
+        new AgentProperties.Memory(true),
         new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
         new AgentProperties.StateStore(
             "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),

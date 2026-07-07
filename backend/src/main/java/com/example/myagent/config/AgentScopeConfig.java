@@ -8,11 +8,13 @@ import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.permission.PermissionMode;
-import io.agentscope.core.skill.repository.FileSystemSkillRepository;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.JsonFileAgentStateStore;
 import io.agentscope.harness.agent.DistributedStore;
 import io.agentscope.harness.agent.HarnessAgent;
+import io.agentscope.harness.agent.IsolationScope;
+import io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec;
+import io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
 import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.nio.file.Path;
@@ -109,15 +111,31 @@ public class AgentScopeConfig {
     HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
     configureHarnessAgentBuilder(builder, toolPolicy(agentProperties));
     applyRequestScope(builder, request);
+    applyFilesystem(builder, agentProperties, redisTemplateProvider);
     applyStateStore(builder, agentProperties, redisTemplateProvider);
     return builder.build();
   }
 
   void applyRequestScope(HarnessAgent.Builder builder, ChatAgentRequest request) {
-    for (String skillRoot : request.materializedSkillRoots()) {
-      builder.skillRepository(new FileSystemSkillRepository(Path.of(skillRoot)));
-    }
     builder.permissionContext(permissionContext(request));
+  }
+
+  void applyFilesystem(
+      HarnessAgent.Builder builder,
+      AgentProperties agentProperties,
+      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
+    builder.workspace(agentProperties.workspace().path());
+    if ("distributed".equalsIgnoreCase(agentProperties.deployment().mode())) {
+      ReactiveStringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
+      if (redisTemplate == null) {
+        throw new IllegalStateException("Redis is required for distributed AgentScope filesystem");
+      }
+      builder.filesystem(
+          new RemoteFilesystemSpec(buildBaseStore(agentProperties, redisTemplateProvider))
+              .isolationScope(IsolationScope.USER));
+      return;
+    }
+    builder.filesystem(new LocalFilesystemSpec());
   }
 
   PermissionContextState permissionContext(ChatAgentRequest request) {

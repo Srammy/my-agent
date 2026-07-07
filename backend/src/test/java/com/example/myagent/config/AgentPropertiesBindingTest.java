@@ -47,12 +47,35 @@ class AgentPropertiesBindingTest {
               .isEqualTo("redis://localhost:6379");
           assertThat(agentProperties.stateStore().redis().keyPrefix())
               .isEqualTo("myagent:agent-state:");
-          assertThat(agentProperties.skill().storage()).isEqualTo("mysql");
+          assertThat(agentProperties.workspace().path()).isEqualTo("./.agentscope/workspace");
+          assertThat(agentProperties.memory().enabled()).isTrue();
+          assertThat(agentProperties.skill().storage()).isEqualTo("agentscope");
+          assertThat(agentProperties.skill().environment()).isEqualTo("prod");
+          assertThat(agentProperties.skill().canaryPercent()).isEqualTo(10);
+          assertThat(agentProperties.skill().manageToolEnabled()).isTrue();
+          assertThat(agentProperties.skill().securityScanEnabled()).isTrue();
+          assertThat(agentProperties.skill().approvalMode()).isEqualTo("web");
           assertThat(agentProperties.permission().defaultMode()).isEqualTo("DEFAULT");
           assertThat(agentProperties.tools().fileToolsEnabled()).isFalse();
           assertThat(agentProperties.tools().shellEnabled()).isFalse();
           assertThat(agentProperties.tools().httpFetchEnabled()).isFalse();
           assertThat(agentProperties.tools().mcpEnabled()).isFalse();
+        });
+  }
+
+  @Test
+  void bindsAgentScopeWorkspaceMemoryAndSkillDefaults() {
+    this.contextRunner.run(
+        context -> {
+          AgentProperties properties = context.getBean(AgentProperties.class);
+          assertThat(properties.workspace().path()).isEqualTo("./.agentscope/workspace");
+          assertThat(properties.memory().enabled()).isTrue();
+          assertThat(properties.skill().storage()).isEqualTo("agentscope");
+          assertThat(properties.skill().environment()).isEqualTo("prod");
+          assertThat(properties.skill().canaryPercent()).isEqualTo(10);
+          assertThat(properties.skill().manageToolEnabled()).isTrue();
+          assertThat(properties.skill().securityScanEnabled()).isTrue();
+          assertThat(properties.skill().approvalMode()).isEqualTo("web");
         });
   }
 

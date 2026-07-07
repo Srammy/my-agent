@@ -13,7 +13,6 @@ import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.core.permission.PermissionContextState;
-import io.agentscope.core.skill.repository.FileSystemSkillRepository;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.nio.file.Path;
@@ -26,6 +25,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.mock.env.MockEnvironment;
 
 class AgentScopeConfigTest {
@@ -45,10 +45,12 @@ class AgentScopeConfigTest {
         new AgentProperties(
             new AgentProperties.Deployment("local"),
             new AgentProperties.AgentScope(true),
+            new AgentProperties.Workspace(tempDir.toString()),
+            new AgentProperties.Memory(true),
             new AgentProperties.Model("dashscope", "qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-            new AgentProperties.Skill("mysql", "./.agentscope/cache/skills"),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
@@ -66,6 +68,8 @@ class AgentScopeConfigTest {
         new AgentProperties(
             new AgentProperties.Deployment("local"),
             new AgentProperties.AgentScope(true),
+            new AgentProperties.Workspace(tempDir.toString()),
+            new AgentProperties.Memory(true),
             new AgentProperties.Model(
                 "openai-compatible",
                 "gpt-4.1-mini",
@@ -73,7 +77,7 @@ class AgentScopeConfigTest {
                 "OPENAI_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-            new AgentProperties.Skill("mysql", "./.agentscope/cache/skills"),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
@@ -91,10 +95,12 @@ class AgentScopeConfigTest {
         new AgentProperties(
             new AgentProperties.Deployment("local"),
             new AgentProperties.AgentScope(true),
+            new AgentProperties.Workspace(tempDir.toString()),
+            new AgentProperties.Memory(true),
             new AgentProperties.Model("dashscope", "qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-            new AgentProperties.Skill("mysql", "./.agentscope/cache/skills"),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
@@ -109,10 +115,12 @@ class AgentScopeConfigTest {
         new AgentProperties(
             new AgentProperties.Deployment("local"),
             new AgentProperties.AgentScope(true),
+            new AgentProperties.Workspace(tempDir.toString()),
+            new AgentProperties.Memory(true),
             new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-            new AgentProperties.Skill("mysql", "./.agentscope/cache/skills"),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
@@ -194,22 +202,44 @@ class AgentScopeConfigTest {
   }
 
   @Test
-  void requestScopeAddsMaterializedSkillsAndPermissionContextToHarnessBuilder()
-      throws Exception {
+  void localDeploymentUsesLocalWorkspaceFilesystem() throws Exception {
     HarnessAgent.Builder builder = HarnessAgent.builder();
-    ChatAgentRequest request =
-        new ChatAgentRequest(
-            7L,
-            "s_123",
-            "hello",
-            java.util.List.of(tempDir.toString()),
-            PermissionMode.ACCEPT_EDITS);
+    AgentProperties properties = properties(false, false, false, false);
+
+    config.applyFilesystem(builder, properties, emptyRedisProvider());
+
+    assertThat(objectField(builder, "localFilesystemSpec")).isNotNull();
+    assertThat(objectField(builder, "remoteFilesystemSpec")).isNull();
+  }
+
+  @Test
+  void distributedDeploymentRequiresRedisBackedRemoteFilesystem() {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+    AgentProperties distributed =
+        new AgentProperties(
+            new AgentProperties.Deployment("distributed"),
+            new AgentProperties.AgentScope(true),
+            new AgentProperties.Workspace(tempDir.toString()),
+            new AgentProperties.Memory(true),
+            new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
+            new AgentProperties.StateStore(
+                "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
+            new AgentProperties.Permission("DEFAULT"),
+            new AgentProperties.Tools(false, false, false, false));
+
+    assertThatThrownBy(() -> config.applyFilesystem(builder, distributed, emptyRedisProvider()))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("Redis");
+  }
+
+  @Test
+  void requestScopeAddsPermissionContextToHarnessBuilder() {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+    ChatAgentRequest request = new ChatAgentRequest(7L, "s_123", "hello", PermissionMode.ACCEPT_EDITS);
 
     config.applyRequestScope(builder, request);
 
-    assertThat((java.util.List<?>) objectField(builder, "skillRepositories"))
-        .singleElement()
-        .isInstanceOf(FileSystemSkillRepository.class);
     PermissionContextState permissionContext = config.permissionContext(request);
     assertThat(permissionContext.getMode())
         .isEqualTo(io.agentscope.core.permission.PermissionMode.ACCEPT_EDITS);
@@ -249,13 +279,21 @@ class AgentScopeConfigTest {
     return new AgentProperties(
         new AgentProperties.Deployment("local"),
         new AgentProperties.AgentScope(true),
+        new AgentProperties.Workspace(tempDir.toString()),
+        new AgentProperties.Memory(true),
         new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
         new AgentProperties.StateStore(
             "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-        new AgentProperties.Skill("mysql", "./.agentscope/cache/skills"),
+        new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
         new AgentProperties.Permission("DEFAULT"),
         new AgentProperties.Tools(
             fileToolsEnabled, shellEnabled, httpFetchEnabled, mcpEnabled));
+  }
+
+  private org.springframework.beans.factory.ObjectProvider<ReactiveStringRedisTemplate>
+      emptyRedisProvider() {
+    return new org.springframework.beans.factory.support.DefaultListableBeanFactory()
+        .getBeanProvider(ReactiveStringRedisTemplate.class);
   }
 
   private boolean booleanField(Object target, String fieldName) throws Exception {

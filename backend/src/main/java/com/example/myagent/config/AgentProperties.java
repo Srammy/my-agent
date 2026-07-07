@@ -9,6 +9,8 @@ import org.springframework.validation.annotation.Validated;
 public record AgentProperties(
     @DefaultValue Deployment deployment,
     @DefaultValue AgentScope agentScope,
+    @DefaultValue Workspace workspace,
+    @DefaultValue Memory memory,
     @DefaultValue Model model,
     @DefaultValue StateStore stateStore,
     @DefaultValue Skill skill,
@@ -18,6 +20,10 @@ public record AgentProperties(
   public record Deployment(@DefaultValue("local") String mode) {}
 
   public record AgentScope(@DefaultValue("false") boolean enabled) {}
+
+  public record Workspace(@DefaultValue("./.agentscope/workspace") String path) {}
+
+  public record Memory(@DefaultValue("true") boolean enabled) {}
 
   public record Model(
       @DefaultValue("dashscope") String provider,
@@ -34,8 +40,30 @@ public record AgentProperties(
   }
 
   public record Skill(
-      @DefaultValue("mysql") String storage,
-      @DefaultValue("./.agentscope/cache/skills") String cacheDir) {}
+      @DefaultValue("agentscope") String storage,
+      @DefaultValue("prod") String environment,
+      @DefaultValue("10") int canaryPercent,
+      @DefaultValue("true") boolean manageToolEnabled,
+      @DefaultValue("true") boolean securityScanEnabled,
+      @DefaultValue("web") String approvalMode) {
+
+    public Skill() {
+      this("agentscope", "prod", 10, true, true, "web");
+    }
+
+    @Deprecated(forRemoval = true)
+    public Skill(String storage, String cacheDir) {
+      this(storage, cacheDir, 10, true, true, "web");
+    }
+
+    @Deprecated(forRemoval = true)
+    public String cacheDir() {
+      if (environment.contains("/") || environment.contains("\\") || environment.startsWith(".")) {
+        return environment;
+      }
+      return "./.agentscope/cache/skills";
+    }
+  }
 
   public record Permission(@DefaultValue("DEFAULT") String defaultMode) {}
 
