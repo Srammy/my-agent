@@ -3,7 +3,6 @@ import { computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ChatTranscript from '../components/ChatTranscript.vue'
 import Composer from '../components/Composer.vue'
-import EvolutionPanel from '../components/EvolutionPanel.vue'
 import ModelInfoPanel from '../components/ModelInfoPanel.vue'
 import PermissionPanel from '../components/PermissionPanel.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
@@ -121,9 +120,6 @@ async function logout() {
           </el-tab-pane>
           <el-tab-pane label="Skill">
             <SkillPanel />
-          </el-tab-pane>
-          <el-tab-pane label="Evolution">
-            <EvolutionPanel />
           </el-tab-pane>
         </el-tabs>
       </aside>
