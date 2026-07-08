@@ -21,87 +21,71 @@ import reactor.core.scheduler.Schedulers;
 @RequestMapping("/api/skills")
 public class SkillController {
 
-  private final SkillService skillService;
+  private final AgentScopeWorkspaceService workspaceService;
 
-  public SkillController(SkillService skillService) {
-    this.skillService = skillService;
-  }
-
-  @GetMapping("/system")
-  public Mono<List<SkillDto>> listSystemSkills(@AuthenticationPrincipal CurrentUser currentUser) {
-    return Mono.fromCallable(() -> skillService.listSystemSkills(currentUser))
-        .subscribeOn(Schedulers.boundedElastic());
+  public SkillController(AgentScopeWorkspaceService workspaceService) {
+    this.workspaceService = workspaceService;
   }
 
   @GetMapping("/mine")
-  public Mono<List<SkillDto>> listMySkills(@AuthenticationPrincipal CurrentUser currentUser) {
-    return Mono.fromCallable(() -> skillService.listMySkills(currentUser))
+  public Mono<List<SkillDto>> listMine(@AuthenticationPrincipal CurrentUser currentUser) {
+    return Mono.fromCallable(() -> workspaceService.listSkills(currentUser))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
   @PostMapping("/mine")
-  public Mono<SkillDto> createMySkill(
+  public Mono<SkillDto> createMine(
       @AuthenticationPrincipal CurrentUser currentUser, @RequestBody SkillCreateRequest request) {
-    return Mono.fromCallable(() -> skillService.createMySkill(currentUser, request))
+    return Mono.fromCallable(() -> workspaceService.createSkill(currentUser, request))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
-  @PutMapping("/mine/{skillId}")
-  public Mono<SkillDto> updateMySkill(
+  @PutMapping("/mine/{skillName}")
+  public Mono<SkillDto> updateMine(
       @AuthenticationPrincipal CurrentUser currentUser,
-      @PathVariable Long skillId,
+      @PathVariable String skillName,
       @RequestBody SkillCreateRequest request) {
-    return Mono.fromCallable(() -> skillService.updateMySkill(currentUser, skillId, request))
+    return Mono.fromCallable(() -> workspaceService.updateSkill(currentUser, skillName, request))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
-  @DeleteMapping("/mine/{skillId}")
+  @DeleteMapping("/mine/{skillName}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
-  public Mono<Void> deleteMySkill(
-      @AuthenticationPrincipal CurrentUser currentUser, @PathVariable Long skillId) {
-    return Mono.fromRunnable(() -> skillService.deleteMySkill(currentUser, skillId))
+  public Mono<Void> deleteMine(
+      @AuthenticationPrincipal CurrentUser currentUser, @PathVariable String skillName) {
+    return Mono.fromRunnable(() -> workspaceService.deleteSkill(currentUser, skillName))
         .subscribeOn(Schedulers.boundedElastic())
         .then();
   }
 
-  @GetMapping("/{skillId}/files")
+  @GetMapping("/{skillName}/files")
   public Mono<List<SkillFileDto>> listFiles(
-      @AuthenticationPrincipal CurrentUser currentUser, @PathVariable Long skillId) {
-    return Mono.fromCallable(() -> skillService.listFiles(currentUser, skillId))
+      @AuthenticationPrincipal CurrentUser currentUser, @PathVariable String skillName) {
+    return Mono.fromCallable(() -> workspaceService.listFiles(currentUser, skillName))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
-  @PutMapping(path = "/{skillId}/files/{*path}", consumes = MediaType.TEXT_PLAIN_VALUE)
+  @PutMapping(path = "/{skillName}/files/{*path}", consumes = MediaType.TEXT_PLAIN_VALUE)
   public Mono<SkillFileDto> upsertFile(
       @AuthenticationPrincipal CurrentUser currentUser,
-      @PathVariable Long skillId,
+      @PathVariable String skillName,
       @PathVariable String path,
       @RequestBody String content) {
     return Mono.fromCallable(
-            () -> skillService.upsertFile(currentUser, skillId, trimCapturedPath(path), content))
+            () -> workspaceService.upsertFile(currentUser, skillName, trimCapturedPath(path), content))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
-  @DeleteMapping("/{skillId}/files/{*path}")
+  @DeleteMapping("/{skillName}/files/{*path}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public Mono<Void> deleteFile(
       @AuthenticationPrincipal CurrentUser currentUser,
-      @PathVariable Long skillId,
+      @PathVariable String skillName,
       @PathVariable String path) {
     return Mono.fromRunnable(
-            () -> skillService.deleteFile(currentUser, skillId, trimCapturedPath(path)))
+            () -> workspaceService.deleteFile(currentUser, skillName, trimCapturedPath(path)))
         .subscribeOn(Schedulers.boundedElastic())
         .then();
-  }
-
-  @PutMapping("/{skillId}/enabled")
-  public Mono<SkillDto> setEnabled(
-      @AuthenticationPrincipal CurrentUser currentUser,
-      @PathVariable Long skillId,
-      @RequestBody SkillEnabledRequest request) {
-    return Mono.fromCallable(
-            () -> skillService.setEnabled(currentUser, skillId, Boolean.TRUE.equals(request.enabled())))
-        .subscribeOn(Schedulers.boundedElastic());
   }
 
   private static String trimCapturedPath(String path) {

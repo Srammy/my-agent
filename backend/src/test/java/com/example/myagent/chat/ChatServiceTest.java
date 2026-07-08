@@ -9,9 +9,7 @@ import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.ChatSessionEntity;
 import com.example.myagent.session.SessionService;
-import com.example.myagent.skill.SkillMaterializer;
 import java.time.LocalDateTime;
-import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,32 +27,25 @@ class ChatServiceTest {
 
   @Mock private SessionService sessionService;
   @Mock private ChatAgentGateway chatAgentGateway;
-  @Mock private SkillMaterializer skillMaterializer;
   @Mock private PermissionService permissionService;
 
   @Test
-  void streamMaterializesCurrentUserSkillsBeforeCallingGateway() {
+  void streamBuildsCurrentUsersChatRequestBeforeCallingGateway() {
     when(sessionService.requireOwnedSession(USER, "s_123"))
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
-    when(skillMaterializer.materializeForUser(USER.id()))
-        .thenReturn(Path.of("/tmp/materialized-skills"));
     when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.ACCEPT_EDITS);
     when(chatAgentGateway.stream(org.mockito.ArgumentMatchers.any()))
         .thenReturn(Flux.just(StreamEventDto.replyStart(), StreamEventDto.done()));
 
-    ChatService chatService =
-        new ChatService(sessionService, chatAgentGateway, skillMaterializer, permissionService);
+    ChatService chatService = new ChatService(sessionService, chatAgentGateway, permissionService);
 
     List<StreamEventDto> events = chatService.stream(USER, "s_123", "hello").collectList().block();
 
     assertThat(events).extracting(StreamEventDto::type).containsExactly("reply_start", "done");
 
     ArgumentCaptor<ChatAgentRequest> requestCaptor = ArgumentCaptor.forClass(ChatAgentRequest.class);
-    org.mockito.InOrder inOrder =
-        org.mockito.Mockito.inOrder(
-            sessionService, skillMaterializer, permissionService, chatAgentGateway);
+    org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(sessionService, permissionService, chatAgentGateway);
     inOrder.verify(sessionService).requireOwnedSession(USER, "s_123");
-    inOrder.verify(skillMaterializer).materializeForUser(USER.id());
     inOrder.verify(permissionService).getModeForOwnedSession("s_123");
     inOrder.verify(chatAgentGateway).stream(requestCaptor.capture());
     assertThat(requestCaptor.getValue())

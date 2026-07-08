@@ -1,12 +1,3 @@
 package com.example.myagent.skill;
 
-import java.time.LocalDateTime;
-
-public record SkillDto(
-    Long id,
-    String name,
-    String description,
-    String ownerType,
-    boolean enabled,
-    boolean editable,
-    LocalDateTime updatedAt) {}
+public record SkillDto(String name, String description, boolean editable, String updatedAt) {}

@@ -7,8 +7,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.myagent.auth.CurrentUser;
+import com.example.myagent.skill.AgentScopeWorkspaceService;
 import com.example.myagent.skill.SkillCreateRequest;
-import com.example.myagent.skill.SkillService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,13 +28,13 @@ class EvolutionServiceTest {
   private static final CurrentUser ADMIN = new CurrentUser(1L, "root", "ADMIN");
 
   @Mock private EvolutionProposalMapper proposalMapper;
-  @Mock private SkillService skillService;
+  @Mock private AgentScopeWorkspaceService workspaceService;
 
   private EvolutionService evolutionService;
 
   @BeforeEach
   void setUp() {
-    evolutionService = new EvolutionService(proposalMapper, skillService, new ObjectMapper());
+    evolutionService = new EvolutionService(proposalMapper, workspaceService, new ObjectMapper());
   }
 
   @Test
@@ -219,16 +219,16 @@ class EvolutionServiceTest {
 
     evolutionService.apply(USER, 10L);
 
-    verify(skillService).createMySkill(USER, new SkillCreateRequest("helper", "Useful"));
+    verify(workspaceService).createSkill(USER, new SkillCreateRequest("helper", "Useful"));
 
     EvolutionProposalEntity update = proposal(11L, USER.id(), EvolutionProposalStatus.APPROVED);
     update.setType(EvolutionProposalType.SKILL);
-    update.setContent("{\"skillId\":99,\"name\":\"helper2\",\"description\":\"Better\"}");
+    update.setContent("{\"skillName\":\"helper\",\"name\":\"helper2\",\"description\":\"Better\"}");
     when(proposalMapper.selectById(11L)).thenReturn(update);
 
     evolutionService.apply(USER, 11L);
 
-    verify(skillService).updateMySkill(USER, 99L, new SkillCreateRequest("helper2", "Better"));
+    verify(workspaceService).updateSkill(USER, "helper", new SkillCreateRequest("helper2", "Better"));
   }
 
   @Test

@@ -2,8 +2,8 @@ package com.example.myagent.evolution;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.example.myagent.auth.CurrentUser;
+import com.example.myagent.skill.AgentScopeWorkspaceService;
 import com.example.myagent.skill.SkillCreateRequest;
-import com.example.myagent.skill.SkillService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
@@ -18,15 +18,15 @@ import org.springframework.web.server.ResponseStatusException;
 public class EvolutionService {
 
   private final EvolutionProposalMapper proposalMapper;
-  private final SkillService skillService;
+  private final AgentScopeWorkspaceService workspaceService;
   private final ObjectMapper objectMapper;
 
   public EvolutionService(
       EvolutionProposalMapper proposalMapper,
-      SkillService skillService,
+      AgentScopeWorkspaceService workspaceService,
       ObjectMapper objectMapper) {
     this.proposalMapper = proposalMapper;
-    this.skillService = skillService;
+    this.workspaceService = workspaceService;
     this.objectMapper = objectMapper;
   }
 
@@ -134,12 +134,12 @@ public class EvolutionService {
     JsonNode content = readJsonObject(proposal.getContent());
     String name = textField(content, "name");
     String description = textField(content, "description");
-    if (content.hasNonNull("skillId")) {
-      skillService.updateMySkill(
-          currentUser, content.get("skillId").asLong(), new SkillCreateRequest(name, description));
+    if (content.hasNonNull("skillName")) {
+      workspaceService.updateSkill(
+          currentUser, content.get("skillName").asText(), new SkillCreateRequest(name, description));
       return;
     }
-    skillService.createMySkill(currentUser, new SkillCreateRequest(name, description));
+    workspaceService.createSkill(currentUser, new SkillCreateRequest(name, description));
   }
 
   private void applyToolPolicy(EvolutionProposalEntity proposal) {

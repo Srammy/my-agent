@@ -1,11 +1,8 @@
 import { ApiError, apiDelete, apiGet, apiPost, apiPut, TOKEN_KEY } from './client'
 
 export interface Skill {
-  id: number
   name: string
   description: string
-  ownerType: string
-  enabled: boolean
   editable: boolean
   updatedAt: string
 }
@@ -56,15 +53,11 @@ async function textRequest<T>(method: 'PUT' | 'DELETE', path: string, body?: str
     const message =
       data && typeof data === 'object' && 'message' in data
         ? String((data as { message?: unknown }).message)
-        : '请求失败，请稍后重试'
+        : '璇锋眰澶辫触锛岃绋嶅悗閲嶈瘯'
     throw new ApiError(message, response.status, data)
   }
 
   return data as T
-}
-
-export function listSystemSkills() {
-  return apiGet<Skill[]>('/api/skills/system')
 }
 
 export function listMySkills() {
@@ -75,30 +68,29 @@ export function createMySkill(payload: SkillCreatePayload) {
   return apiPost<Skill>('/api/skills/mine', payload)
 }
 
-export function updateMySkill(skillId: number, payload: SkillCreatePayload) {
-  return apiPut<Skill>(`/api/skills/mine/${skillId}`, payload)
+export function updateMySkill(skillName: string, payload: SkillCreatePayload) {
+  return apiPut<Skill>(`/api/skills/mine/${encodeURIComponent(skillName)}`, payload)
 }
 
-export function deleteMySkill(skillId: number) {
-  return apiDelete<null>(`/api/skills/mine/${skillId}`)
+export function deleteMySkill(skillName: string) {
+  return apiDelete<null>(`/api/skills/mine/${encodeURIComponent(skillName)}`)
 }
 
-export function listSkillFiles(skillId: number) {
-  return apiGet<SkillFile[]>(`/api/skills/${skillId}/files`)
+export function listSkillFiles(skillName: string) {
+  return apiGet<SkillFile[]>(`/api/skills/${encodeURIComponent(skillName)}/files`)
 }
 
-export function upsertSkillFile(skillId: number, path: string, content: string) {
+export function upsertSkillFile(skillName: string, path: string, content: string) {
   return textRequest<SkillFile>(
     'PUT',
-    `/api/skills/${skillId}/files/${encodeFilePath(path)}`,
+    `/api/skills/${encodeURIComponent(skillName)}/files/${encodeFilePath(path)}`,
     content
   )
 }
 
-export function deleteSkillFile(skillId: number, path: string) {
-  return textRequest<null>('DELETE', `/api/skills/${skillId}/files/${encodeFilePath(path)}`)
-}
-
-export function setSkillEnabled(skillId: number, enabled: boolean) {
-  return apiPut<Skill>(`/api/skills/${skillId}/enabled`, { enabled })
+export function deleteSkillFile(skillName: string, path: string) {
+  return textRequest<null>(
+    'DELETE',
+    `/api/skills/${encodeURIComponent(skillName)}/files/${encodeFilePath(path)}`
+  )
 }

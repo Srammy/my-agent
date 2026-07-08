@@ -13,6 +13,9 @@ import io.agentscope.core.state.JsonFileAgentStateStore;
 import io.agentscope.harness.agent.DistributedStore;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.IsolationScope;
+import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
+import io.agentscope.harness.agent.filesystem.local.LocalFilesystem;
+import io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem;
 import io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
@@ -75,6 +78,16 @@ public class AgentScopeConfig {
             HarnessAgent::close);
       }
     };
+  }
+
+  @Bean
+  AbstractFilesystem workspaceFilesystem(
+      AgentProperties agentProperties,
+      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
+    if (isDistributed(agentProperties)) {
+      return new RemoteFilesystem(buildBaseStore(agentProperties, redisTemplateProvider));
+    }
+    return new LocalFilesystem(Path.of(agentProperties.workspace().path()));
   }
 
   AgentToolPolicy toolPolicy(AgentProperties agentProperties) {

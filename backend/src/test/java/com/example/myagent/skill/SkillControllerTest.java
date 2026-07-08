@@ -6,13 +6,9 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
 import com.example.myagent.auth.CurrentUser;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -32,36 +28,34 @@ import reactor.test.StepVerifier;
 class SkillControllerTest {
 
   private static final CurrentUser USER = new CurrentUser(1L, "alice", "USER");
-  private static final SkillDto SYSTEM_SKILL =
-      new SkillDto(5L, "shared", "Shared skill", SkillService.OWNER_TYPE_SYSTEM, true, false, null);
+  private static final SkillDto SKILL =
+      new SkillDto("java-helper", "Java helper", true, "2026-07-08T10:00:00");
 
   @Autowired private WebTestClient webTestClient;
 
-  @MockBean private SkillService skillService;
+  @MockBean private AgentScopeWorkspaceService workspaceService;
 
   @Test
-  void getSystemSkillsReturnsCurrentUsersView() {
-    when(skillService.listSystemSkills(USER)).thenReturn(List.of(SYSTEM_SKILL));
+  void getMineReturnsWorkspaceSkills() {
+    when(workspaceService.listSkills(USER)).thenReturn(List.of(SKILL));
 
     authenticatedClient()
         .get()
-        .uri("/api/skills/system")
+        .uri("/api/skills/mine")
         .exchange()
         .expectStatus()
         .isOk()
         .expectHeader()
         .contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
         .expectBody()
-        .jsonPath("$[0].id")
-        .isEqualTo(5)
         .jsonPath("$[0].name")
-        .isEqualTo("shared")
-        .jsonPath("$[0].ownerType")
-        .isEqualTo(SkillService.OWNER_TYPE_SYSTEM)
-        .jsonPath("$[0].enabled")
+        .isEqualTo("java-helper")
+        .jsonPath("$[0].description")
+        .isEqualTo("Java helper")
+        .jsonPath("$[0].editable")
         .isEqualTo(true);
 
-    verify(skillService).listSystemSkills(USER);
+    verify(workspaceService).listSkills(USER);
   }
 
   @Test
@@ -72,12 +66,13 @@ class SkillControllerTest {
             "hello",
             "text/markdown",
             false,
-            LocalDateTime.parse("2026-07-04T10:00:00"));
-    when(skillService.upsertFile(USER, 5L, "references/guides/setup.md", "hello")).thenReturn(file);
+            "2026-07-08T10:00:00");
+    when(workspaceService.upsertFile(USER, "java-helper", "references/guides/setup.md", "hello"))
+        .thenReturn(file);
 
     authenticatedClient()
         .put()
-        .uri("/api/skills/5/files/references/guides/setup.md")
+        .uri("/api/skills/java-helper/files/references/guides/setup.md")
         .contentType(MediaType.TEXT_PLAIN)
         .bodyValue("hello")
         .exchange()
@@ -87,20 +82,21 @@ class SkillControllerTest {
         .jsonPath("$.path")
         .isEqualTo("references/guides/setup.md");
 
-    verify(skillService).upsertFile(USER, 5L, "references/guides/setup.md", "hello");
+    verify(workspaceService)
+        .upsertFile(USER, "java-helper", "references/guides/setup.md", "hello");
   }
 
   @Test
-  void listSystemSkillsOffloadsBlockingServiceCallToBoundedElasticThread() {
-    SkillController controller = new SkillController(skillService);
+  void listMineOffloadsBlockingServiceCallToBoundedElasticThread() {
+    SkillController controller = new SkillController(workspaceService);
     AtomicReference<String> serviceThreadName = new AtomicReference<>();
 
-    when(skillService.listSystemSkills(USER))
+    when(workspaceService.listSkills(USER))
         .thenAnswer(
             (Answer<List<SkillDto>>)
                 invocation -> {
                   serviceThreadName.set(Thread.currentThread().getName());
-                  return List.of(SYSTEM_SKILL);
+                  return List.of(SKILL);
                 });
 
     AtomicReference<String> subscriberThreadName = new AtomicReference<>();
@@ -108,8 +104,8 @@ class SkillControllerTest {
         new Thread(
             () -> {
               subscriberThreadName.set(Thread.currentThread().getName());
-              StepVerifier.create(controller.listSystemSkills(USER))
-                  .expectNext(List.of(SYSTEM_SKILL))
+              StepVerifier.create(controller.listMine(USER))
+                  .expectNext(List.of(SKILL))
                   .verifyComplete();
             },
             "skill-subscriber");

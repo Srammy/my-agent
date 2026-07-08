@@ -10,9 +10,7 @@ import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.ChatSessionEntity;
 import com.example.myagent.session.SessionService;
-import com.example.myagent.skill.SkillMaterializer;
 import java.time.LocalDateTime;
-import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -38,7 +36,6 @@ class ChatControllerTest {
   @Autowired private WebTestClient webTestClient;
 
   @MockBean private SessionService sessionService;
-  @MockBean private SkillMaterializer skillMaterializer;
   @MockBean private PermissionService permissionService;
 
   @Test
@@ -75,8 +72,6 @@ class ChatControllerTest {
   void postStreamReturnsNdjsonEventsForOwnedSession() {
     when(sessionService.requireOwnedSession(USER, "s_123"))
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
-    when(skillMaterializer.materializeForUser(USER.id()))
-        .thenReturn(Path.of("/tmp/materialized-skills"));
     when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
 
     authenticatedClient()
