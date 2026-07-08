@@ -361,12 +361,12 @@ class SkillMaterializerTest {
     return new AgentProperties(
         new AgentProperties.Deployment("local"),
         new AgentProperties.AgentScope(false),
-        new AgentProperties.Workspace("./.agentscope/workspace"),
+        new AgentProperties.Workspace(cacheDir.toString()),
         new AgentProperties.Memory(true),
         new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
         new AgentProperties.StateStore(
             "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-        new AgentProperties.Skill("mysql", cacheDir.toString()),
+        new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
         new AgentProperties.Permission("DEFAULT"),
         new AgentProperties.Tools(false, false, false, false));
   }

@@ -50,11 +50,11 @@ public class SkillMaterializer {
           "LPT9");
 
   private final SkillService skillService;
-  private final Path cacheRoot;
+  private final Path workspaceRoot;
 
   public SkillMaterializer(SkillService skillService, AgentProperties agentProperties) {
     this.skillService = skillService;
-    this.cacheRoot = Path.of(agentProperties.skill().cacheDir()).toAbsolutePath().normalize();
+    this.workspaceRoot = Path.of(agentProperties.workspace().path()).toAbsolutePath().normalize();
   }
 
   /**
@@ -64,10 +64,10 @@ public class SkillMaterializer {
    */
   public Path materializeForUser(Long userId) {
     try {
-      Files.createDirectories(cacheRoot);
-      Path userRoot = resolveDirectory(cacheRoot, userId.toString());
+      Files.createDirectories(workspaceRoot);
+      Path userRoot = resolveDirectory(workspaceRoot, userId.toString());
       Path tempUserRoot =
-          resolveDirectory(resolveDirectory(cacheRoot, TEMP_ROOT_DIRECTORY), userId.toString());
+          resolveDirectory(resolveDirectory(workspaceRoot, TEMP_ROOT_DIRECTORY), userId.toString());
       Files.createDirectories(userRoot);
 
       Set<String> activeDirectories = new HashSet<>();

@@ -4,7 +4,6 @@ import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.skill.SkillMaterializer;
-import java.util.List;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -33,11 +32,11 @@ public class ChatService {
     return Mono.fromCallable(
             () -> {
               sessionService.requireOwnedSession(currentUser, sessionId);
+              skillMaterializer.materializeForUser(currentUser.id());
               return new ChatAgentRequest(
                   currentUser.id(),
                   sessionId,
                   message,
-                  List.of(skillMaterializer.materializeForUser(currentUser.id()).toString()),
                   permissionService.getModeForOwnedSession(sessionId));
             })
         .subscribeOn(Schedulers.boundedElastic())

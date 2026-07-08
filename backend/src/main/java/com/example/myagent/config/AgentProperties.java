@@ -45,25 +45,7 @@ public record AgentProperties(
       @DefaultValue("10") int canaryPercent,
       @DefaultValue("true") boolean manageToolEnabled,
       @DefaultValue("true") boolean securityScanEnabled,
-      @DefaultValue("web") String approvalMode) {
-
-    public Skill() {
-      this("agentscope", "prod", 10, true, true, "web");
-    }
-
-    @Deprecated(forRemoval = true)
-    public Skill(String storage, String cacheDir) {
-      this(storage, cacheDir, 10, true, true, "web");
-    }
-
-    @Deprecated(forRemoval = true)
-    public String cacheDir() {
-      if (environment.contains("/") || environment.contains("\\") || environment.startsWith(".")) {
-        return environment;
-      }
-      return "./.agentscope/cache/skills";
-    }
-  }
+      @DefaultValue("web") String approvalMode) {}
 
   public record Permission(@DefaultValue("DEFAULT") String defaultMode) {}
 

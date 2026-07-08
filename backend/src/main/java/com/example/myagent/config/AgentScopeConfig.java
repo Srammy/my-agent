@@ -125,11 +125,7 @@ public class AgentScopeConfig {
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
     builder.workspace(agentProperties.workspace().path());
-    if ("distributed".equalsIgnoreCase(agentProperties.deployment().mode())) {
-      ReactiveStringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
-      if (redisTemplate == null) {
-        throw new IllegalStateException("Redis is required for distributed AgentScope filesystem");
-      }
+    if (isDistributed(agentProperties)) {
       builder.filesystem(
           new RemoteFilesystemSpec(buildBaseStore(agentProperties, redisTemplateProvider))
               .isolationScope(IsolationScope.USER));
@@ -150,7 +146,7 @@ public class AgentScopeConfig {
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
     AgentStateStore stateStore = buildAgentStateStore(agentProperties, redisTemplateProvider);
     builder.stateStore(stateStore);
-    if ("distributed".equalsIgnoreCase(agentProperties.deployment().mode())) {
+    if (isDistributed(agentProperties)) {
       builder.distributedStore(
           DistributedStore.builder()
               .agentStateStore(stateStore)
@@ -166,6 +162,9 @@ public class AgentScopeConfig {
     if ("redis".equalsIgnoreCase(agentProperties.stateStore().type()) && redisTemplate != null) {
       return new RedisAgentStateStore(redisTemplate, agentProperties.stateStore().redis().keyPrefix());
     }
+    if (isDistributed(agentProperties)) {
+      throw new IllegalStateException("Distributed AgentScope requires agent.state-store.type=redis and a Redis bean");
+    }
     return new JsonFileAgentStateStore(Path.of(".agentscope/state"));
   }
 
@@ -177,7 +176,14 @@ public class AgentScopeConfig {
       return new RedisBaseStore(
           redisTemplate, agentProperties.stateStore().redis().keyPrefix() + "base:");
     }
+    if (isDistributed(agentProperties)) {
+      throw new IllegalStateException("Distributed AgentScope requires agent.state-store.type=redis and a Redis bean");
+    }
     return new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
+  }
+
+  private boolean isDistributed(AgentProperties agentProperties) {
+    return "distributed".equalsIgnoreCase(agentProperties.deployment().mode());
   }
 
   private Model buildDashScopeModel(AgentProperties.Model modelProperties, String apiKey) {

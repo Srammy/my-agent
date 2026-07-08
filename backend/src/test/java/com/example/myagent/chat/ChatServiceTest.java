@@ -59,11 +59,6 @@ class ChatServiceTest {
     inOrder.verify(chatAgentGateway).stream(requestCaptor.capture());
     assertThat(requestCaptor.getValue())
         .isEqualTo(
-            new ChatAgentRequest(
-                USER.id(),
-                "s_123",
-                "hello",
-                List.of(Path.of("/tmp/materialized-skills").toString()),
-                PermissionMode.ACCEPT_EDITS));
+            new ChatAgentRequest(USER.id(), "s_123", "hello", PermissionMode.ACCEPT_EDITS));
   }
 }

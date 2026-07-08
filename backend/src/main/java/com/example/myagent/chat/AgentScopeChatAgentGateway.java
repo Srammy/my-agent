@@ -30,11 +30,6 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
             .userId(request.userId().toString())
             .sessionId(request.sessionId())
             .build();
-    if (!request.materializedSkillRoots().isEmpty()) {
-      runtimeContext.put(
-          ChatAgentRequest.MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY,
-          request.materializedSkillRoots());
-    }
     runtimeContext.put(ChatAgentRequest.PERMISSION_MODE_CONTEXT_KEY, request.permissionMode().name());
 
     return executor

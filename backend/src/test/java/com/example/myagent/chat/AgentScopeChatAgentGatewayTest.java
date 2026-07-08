@@ -21,8 +21,6 @@ import reactor.core.publisher.Flux;
 @ExtendWith(MockitoExtension.class)
 class AgentScopeChatAgentGatewayTest {
 
-  private static final String MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY =
-      ChatAgentRequest.MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY;
   private static final String PERMISSION_MODE_CONTEXT_KEY =
       ChatAgentRequest.PERMISSION_MODE_CONTEXT_KEY;
 
@@ -41,13 +39,7 @@ class AgentScopeChatAgentGatewayTest {
 
     var events =
         gateway
-            .stream(
-                new ChatAgentRequest(
-                    7L,
-                    "s_123",
-                    "hello",
-                    java.util.List.of("/tmp/skills/7"),
-                    PermissionMode.DEFAULT))
+            .stream(new ChatAgentRequest(7L, "s_123", "hello", PermissionMode.DEFAULT))
             .collectList()
             .block();
 
@@ -64,8 +56,7 @@ class AgentScopeChatAgentGatewayTest {
     RuntimeContext runtimeContext = (RuntimeContext) runtimeContextCaptor.getValue();
     assertThat(runtimeContext.getUserId()).isEqualTo("7");
     assertThat(runtimeContext.getSessionId()).isEqualTo("s_123");
-    assertThat(runtimeContext.get(MATERIALIZED_SKILL_ROOTS_CONTEXT_KEY, java.util.List.class))
-        .containsExactly("/tmp/skills/7");
+    assertThat(runtimeContext.get("materializedSkillRoots", java.util.List.class)).isNull();
     assertThat(runtimeContext.get(PERMISSION_MODE_CONTEXT_KEY, String.class))
         .isEqualTo(PermissionMode.DEFAULT.name());
   }
@@ -79,13 +70,7 @@ class AgentScopeChatAgentGatewayTest {
 
     var events =
         gateway
-            .stream(
-                new ChatAgentRequest(
-                    7L,
-                    "s_123",
-                    "hello",
-                    java.util.List.of("/tmp/skills/7"),
-                    PermissionMode.BYPASS))
+            .stream(new ChatAgentRequest(7L, "s_123", "hello", PermissionMode.BYPASS))
             .collectList()
             .block();
 
@@ -104,13 +89,7 @@ class AgentScopeChatAgentGatewayTest {
 
     var events =
         gateway
-            .stream(
-                new ChatAgentRequest(
-                    7L,
-                    "s_123",
-                    "hello",
-                    java.util.List.of("/tmp/skills/7"),
-                    PermissionMode.EXPLORE))
+            .stream(new ChatAgentRequest(7L, "s_123", "hello", PermissionMode.EXPLORE))
             .collectList()
             .block();
 
