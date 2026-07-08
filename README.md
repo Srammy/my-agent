@@ -109,3 +109,22 @@ AGENT_SCOPE_ENABLED=true
 文件、shell、HTTP fetch 和 MCP 工具可能会根据运行时能力访问本地文件、执行命令、连接网络或调用外部服务。只应在可信的开发环境中启用这些工具。
 
 权限模式同样重要。`DEFAULT`、`EXPLORE` 和 `ACCEPT_EDITS` 是相对更安全的交互模式。`DONT_ASK`，尤其是 `BYPASS`，会降低或移除确认边界，只应在可信沙箱中配合可丢弃的凭证和数据使用。
+
+## AgentScope 原生记忆与 Skill 体系
+
+### 记忆
+记忆由 AgentScope Harness 自动维护，无需应用干预：
+- `MEMORY.md` — 精选长期记忆（每次推理注入系统提示）
+- `memory/YYYY-MM-DD.md` — 每日原始记忆日志
+
+### Skill 管理
+Skill 文件存储在 AgentScope workspace 文件系统，不使用 MySQL：
+- 正式 Skill：`skills/<skillName>/SKILL.md` + `references/`、`scripts/`、`assets/`
+- Agent 草稿：`skills/_drafts/<skillName>/`
+
+### 自学习审核
+Agent 自动创建的 Skill 草稿需通过 Web 审核界面（`/api/skill-reviews`）人工批准后才能晋升为正式 Skill，晋升后受 EnvironmentFilter 和 CanaryFilter 可见性控制。
+
+### 部署模式
+- **本地模式**（`agent.deployment.mode=local`）：Workspace 存储在 `.agentscope/workspace`
+- **分布式模式**（`agent.deployment.mode=distributed`）：通过 Redis-backed remote filesystem with `IsolationScope.USER` 实现多副本共享状态、用户隔离
