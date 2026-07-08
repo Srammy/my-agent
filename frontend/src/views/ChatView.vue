@@ -7,6 +7,7 @@ import ModelInfoPanel from '../components/ModelInfoPanel.vue'
 import PermissionPanel from '../components/PermissionPanel.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
 import SkillPanel from '../components/SkillPanel.vue'
+import SkillReviewPanel from '../components/SkillReviewPanel.vue'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
 import { useSessionsStore } from '../stores/sessions'
@@ -120,6 +121,9 @@ async function logout() {
           </el-tab-pane>
           <el-tab-pane label="Skill">
             <SkillPanel />
+          </el-tab-pane>
+          <el-tab-pane label="Skill 审核" name="skillReview">
+            <SkillReviewPanel />
           </el-tab-pane>
         </el-tabs>
       </aside>
