@@ -1,6 +1,7 @@
 package com.example.myagent.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.myagent.chat.AgentEventMapper;
@@ -9,6 +10,10 @@ import com.example.myagent.chat.ChatAgentRequest;
 import com.example.myagent.chat.ChatAgentGateway;
 import com.example.myagent.chat.StubChatAgentGateway;
 import com.example.myagent.permission.PermissionMode;
+import com.example.myagent.skillreview.SkillReviewDecisionStore;
+import com.example.myagent.skillreview.WebApprovalGate;
+import io.agentscope.harness.agent.filesystem.local.LocalFilesystem;
+import io.agentscope.harness.agent.skill.curator.SkillUsageStore;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
@@ -303,6 +308,22 @@ class AgentScopeConfigTest {
                   .hasMessageContaining("Missing required API key")
                   .hasMessageContaining("DASHSCOPE_API_KEY");
             });
+  }
+
+  @Test
+  void applySkillLearning_enablesSkillManageTool_whenConfigured() throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+    AgentProperties props = properties(false, false, false, false);
+    LocalFilesystem fs = new LocalFilesystem(tempDir);
+    SkillUsageStore usageStore = new SkillUsageStore(fs);
+    SkillReviewDecisionStore decisionStore = new SkillReviewDecisionStore(fs);
+    WebApprovalGate webApprovalGate = new WebApprovalGate(decisionStore);
+
+    assertThatNoException().isThrownBy(() ->
+        config.applySkillLearning(builder, props, usageStore, webApprovalGate));
+
+    assertThat(booleanField(builder, "skillManageToolEnabled")).isTrue();
+    assertThat(booleanField(builder, "skillCuratorEnabled")).isTrue();
   }
 
   private AgentProperties properties(

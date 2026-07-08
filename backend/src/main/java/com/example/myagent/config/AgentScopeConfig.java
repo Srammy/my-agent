@@ -2,6 +2,7 @@ package com.example.myagent.config;
 
 import com.example.myagent.agent.AgentScopeStreamExecutor;
 import com.example.myagent.chat.ChatAgentRequest;
+import com.example.myagent.skillreview.WebApprovalGate;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
@@ -20,6 +21,16 @@ import io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
 import io.agentscope.harness.agent.memory.MemoryConfig;
+import io.agentscope.harness.agent.skill.curator.CanaryFilter;
+import io.agentscope.harness.agent.skill.curator.CompositeFilter;
+import io.agentscope.harness.agent.skill.curator.EnvironmentFilter;
+import io.agentscope.harness.agent.skill.curator.LocalApprovalGate;
+import io.agentscope.harness.agent.skill.curator.RejectAllGate;
+import io.agentscope.harness.agent.skill.curator.SkillCuratorConfig;
+import io.agentscope.harness.agent.skill.curator.SkillPromotionGate;
+import io.agentscope.harness.agent.skill.curator.SkillUsageStore;
+import io.agentscope.harness.agent.skill.curator.SkillVisibilityFilter;
+import io.agentscope.harness.agent.tool.SkillManageConfig;
 import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -65,12 +76,14 @@ public class AgentScopeConfig {
   AgentScopeStreamExecutor agentScopeStreamExecutor(
       Model agentScopeModel,
       AgentProperties agentProperties,
-      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
+      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider,
+      SkillUsageStore skillUsageStore,
+      WebApprovalGate webApprovalGate) {
     return new AgentScopeStreamExecutor() {
       @Override
       public reactor.core.publisher.Flux<Object> stream(ChatAgentRequest request, Object runtimeContext) {
         return reactor.core.publisher.Flux.using(
-            () -> buildHarnessAgent(agentScopeModel, agentProperties, redisTemplateProvider, request),
+            () -> buildHarnessAgent(agentScopeModel, agentProperties, redisTemplateProvider, request, skillUsageStore, webApprovalGate),
             harnessAgent ->
                 harnessAgent
                     .streamEvents(request.message(), (RuntimeContext) runtimeContext)
@@ -88,6 +101,11 @@ public class AgentScopeConfig {
       return new RemoteFilesystem(buildBaseStore(agentProperties, redisTemplateProvider));
     }
     return new LocalFilesystem(Path.of(agentProperties.workspace().path()));
+  }
+
+  @Bean
+  SkillUsageStore skillUsageStore(AbstractFilesystem workspaceFilesystem) {
+    return new SkillUsageStore(workspaceFilesystem);
   }
 
   AgentToolPolicy toolPolicy(AgentProperties agentProperties) {
@@ -125,12 +143,15 @@ public class AgentScopeConfig {
       Model agentScopeModel,
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider,
-      ChatAgentRequest request) {
+      ChatAgentRequest request,
+      SkillUsageStore skillUsageStore,
+      WebApprovalGate webApprovalGate) {
     HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
     configureHarnessAgentBuilder(builder, toolPolicy(agentProperties), agentProperties);
     applyRequestScope(builder, request);
     applyFilesystem(builder, agentProperties, redisTemplateProvider);
     applyStateStore(builder, agentProperties, redisTemplateProvider);
+    applySkillLearning(builder, agentProperties, skillUsageStore, webApprovalGate);
     return builder.build();
   }
 
@@ -171,6 +192,40 @@ public class AgentScopeConfig {
               .baseStore(buildBaseStore(agentProperties, redisTemplateProvider))
               .build());
     }
+  }
+
+  SkillPromotionGate promotionGate(String mode, WebApprovalGate webApprovalGate) {
+    return switch (mode.toLowerCase(Locale.ROOT)) {
+      case "web" -> webApprovalGate;
+      case "local" -> new LocalApprovalGate();
+      default -> new RejectAllGate();
+    };
+  }
+
+  void applySkillLearning(
+      HarnessAgent.Builder builder,
+      AgentProperties agentProperties,
+      SkillUsageStore skillUsageStore,
+      WebApprovalGate webApprovalGate) {
+    AgentProperties.Skill skill = agentProperties.skill();
+    if (!skill.manageToolEnabled()) {
+      return;
+    }
+    SkillManageConfig skillManageConfig =
+        SkillManageConfig.builder()
+            .autoPromote(false)
+            .securityScan(skill.securityScanEnabled())
+            .build();
+    SkillVisibilityFilter visibilityFilter =
+        new CompositeFilter(
+            new EnvironmentFilter(skill.environment(), skillUsageStore),
+            new CanaryFilter(skill.canaryPercent(), skillUsageStore));
+    SkillPromotionGate gate = promotionGate(skill.approvalMode(), webApprovalGate);
+    builder
+        .environment(skill.environment())
+        .enableSkillManageTool(skillManageConfig)
+        .enableSkillPromotionGate(gate, visibilityFilter)
+        .enableSkillCurator(SkillCuratorConfig.defaults());
   }
 
   AgentStateStore buildAgentStateStore(
