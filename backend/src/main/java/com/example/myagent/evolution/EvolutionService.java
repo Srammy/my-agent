@@ -47,6 +47,10 @@ public class EvolutionService {
     if (request == null || request.type() == null) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Proposal type is required");
     }
+    if (request.type() == EvolutionProposalType.MEMORY) {
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST, "Memory is managed by AgentScope Harness");
+    }
     if (!StringUtils.hasText(request.title())) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Proposal title is required");
     }

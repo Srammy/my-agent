@@ -51,3 +51,22 @@
 - `ChatView` 已移除 Memory 标签页
 - 样式中仅删掉 `MemoryPanel` 独占选择器，没有顺手改其它 UI
 - 全仓搜索已无 `com.example.myagent.memory`、`/api/memory`、`MemoryPanel`、`user_memories` 残留引用
+## Reviewer follow-up
+
+reviewer 指出 `MEMORY` proposal 仍然能创建/审批，但 apply 已经变成 409，形成死路径。这里补了创建侧拦截：`EvolutionService#createProposal` 现在对 `EvolutionProposalType.MEMORY` 直接返回 `400 BAD_REQUEST`，消息为 `Memory is managed by AgentScope Harness`。同时前端 `EvolutionProposalType` 已移除 `MEMORY`，避免 UI/类型层继续发出该值。
+
+新增/更新的测试：
+
+- `EvolutionServiceTest#createProposalRejectsMemoryProposalType`
+- 现有 `AgentScopeConfigTest` / `EvolutionServiceTest` 继续通过
+
+## 本次补充验证
+
+1. `mvn -q "-Dtest=AgentScopeConfigTest,EvolutionServiceTest" test`
+   - 通过
+2. `npm run build`
+   - 通过
+
+## 最新提交 hash
+
+见最终回复

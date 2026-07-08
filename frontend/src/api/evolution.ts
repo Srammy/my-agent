@@ -1,6 +1,6 @@
 import { apiGet, apiPost } from './client'
 
-export type EvolutionProposalType = 'SKILL' | 'MEMORY' | 'TOOL_POLICY' | 'PROMPT' | 'CODE_PATCH'
+export type EvolutionProposalType = 'SKILL' | 'TOOL_POLICY' | 'PROMPT' | 'CODE_PATCH'
 export type EvolutionProposalStatus = 'DRAFT' | 'APPROVED' | 'REJECTED' | 'APPLIED'
 
 export interface EvolutionProposal {

@@ -69,6 +69,23 @@ class EvolutionServiceTest {
   }
 
   @Test
+  void createProposalRejectsMemoryProposalType() {
+    assertThatThrownBy(
+            () ->
+                evolutionService.createProposal(
+                    USER,
+                    new EvolutionCreateRequest(
+                        "s_1", EvolutionProposalType.MEMORY, "Add memory", "summary", "{}")))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(
+            error -> {
+              ResponseStatusException exception = (ResponseStatusException) error;
+              assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+              assertThat(exception.getReason()).contains("AgentScope Harness");
+            });
+  }
+
+  @Test
   void approveMovesDraftToApproved() {
     EvolutionProposalEntity proposal = proposal(10L, USER.id(), EvolutionProposalStatus.DRAFT);
     when(proposalMapper.selectById(10L)).thenReturn(proposal);
