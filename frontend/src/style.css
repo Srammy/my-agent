@@ -351,7 +351,6 @@ textarea {
   gap: 16px;
 }
 
-.memory-date-list,
 .proposal-actions,
 .skill-actions,
 .skill-file-actions {
@@ -361,7 +360,6 @@ textarea {
   gap: 8px;
 }
 
-.memory-date-item,
 .skill-file-item,
 .skill-list-item {
   min-width: 0;
@@ -374,7 +372,6 @@ textarea {
   text-align: left;
 }
 
-.memory-date-item:hover,
 .skill-file-item:hover,
 .skill-file-item--active,
 .skill-list-item:hover,

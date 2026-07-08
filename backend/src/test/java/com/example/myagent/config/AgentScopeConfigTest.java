@@ -178,14 +178,27 @@ class AgentScopeConfigTest {
   @Test
   void productionHarnessAgentBuilderUsesFineGrainedToolsConfig() throws Exception {
     HarnessAgent.Builder builder = HarnessAgent.builder();
+    AgentProperties properties = properties(false, false, true, true);
 
-    config.configureHarnessAgentBuilder(builder, config.toolPolicy(properties(false, false, true, true)));
+    config.configureHarnessAgentBuilder(builder, config.toolPolicy(properties), properties);
 
     assertThat(booleanField(builder, "disableFilesystemTools")).isTrue();
     assertThat(booleanField(builder, "disableShellTool")).isTrue();
     assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
     assertThat(toolsConfig(builder).getAllow()).containsExactly("http_fetch", "web_fetch");
     assertThat(toolsConfig(builder).getMcpServers()).isNull();
+  }
+
+  @Test
+  void productionHarnessKeepsMemoryHooksAndToolsEnabled() throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+    AgentProperties properties = properties(false, false, false, false);
+
+    config.configureHarnessAgentBuilder(builder, config.toolPolicy(properties), properties);
+
+    assertThat(booleanField(builder, "disableMemoryTools")).isFalse();
+    assertThat(booleanField(builder, "disableMemoryHooks")).isFalse();
+    assertThat(objectField(builder, "memoryConfig")).isNotNull();
   }
 
   @Test

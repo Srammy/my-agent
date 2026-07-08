@@ -4,7 +4,6 @@ import { useRouter } from 'vue-router'
 import ChatTranscript from '../components/ChatTranscript.vue'
 import Composer from '../components/Composer.vue'
 import EvolutionPanel from '../components/EvolutionPanel.vue'
-import MemoryPanel from '../components/MemoryPanel.vue'
 import ModelInfoPanel from '../components/ModelInfoPanel.vue'
 import PermissionPanel from '../components/PermissionPanel.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
@@ -122,9 +121,6 @@ async function logout() {
           </el-tab-pane>
           <el-tab-pane label="Skill">
             <SkillPanel />
-          </el-tab-pane>
-          <el-tab-pane label="Memory">
-            <MemoryPanel />
           </el-tab-pane>
           <el-tab-pane label="Evolution">
             <EvolutionPanel />

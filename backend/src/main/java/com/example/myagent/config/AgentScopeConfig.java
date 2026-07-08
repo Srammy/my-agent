@@ -16,6 +16,7 @@ import io.agentscope.harness.agent.IsolationScope;
 import io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
+import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -91,14 +92,18 @@ public class AgentScopeConfig {
   }
 
   HarnessAgent.Builder configureHarnessAgentBuilder(
-      HarnessAgent.Builder builder, AgentToolPolicy toolPolicy) {
+      HarnessAgent.Builder builder, AgentToolPolicy toolPolicy, AgentProperties agentProperties) {
     applyToolPolicy(builder, toolPolicy);
+    if (agentProperties.memory().enabled()) {
+      builder.memory(MemoryConfig.defaults());
+    } else {
+      builder.disableMemoryTools();
+      builder.disableMemoryHooks();
+    }
 
     return builder
         .disableDynamicSkills()
         .disableDefaultWorkspaceSkills()
-        .disableMemoryTools()
-        .disableMemoryHooks()
         .disableSubagents()
         .disableDynamicSubagents();
   }
@@ -109,7 +114,7 @@ public class AgentScopeConfig {
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider,
       ChatAgentRequest request) {
     HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
-    configureHarnessAgentBuilder(builder, toolPolicy(agentProperties));
+    configureHarnessAgentBuilder(builder, toolPolicy(agentProperties), agentProperties);
     applyRequestScope(builder, request);
     applyFilesystem(builder, agentProperties, redisTemplateProvider);
     applyStateStore(builder, agentProperties, redisTemplateProvider);

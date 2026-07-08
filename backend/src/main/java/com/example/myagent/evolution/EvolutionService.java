@@ -2,13 +2,10 @@ package com.example.myagent.evolution;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.example.myagent.auth.CurrentUser;
-import com.example.myagent.memory.UserMemoryEntity;
-import com.example.myagent.memory.UserMemoryMapper;
 import com.example.myagent.skill.SkillCreateRequest;
 import com.example.myagent.skill.SkillService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.springframework.http.HttpStatus;
@@ -22,17 +19,14 @@ public class EvolutionService {
 
   private final EvolutionProposalMapper proposalMapper;
   private final SkillService skillService;
-  private final UserMemoryMapper userMemoryMapper;
   private final ObjectMapper objectMapper;
 
   public EvolutionService(
       EvolutionProposalMapper proposalMapper,
       SkillService skillService,
-      UserMemoryMapper userMemoryMapper,
       ObjectMapper objectMapper) {
     this.proposalMapper = proposalMapper;
     this.skillService = skillService;
-    this.userMemoryMapper = userMemoryMapper;
     this.objectMapper = objectMapper;
   }
 
@@ -102,7 +96,9 @@ public class EvolutionService {
 
     switch (proposal.getType()) {
       case SKILL -> applySkill(currentUser, proposal);
-      case MEMORY -> applyMemory(currentUser, proposal);
+      case MEMORY ->
+          throw new ResponseStatusException(
+              HttpStatus.CONFLICT, "Memory proposals are no longer supported");
       case TOOL_POLICY -> applyToolPolicy(proposal);
       case PROMPT, CODE_PATCH -> requireAdmin(currentUser);
     }
@@ -140,27 +136,6 @@ public class EvolutionService {
       return;
     }
     skillService.createMySkill(currentUser, new SkillCreateRequest(name, description));
-  }
-
-  private void applyMemory(CurrentUser currentUser, EvolutionProposalEntity proposal) {
-    JsonNode content = tryReadJsonObject(proposal.getContent());
-    LocalDate memoryDate = LocalDate.now();
-    String memoryContent = proposal.getContent();
-    if (content != null) {
-      if (content.hasNonNull("date")) {
-        memoryDate = LocalDate.parse(content.get("date").asText());
-      }
-      if (content.hasNonNull("content")) {
-        memoryContent = content.get("content").asText();
-      }
-    }
-
-    UserMemoryEntity memory = new UserMemoryEntity();
-    memory.setUserId(currentUser.id());
-    memory.setMemoryDate(memoryDate);
-    memory.setContent(memoryContent);
-    memory.setUpdatedAt(LocalDateTime.now());
-    userMemoryMapper.insert(memory);
   }
 
   private void applyToolPolicy(EvolutionProposalEntity proposal) {

@@ -7,12 +7,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.myagent.auth.CurrentUser;
-import com.example.myagent.memory.UserMemoryEntity;
-import com.example.myagent.memory.UserMemoryMapper;
 import com.example.myagent.skill.SkillCreateRequest;
 import com.example.myagent.skill.SkillService;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,14 +29,12 @@ class EvolutionServiceTest {
 
   @Mock private EvolutionProposalMapper proposalMapper;
   @Mock private SkillService skillService;
-  @Mock private UserMemoryMapper userMemoryMapper;
 
   private EvolutionService evolutionService;
 
   @BeforeEach
   void setUp() {
-    evolutionService =
-        new EvolutionService(proposalMapper, skillService, userMemoryMapper, new ObjectMapper());
+    evolutionService = new EvolutionService(proposalMapper, skillService, new ObjectMapper());
   }
 
   @Test
@@ -220,21 +215,18 @@ class EvolutionServiceTest {
   }
 
   @Test
-  void applyMemoryInsertsCurrentUserMemory() {
+  void applyMemoryRejectsUnsupportedProposalType() {
     EvolutionProposalEntity proposal = proposal(10L, USER.id(), EvolutionProposalStatus.APPROVED);
     proposal.setType(EvolutionProposalType.MEMORY);
     proposal.setContent("{\"date\":\"2026-07-05\",\"content\":\"Remember this\"}");
     when(proposalMapper.selectById(10L)).thenReturn(proposal);
 
-    evolutionService.apply(USER, 10L);
-
-    ArgumentCaptor<UserMemoryEntity> captor = ArgumentCaptor.forClass(UserMemoryEntity.class);
-    verify(userMemoryMapper).insert(captor.capture());
-    UserMemoryEntity saved = captor.getValue();
-    assertThat(saved.getUserId()).isEqualTo(USER.id());
-    assertThat(saved.getMemoryDate()).isEqualTo(LocalDate.parse("2026-07-05"));
-    assertThat(saved.getContent()).isEqualTo("Remember this");
-    assertThat(saved.getUpdatedAt()).isNotNull();
+    assertThatThrownBy(() -> evolutionService.apply(USER, 10L))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(
+            error ->
+                assertThat(((ResponseStatusException) error).getStatusCode())
+                    .isEqualTo(HttpStatus.CONFLICT));
   }
 
   private static EvolutionProposalEntity proposal(
