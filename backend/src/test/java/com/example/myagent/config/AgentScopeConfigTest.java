@@ -12,7 +12,6 @@ import com.example.myagent.chat.StubChatAgentGateway;
 import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.skillreview.SkillReviewDecisionStore;
 import com.example.myagent.skillreview.WebApprovalGate;
-import io.agentscope.harness.agent.filesystem.local.LocalFilesystem;
 import io.agentscope.harness.agent.skill.curator.SkillUsageStore;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
@@ -48,7 +47,6 @@ class AgentScopeConfigTest {
   void createsDashScopeModelByDefault() {
     AgentProperties properties =
         new AgentProperties(
-            new AgentProperties.Deployment("local"),
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
             new AgentProperties.Memory(true),
@@ -71,7 +69,6 @@ class AgentScopeConfigTest {
   void createsOpenAiCompatibleModelWhenConfigured() {
     AgentProperties properties =
         new AgentProperties(
-            new AgentProperties.Deployment("local"),
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
             new AgentProperties.Memory(true),
@@ -98,7 +95,6 @@ class AgentScopeConfigTest {
   void rejectsMissingApiKey() {
     AgentProperties properties =
         new AgentProperties(
-            new AgentProperties.Deployment("local"),
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
             new AgentProperties.Memory(true),
@@ -118,7 +114,6 @@ class AgentScopeConfigTest {
   void rejectsApiKeyProvidedOnlyAsSpringProperty() {
     AgentProperties properties =
         new AgentProperties(
-            new AgentProperties.Deployment("local"),
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
             new AgentProperties.Memory(true),
@@ -220,22 +215,10 @@ class AgentScopeConfigTest {
   }
 
   @Test
-  void localDeploymentUsesLocalWorkspaceFilesystem() throws Exception {
+  void deploymentRequiresRedisBackedRemoteFilesystem() {
     HarnessAgent.Builder builder = HarnessAgent.builder();
-    AgentProperties properties = properties(false, false, false, false);
-
-    config.applyFilesystem(builder, properties, emptyRedisProvider());
-
-    assertThat(objectField(builder, "localFilesystemSpec")).isNotNull();
-    assertThat(objectField(builder, "remoteFilesystemSpec")).isNull();
-  }
-
-  @Test
-  void distributedDeploymentRequiresRedisBackedRemoteFilesystem() {
-    HarnessAgent.Builder builder = HarnessAgent.builder();
-    AgentProperties distributed =
+    AgentProperties props =
         new AgentProperties(
-            new AgentProperties.Deployment("distributed"),
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
             new AgentProperties.Memory(true),
@@ -246,17 +229,16 @@ class AgentScopeConfigTest {
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
-    assertThatThrownBy(() -> config.applyFilesystem(builder, distributed, emptyRedisProvider()))
+    assertThatThrownBy(() -> config.applyFilesystem(builder, props, emptyRedisProvider()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("Redis");
   }
 
   @Test
-  void distributedDeploymentRejectsNonRedisStateStore() {
+  void deploymentRejectsNonRedisStateStore() {
     HarnessAgent.Builder builder = HarnessAgent.builder();
-    AgentProperties distributed =
+    AgentProperties props =
         new AgentProperties(
-            new AgentProperties.Deployment("distributed"),
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
             new AgentProperties.Memory(true),
@@ -267,7 +249,7 @@ class AgentScopeConfigTest {
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
-    assertThatThrownBy(() -> config.applyFilesystem(builder, distributed, emptyRedisProvider()))
+    assertThatThrownBy(() -> config.applyFilesystem(builder, props, emptyRedisProvider()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("agent.state-store.type=redis");
   }
@@ -314,7 +296,10 @@ class AgentScopeConfigTest {
   void applySkillLearning_enablesSkillManageTool_whenConfigured() throws Exception {
     HarnessAgent.Builder builder = HarnessAgent.builder();
     AgentProperties props = properties(false, false, false, false);
-    LocalFilesystem fs = new LocalFilesystem(tempDir);
+    io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore store =
+        new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
+    io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem fs =
+        new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(store);
     SkillUsageStore usageStore = new SkillUsageStore(fs);
     SkillReviewDecisionStore decisionStore = new SkillReviewDecisionStore(fs);
     WebApprovalGate webApprovalGate = new WebApprovalGate(decisionStore);
@@ -332,7 +317,6 @@ class AgentScopeConfigTest {
       boolean httpFetchEnabled,
       boolean mcpEnabled) {
     return new AgentProperties(
-        new AgentProperties.Deployment("local"),
         new AgentProperties.AgentScope(true),
         new AgentProperties.Workspace(tempDir.toString()),
         new AgentProperties.Memory(true),
@@ -385,5 +369,11 @@ class AgentScopeConfigTest {
     AgentEventMapper.class,
     StubChatAgentGateway.class
   })
-  static class AgentScopeGatewayContextConfiguration {}
+  static class AgentScopeGatewayContextConfiguration {
+
+    @org.springframework.context.annotation.Bean
+    ReactiveStringRedisTemplate reactiveStringRedisTemplate() {
+      return org.mockito.Mockito.mock(ReactiveStringRedisTemplate.class);
+    }
+  }
 }

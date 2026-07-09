@@ -14,8 +14,6 @@ spring:
       database: ${REDIS_DATABASE:0}
 
 agent:
-  deployment:
-    mode: distributed
   agent-scope:
     enabled: ${AGENT_SCOPE_ENABLED:false}
   model:

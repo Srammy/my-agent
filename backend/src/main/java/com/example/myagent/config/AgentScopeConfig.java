@@ -10,14 +10,11 @@ import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.permission.PermissionMode;
 import io.agentscope.core.state.AgentStateStore;
-import io.agentscope.core.state.JsonFileAgentStateStore;
 import io.agentscope.harness.agent.DistributedStore;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.IsolationScope;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
-import io.agentscope.harness.agent.filesystem.local.LocalFilesystem;
 import io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem;
-import io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
 import io.agentscope.harness.agent.memory.MemoryConfig;
@@ -32,7 +29,6 @@ import io.agentscope.harness.agent.skill.curator.SkillUsageStore;
 import io.agentscope.harness.agent.skill.curator.SkillVisibilityFilter;
 import io.agentscope.harness.agent.tool.SkillManageConfig;
 import io.agentscope.harness.agent.tools.ToolsConfig;
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -97,10 +93,7 @@ public class AgentScopeConfig {
   AbstractFilesystem workspaceFilesystem(
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
-    if (isDistributed(agentProperties)) {
-      return new RemoteFilesystem(buildBaseStore(agentProperties, redisTemplateProvider));
-    }
-    return new LocalFilesystem(Path.of(agentProperties.workspace().path()));
+    return new RemoteFilesystem(buildBaseStore(agentProperties, redisTemplateProvider));
   }
 
   @Bean
@@ -164,13 +157,9 @@ public class AgentScopeConfig {
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
     builder.workspace(agentProperties.workspace().path());
-    if (isDistributed(agentProperties)) {
-      builder.filesystem(
-          new RemoteFilesystemSpec(buildBaseStore(agentProperties, redisTemplateProvider))
-              .isolationScope(IsolationScope.USER));
-      return;
-    }
-    builder.filesystem(new LocalFilesystemSpec());
+    builder.filesystem(
+        new RemoteFilesystemSpec(buildBaseStore(agentProperties, redisTemplateProvider))
+            .isolationScope(IsolationScope.USER));
   }
 
   PermissionContextState permissionContext(ChatAgentRequest request) {
@@ -185,13 +174,11 @@ public class AgentScopeConfig {
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
     AgentStateStore stateStore = buildAgentStateStore(agentProperties, redisTemplateProvider);
     builder.stateStore(stateStore);
-    if (isDistributed(agentProperties)) {
-      builder.distributedStore(
-          DistributedStore.builder()
-              .agentStateStore(stateStore)
-              .baseStore(buildBaseStore(agentProperties, redisTemplateProvider))
-              .build());
-    }
+    builder.distributedStore(
+        DistributedStore.builder()
+            .agentStateStore(stateStore)
+            .baseStore(buildBaseStore(agentProperties, redisTemplateProvider))
+            .build());
   }
 
   SkillPromotionGate promotionGate(String mode, WebApprovalGate webApprovalGate) {
@@ -232,31 +219,23 @@ public class AgentScopeConfig {
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
     ReactiveStringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
-    if ("redis".equalsIgnoreCase(agentProperties.stateStore().type()) && redisTemplate != null) {
-      return new RedisAgentStateStore(redisTemplate, agentProperties.stateStore().redis().keyPrefix());
+    if (redisTemplate == null || !"redis".equalsIgnoreCase(agentProperties.stateStore().type())) {
+      throw new IllegalStateException(
+          "Distributed deployment requires agent.state-store.type=redis and a Redis bean");
     }
-    if (isDistributed(agentProperties)) {
-      throw new IllegalStateException("Distributed AgentScope requires agent.state-store.type=redis and a Redis bean");
-    }
-    return new JsonFileAgentStateStore(Path.of(".agentscope/state"));
+    return new RedisAgentStateStore(redisTemplate, agentProperties.stateStore().redis().keyPrefix());
   }
 
   BaseStore buildBaseStore(
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
     ReactiveStringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
-    if ("redis".equalsIgnoreCase(agentProperties.stateStore().type()) && redisTemplate != null) {
-      return new RedisBaseStore(
-          redisTemplate, agentProperties.stateStore().redis().keyPrefix() + "base:");
+    if (redisTemplate == null || !"redis".equalsIgnoreCase(agentProperties.stateStore().type())) {
+      throw new IllegalStateException(
+          "Distributed deployment requires agent.state-store.type=redis and a Redis bean");
     }
-    if (isDistributed(agentProperties)) {
-      throw new IllegalStateException("Distributed AgentScope requires agent.state-store.type=redis and a Redis bean");
-    }
-    return new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
-  }
-
-  private boolean isDistributed(AgentProperties agentProperties) {
-    return "distributed".equalsIgnoreCase(agentProperties.deployment().mode());
+    return new RedisBaseStore(
+        redisTemplate, agentProperties.stateStore().redis().keyPrefix() + "base:");
   }
 
   private Model buildDashScopeModel(AgentProperties.Model modelProperties, String apiKey) {

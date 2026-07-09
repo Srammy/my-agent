@@ -37,7 +37,6 @@ class AgentPropertiesBindingTest {
     contextRunner.run(
         context -> {
           AgentProperties agentProperties = context.getBean(AgentProperties.class);
-          assertThat(agentProperties.deployment().mode()).isEqualTo("local");
           assertThat(agentProperties.agentScope().enabled()).isFalse();
           assertThat(agentProperties.model().provider()).isEqualTo("dashscope");
           assertThat(agentProperties.model().name()).isEqualTo("dashscope:qwen-plus");

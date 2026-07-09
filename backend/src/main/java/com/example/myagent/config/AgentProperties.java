@@ -2,12 +2,9 @@ package com.example.myagent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
-import org.springframework.validation.annotation.Validated;
 
-@Validated
 @ConfigurationProperties(prefix = "agent")
 public record AgentProperties(
-    @DefaultValue Deployment deployment,
     @DefaultValue AgentScope agentScope,
     @DefaultValue Workspace workspace,
     @DefaultValue Memory memory,
@@ -16,8 +13,6 @@ public record AgentProperties(
     @DefaultValue Skill skill,
     @DefaultValue Permission permission,
     @DefaultValue Tools tools) {
-
-  public record Deployment(@DefaultValue("local") String mode) {}
 
   public record AgentScope(@DefaultValue("false") boolean enabled) {}
 

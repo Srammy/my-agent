@@ -20,8 +20,6 @@ agent:
     path: ./.agentscope/workspace
   memory:
     enabled: true
-  deployment:
-    mode: local
   agent-scope:
     enabled: ${AGENT_SCOPE_ENABLED:false}
   model:
