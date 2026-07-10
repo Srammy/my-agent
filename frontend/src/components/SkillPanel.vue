@@ -1,88 +1,24 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import type { Skill } from '../api/skills'
+import { onMounted, ref } from 'vue'
 import { useSkillsStore } from '../stores/skills'
-import SkillFileTree from './SkillFileTree.vue'
 
 const skills = useSkillsStore()
-const selectedMySkillName = ref<string | null>(null)
-const editingSkillName = ref<string | null>(null)
-const nameDraft = ref('')
-const descriptionDraft = ref('')
-
-const selectedMySkill = computed(
-  () => skills.mySkills.find((skill) => skill.name === selectedMySkillName.value) ?? null
-)
-const selectedFiles = computed(() =>
-  selectedMySkillName.value ? skills.filesBySkillName[selectedMySkillName.value] ?? [] : []
-)
+const fileInput = ref<HTMLInputElement | null>(null)
 
 onMounted(() => {
   skills.loadSkills()
 })
 
-watch(
-  () => skills.mySkills,
-  (items) => {
-    if (!selectedMySkillName.value && items.length) {
-      selectMySkill(items[0])
-    }
-  }
-)
-
-function beginCreate() {
-  editingSkillName.value = null
-  selectedMySkillName.value = null
-  nameDraft.value = ''
-  descriptionDraft.value = ''
+function triggerUpload() {
+  fileInput.value?.click()
 }
 
-function beginEdit(skill: Skill) {
-  editingSkillName.value = skill.name
-  nameDraft.value = skill.name
-  descriptionDraft.value = skill.description
-}
-
-async function submitSkill() {
-  const payload = {
-    name: nameDraft.value.trim(),
-    description: descriptionDraft.value.trim()
-  }
-
-  if (!payload.name) {
-    return
-  }
-
-  const skill = editingSkillName.value
-    ? await skills.updateSkill(editingSkillName.value, payload)
-    : await skills.createSkill(payload)
-
-  editingSkillName.value = skill.name
-  selectedMySkillName.value = skill.name
-  await skills.loadFiles(skill.name)
-}
-
-async function removeSkill(skill: Skill) {
-  await skills.deleteSkill(skill.name)
-  selectedMySkillName.value = skills.mySkills[0]?.name ?? null
-}
-
-async function selectMySkill(skill: Skill) {
-  selectedMySkillName.value = skill.name
-  beginEdit(skill)
-  await skills.loadFiles(skill.name)
-}
-
-function saveFile(path: string, content: string) {
-  if (selectedMySkillName.value) {
-    skills.saveFile(selectedMySkillName.value, path, content)
-  }
-}
-
-function deleteFile(path: string) {
-  if (selectedMySkillName.value && path !== 'SKILL.md') {
-    skills.deleteFile(selectedMySkillName.value, path)
-  }
+async function handleFiles(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  if (!files.length) return
+  await skills.uploadSkill(files)
+  input.value = ''
 }
 </script>
 
@@ -90,56 +26,25 @@ function deleteFile(path: string) {
   <section class="assistant-panel-section" v-loading="skills.loading">
     <div class="panel-row">
       <strong>我的 Skill</strong>
-      <el-button size="small" @click="beginCreate">新建</el-button>
+      <el-button size="small" @click="triggerUpload">上传</el-button>
+      <input ref="fileInput" type="file" multiple style="display: none" @change="handleFiles" />
     </div>
 
-    <div class="skill-layout">
-      <div class="skill-list">
-        <button
-          v-for="skill in skills.mySkills"
-          :key="skill.name"
-          class="skill-list-item"
-          :class="{ 'skill-list-item--active': skill.name === selectedMySkillName }"
-          type="button"
-          @click="selectMySkill(skill)"
-        >
-          {{ skill.name }}
-        </button>
-      </div>
-
-      <div class="skill-editor">
-        <el-input v-model="nameDraft" size="small" placeholder="Skill 名称" />
-        <el-input
-          v-model="descriptionDraft"
-          size="small"
-          type="textarea"
-          :autosize="{ minRows: 2, maxRows: 4 }"
-          placeholder="描述"
-        />
-        <div class="skill-actions">
-          <el-button size="small" type="primary" :disabled="!nameDraft.trim()" @click="submitSkill">
-            保存
-          </el-button>
-          <el-button
-            size="small"
-            type="danger"
-            :disabled="!selectedMySkill"
-            @click="selectedMySkill && removeSkill(selectedMySkill)"
-          >
-            删除
-          </el-button>
+    <ul class="skill-list">
+      <li v-for="skill in skills.mySkills" :key="skill.name" class="skill-list-item">
+        <div class="skill-info">
+          <span class="skill-name">{{ skill.name }}</span>
+          <span class="skill-description panel-muted">{{ skill.description }}</span>
         </div>
-      </div>
-    </div>
+        <el-button size="small" type="danger" @click="skills.deleteSkill(skill.name)">
+          删除
+        </el-button>
+      </li>
+    </ul>
 
-    <SkillFileTree
-      v-if="selectedMySkill"
-      :files="selectedFiles"
-      :loading="skills.filesLoading"
-      @save="saveFile"
-      @delete="deleteFile"
-    />
-    <p v-else class="panel-muted">选择或创建一个 Skill 后编辑文件。</p>
+    <p v-if="!skills.mySkills.length && !skills.loading" class="panel-muted">
+      暂无 Skill，请上传包含 SKILL.md 的文件集合。
+    </p>
 
     <p v-if="skills.error" class="panel-error">{{ skills.error }}</p>
   </section>
