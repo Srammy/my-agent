@@ -50,10 +50,10 @@ class SkillReviewServiceTest {
     when(filesystem.read(any(RuntimeContext.class), eq("skills/_drafts/my-skill/SKILL.md"), eq(0), anyInt()))
         .thenReturn(ReadResult.success(new FileData(skillMd, "utf-8", "2026-07-08T09:00:00", "2026-07-08T09:00:00")));
 
-    when(decisionStore.find("my-skill")).thenReturn(Optional.empty());
+    when(decisionStore.find("my-skill", "1")).thenReturn(Optional.empty());
     when(usageStore.get("my-skill")).thenReturn(Optional.empty());
 
-    List<SkillReviewDto> result = service.list();
+    List<SkillReviewDto> result = service.list("1");
 
     assertThat(result).hasSize(1);
     assertThat(result.get(0).skillName()).isEqualTo("my-skill");
@@ -66,11 +66,11 @@ class SkillReviewServiceTest {
     Instant now = Instant.now();
     SkillReviewDecision decision =
         new SkillReviewDecision("my-skill", "APPROVED", "admin", null, List.of("prod"), now);
-    when(decisionStore.approve("my-skill", "admin", List.of("prod"))).thenReturn(decision);
+    when(decisionStore.approve("my-skill", "admin", List.of("prod"), "1")).thenReturn(decision);
     when(usageStore.get("my-skill")).thenReturn(Optional.empty());
 
     SkillReviewDto result =
-        service.approve("my-skill", new ApproveSkillReviewRequest("admin", List.of("prod")));
+        service.approve("my-skill", new ApproveSkillReviewRequest("admin", List.of("prod")), "1");
 
     assertThat(result.status()).isEqualTo("APPROVED");
     assertThat(result.skillName()).isEqualTo("my-skill");
@@ -82,11 +82,11 @@ class SkillReviewServiceTest {
     Instant now = Instant.now();
     SkillReviewDecision decision =
         new SkillReviewDecision("my-skill", "REJECTED", "admin", "Too risky", List.of(), now);
-    when(decisionStore.reject("my-skill", "admin", "Too risky")).thenReturn(decision);
+    when(decisionStore.reject("my-skill", "admin", "Too risky", "1")).thenReturn(decision);
     when(usageStore.get("my-skill")).thenReturn(Optional.empty());
 
     SkillReviewDto result =
-        service.reject("my-skill", new RejectSkillReviewRequest("admin", "Too risky"));
+        service.reject("my-skill", new RejectSkillReviewRequest("admin", "Too risky"), "1");
 
     assertThat(result.status()).isEqualTo("REJECTED");
     assertThat(result.skillName()).isEqualTo("my-skill");

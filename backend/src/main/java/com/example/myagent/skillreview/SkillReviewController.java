@@ -1,6 +1,8 @@
 package com.example.myagent.skillreview;
 
+import com.example.myagent.auth.CurrentUser;
 import java.util.List;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,21 +23,26 @@ public class SkillReviewController {
   }
 
   @GetMapping
-  public Mono<List<SkillReviewDto>> list() {
-    return Mono.fromCallable(reviewService::list).subscribeOn(Schedulers.boundedElastic());
+  public Mono<List<SkillReviewDto>> list(@AuthenticationPrincipal CurrentUser currentUser) {
+    return Mono.fromCallable(() -> reviewService.list(currentUser.id().toString()))
+        .subscribeOn(Schedulers.boundedElastic());
   }
 
   @PostMapping("/{skillName}/approve")
   public Mono<SkillReviewDto> approve(
-      @PathVariable String skillName, @RequestBody ApproveSkillReviewRequest request) {
-    return Mono.fromCallable(() -> reviewService.approve(skillName, request))
+      @AuthenticationPrincipal CurrentUser currentUser,
+      @PathVariable String skillName,
+      @RequestBody ApproveSkillReviewRequest request) {
+    return Mono.fromCallable(() -> reviewService.approve(skillName, request, currentUser.id().toString()))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
   @PostMapping("/{skillName}/reject")
   public Mono<SkillReviewDto> reject(
-      @PathVariable String skillName, @RequestBody RejectSkillReviewRequest request) {
-    return Mono.fromCallable(() -> reviewService.reject(skillName, request))
+      @AuthenticationPrincipal CurrentUser currentUser,
+      @PathVariable String skillName,
+      @RequestBody RejectSkillReviewRequest request) {
+    return Mono.fromCallable(() -> reviewService.reject(skillName, request, currentUser.id().toString()))
         .subscribeOn(Schedulers.boundedElastic());
   }
 }

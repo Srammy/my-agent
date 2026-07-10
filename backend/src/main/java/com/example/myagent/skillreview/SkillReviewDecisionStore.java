@@ -29,23 +29,23 @@ public class SkillReviewDecisionStore {
   }
 
   public SkillReviewDecision approve(
-      String skillName, String reviewerId, List<String> environments) {
+      String skillName, String reviewerId, List<String> environments, String userId) {
     SkillReviewDecision decision =
         new SkillReviewDecision(
             skillName, "APPROVED", reviewerId, null, environments, Instant.now());
-    persist(decision);
+    persist(decision, userId);
     return decision;
   }
 
-  public SkillReviewDecision reject(String skillName, String reviewerId, String reason) {
+  public SkillReviewDecision reject(String skillName, String reviewerId, String reason, String userId) {
     SkillReviewDecision decision =
         new SkillReviewDecision(skillName, "REJECTED", reviewerId, reason, List.of(), Instant.now());
-    persist(decision);
+    persist(decision, userId);
     return decision;
   }
 
-  public Optional<SkillReviewDecision> find(String skillName) {
-    RuntimeContext ctx = systemContext();
+  public Optional<SkillReviewDecision> find(String skillName, String userId) {
+    RuntimeContext ctx = userContext(userId);
     String path = entryPath(skillName);
     if (!filesystem.exists(ctx, path)) {
       return Optional.empty();
@@ -61,12 +61,12 @@ public class SkillReviewDecisionStore {
     }
   }
 
-  public Optional<Instant> decidedAt(String skillName) {
-    return find(skillName).map(SkillReviewDecision::decidedAt);
+  public Optional<Instant> decidedAt(String skillName, String userId) {
+    return find(skillName, userId).map(SkillReviewDecision::decidedAt);
   }
 
-  private void persist(SkillReviewDecision decision) {
-    RuntimeContext ctx = systemContext();
+  private void persist(SkillReviewDecision decision, String userId) {
+    RuntimeContext ctx = userContext(userId);
     try {
       String json = JSON.writeValueAsString(decision);
       WriteResult result = filesystem.write(ctx, entryPath(decision.skillName()), json);
@@ -83,7 +83,7 @@ public class SkillReviewDecisionStore {
     return STORE_DIR + "/" + skillName + ".json";
   }
 
-  private static RuntimeContext systemContext() {
-    return RuntimeContext.builder().userId("system").sessionId("skill-review").build();
+  private static RuntimeContext userContext(String userId) {
+    return RuntimeContext.builder().userId(userId).sessionId("skill-review").build();
   }
 }

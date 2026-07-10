@@ -30,7 +30,7 @@ class WebApprovalGateTest {
   @Test
   void reviewDefersWhenNoDecisionExists() {
     SkillCandidate candidate = buildCandidate("my-skill");
-    when(decisionStore.find("my-skill")).thenReturn(Optional.empty());
+    when(decisionStore.find("my-skill", "test-user")).thenReturn(Optional.empty());
 
     SkillPromotionGate.PromotionDecision decision =
         gate.review(candidate, ctx).block();
@@ -44,7 +44,7 @@ class WebApprovalGateTest {
     Instant now = Instant.now();
     SkillReviewDecision storedDecision =
         new SkillReviewDecision("my-skill", "APPROVED", "reviewer1", null, List.of("prod"), now);
-    when(decisionStore.find("my-skill")).thenReturn(Optional.of(storedDecision));
+    when(decisionStore.find("my-skill", "test-user")).thenReturn(Optional.of(storedDecision));
 
     SkillPromotionGate.PromotionDecision decision =
         gate.review(candidate, ctx).block();
@@ -63,7 +63,7 @@ class WebApprovalGateTest {
     Instant now = Instant.now();
     SkillReviewDecision storedDecision =
         new SkillReviewDecision("my-skill", "REJECTED", "reviewer1", "Too risky", List.of(), now);
-    when(decisionStore.find("my-skill")).thenReturn(Optional.of(storedDecision));
+    when(decisionStore.find("my-skill", "test-user")).thenReturn(Optional.of(storedDecision));
 
     SkillPromotionGate.PromotionDecision decision =
         gate.review(candidate, ctx).block();

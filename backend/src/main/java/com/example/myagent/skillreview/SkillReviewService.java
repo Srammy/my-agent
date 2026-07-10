@@ -33,8 +33,8 @@ public class SkillReviewService {
     this.usageStore = usageStore;
   }
 
-  public List<SkillReviewDto> list() {
-    RuntimeContext ctx = systemContext();
+  public List<SkillReviewDto> list(String userId) {
+    RuntimeContext ctx = userContext(userId);
     if (!filesystem.exists(ctx, DRAFTS_DIR)) {
       return List.of();
     }
@@ -46,28 +46,28 @@ public class SkillReviewService {
         .filter(FileInfo::isDirectory)
         .map(FileInfo::path)
         .sorted()
-        .map(skillName -> buildDto(ctx, skillName))
+        .map(skillName -> buildDto(ctx, skillName, userId))
         .toList();
   }
 
-  public SkillReviewDto approve(String skillName, ApproveSkillReviewRequest request) {
+  public SkillReviewDto approve(String skillName, ApproveSkillReviewRequest request, String userId) {
     validateSkillName(skillName);
     List<String> environments =
         request.environments() != null ? request.environments() : List.of();
     String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
-    SkillReviewDecision decision = decisionStore.approve(skillName, reviewerId, environments);
-    return toDto(skillName, decision);
+    SkillReviewDecision decision = decisionStore.approve(skillName, reviewerId, environments, userId);
+    return toDto(skillName, decision, userId);
   }
 
-  public SkillReviewDto reject(String skillName, RejectSkillReviewRequest request) {
+  public SkillReviewDto reject(String skillName, RejectSkillReviewRequest request, String userId) {
     validateSkillName(skillName);
     String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
     String reason = request.reason() != null ? request.reason() : "";
-    SkillReviewDecision decision = decisionStore.reject(skillName, reviewerId, reason);
-    return toDto(skillName, decision);
+    SkillReviewDecision decision = decisionStore.reject(skillName, reviewerId, reason, userId);
+    return toDto(skillName, decision, userId);
   }
 
-  private SkillReviewDto buildDto(RuntimeContext ctx, String skillName) {
+  private SkillReviewDto buildDto(RuntimeContext ctx, String skillName, String userId) {
     String skillMdPath = DRAFTS_DIR + "/" + skillName + "/SKILL.md";
     String description = "";
     if (filesystem.exists(ctx, skillMdPath)) {
@@ -83,7 +83,7 @@ public class SkillReviewService {
       }
     }
 
-    Optional<SkillReviewDecision> maybeDecision = decisionStore.find(skillName);
+    Optional<SkillReviewDecision> maybeDecision = decisionStore.find(skillName, userId);
     String status = maybeDecision.map(SkillReviewDecision::status).orElse("PENDING");
 
     Optional<SkillUsageRecord> maybeUsage = usageStore.get(skillName);
@@ -102,7 +102,7 @@ public class SkillReviewService {
         useCount, viewCount, patchCount);
   }
 
-  private SkillReviewDto toDto(String skillName, SkillReviewDecision decision) {
+  private SkillReviewDto toDto(String skillName, SkillReviewDecision decision, String userId) {
     Optional<SkillUsageRecord> maybeUsage = usageStore.get(skillName);
     long useCount = maybeUsage.map(SkillUsageRecord::useCount).orElse(0L);
     long viewCount = maybeUsage.map(SkillUsageRecord::viewCount).orElse(0L);
@@ -123,7 +123,7 @@ public class SkillReviewService {
     }
   }
 
-  private static RuntimeContext systemContext() {
-    return RuntimeContext.builder().userId("system").sessionId("skill-review").build();
+  private static RuntimeContext userContext(String userId) {
+    return RuntimeContext.builder().userId(userId).sessionId("skill-review").build();
   }
 }

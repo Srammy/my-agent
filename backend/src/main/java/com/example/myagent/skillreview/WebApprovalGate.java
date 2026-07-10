@@ -38,7 +38,7 @@ public class WebApprovalGate implements SkillPromotionGate {
 
   @Override
   public Mono<PromotionDecision> review(SkillCandidate candidate, RuntimeContext ctx) {
-    return Mono.fromCallable(() -> decisionStore.find(candidate.name()))
+    return Mono.fromCallable(() -> decisionStore.find(candidate.name(), ctx.getUserId()))
         .map(
             maybeDecision -> {
               if (maybeDecision.isEmpty()) {
