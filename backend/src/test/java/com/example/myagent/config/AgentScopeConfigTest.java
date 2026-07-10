@@ -305,6 +305,24 @@ class AgentScopeConfigTest {
     assertThat(booleanField(builder, "skillCuratorEnabled")).isTrue();
   }
 
+  @Test
+  void workspaceFilesystemIsolatesUsersByNamespace() {
+    io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore store =
+        new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
+    io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem fs =
+        new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(
+            store, io.agentscope.harness.agent.IsolationScope.USER.toNamespaceFactory());
+
+    io.agentscope.core.agent.RuntimeContext alice =
+        io.agentscope.core.agent.RuntimeContext.builder().userId("1").sessionId("s").build();
+    io.agentscope.core.agent.RuntimeContext bob =
+        io.agentscope.core.agent.RuntimeContext.builder().userId("2").sessionId("s").build();
+
+    fs.write(alice, "skills/test/SKILL.md", "---\nname: test\ndescription: t\n---\n");
+
+    assertThat(fs.exists(bob, "skills/test/SKILL.md")).isFalse();
+  }
+
   private AgentProperties properties(
       boolean fileToolsEnabled,
       boolean shellEnabled,

@@ -90,7 +90,9 @@ public class AgentScopeConfig {
   AbstractFilesystem workspaceFilesystem(
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
-    return new RemoteFilesystem(buildBaseStore(agentProperties, redisTemplateProvider));
+    return new RemoteFilesystem(
+        buildBaseStore(agentProperties, redisTemplateProvider),
+        IsolationScope.USER.toNamespaceFactory());
   }
 
   @Bean
