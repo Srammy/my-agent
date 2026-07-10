@@ -116,7 +116,8 @@ class AgentScopeWorkspaceServiceTest {
   }
 
   private static FilePart skillMdPart(String name, String description) {
-    String content = "---\nname: " + name + "\ndescription: " + description + "\n---\n";
+    // SkillUtil.createFrom() requires non-empty body content after the YAML front matter
+    String content = "---\nname: " + name + "\ndescription: " + description + "\n---\n\nSkill instructions.\n";
     return fakeFilePart("SKILL.md", content);
   }
 
@@ -137,45 +138,132 @@ class AgentScopeWorkspaceServiceTest {
   }
 
   /**
-   * In-memory filesystem that isolates data by RuntimeContext.userId so that
-   * user-isolation tests work correctly.
+   * In-memory filesystem that isolates data by RuntimeContext.userId.
+   * Implements the operations used by WorkspaceSkillRepository:
+   *   - uploadFiles()  → save()
+   *   - glob()         → getAllSkills() / skillExists()
+   *   - read()         → reading SKILL.md content (limit=0 means read all)
+   *   - move()         → delete() archives the skill directory
    */
   private static final class IsolatedFakeFilesystem implements AbstractFilesystem {
 
-    // key = "userId::path"
+    // key = "userId::normalizedPath"
     private final Map<String, String> store = new LinkedHashMap<>();
+
+    // ---- path helpers ----
 
     private String key(RuntimeContext ctx, String path) {
       return ctx.getUserId() + "::" + normalize(path);
-    }
-
-    private String normalize(String path) {
-      if (path == null) return "";
-      String p = path.replace('\\', '/');
-      // strip leading slash added by RemoteFilesystem normalizer
-      while (p.startsWith("/")) p = p.substring(1);
-      return p;
     }
 
     private String prefix(RuntimeContext ctx, String path) {
       return ctx.getUserId() + "::" + normalize(path) + "/";
     }
 
-    @Override
-    public WriteResult write(RuntimeContext ctx, String path, String content) {
-      store.put(key(ctx, path), content);
-      return WriteResult.ok(path);
+    private String normalize(String path) {
+      if (path == null) return "";
+      String p = path.replace('\\', '/');
+      while (p.startsWith("/")) p = p.substring(1);
+      while (p.endsWith("/")) p = p.substring(0, p.length() - 1);
+      return p;
     }
 
+    // ---- core operations used by WorkspaceSkillRepository ----
+
+    /**
+     * WorkspaceSkillRepository.save() calls uploadFiles() to write SKILL.md and resources.
+     */
+    @Override
+    public List<FileUploadResponse> uploadFiles(RuntimeContext ctx, List<Entry<String, byte[]>> files) {
+      List<FileUploadResponse> responses = new ArrayList<>();
+      for (Entry<String, byte[]> entry : files) {
+        String path = entry.getKey();
+        String content = new String(entry.getValue(), StandardCharsets.UTF_8);
+        store.put(key(ctx, path), content);
+        responses.add(FileUploadResponse.success(path));
+      }
+      return responses;
+    }
+
+    /**
+     * WorkspaceSkillRepository.getAllSkills() calls glob(ctx, "SKILL.md", skillsRelativeDir).
+     * Returns FileInfo for every stored path whose filename matches the pattern and whose
+     * parent is under the given base directory.
+     */
+    @Override
+    public GlobResult glob(RuntimeContext ctx, String pattern, String base) {
+      String normalizedBase = normalize(base);
+      String userPrefix = ctx.getUserId() + "::";
+      // Only support the filename-match pattern used by WorkspaceSkillRepository ("SKILL.md")
+      String filePattern = pattern != null ? normalize(pattern) : "";
+
+      List<FileInfo> matches = new ArrayList<>();
+      for (String storeKey : store.keySet()) {
+        if (!storeKey.startsWith(userPrefix)) continue;
+        String filePath = storeKey.substring(userPrefix.length()); // e.g. "skills/java-helper/SKILL.md"
+        if (!normalizedBase.isEmpty() && !filePath.startsWith(normalizedBase + "/")) continue;
+        String fileName = filePath.contains("/")
+            ? filePath.substring(filePath.lastIndexOf('/') + 1)
+            : filePath;
+        if (!filePattern.isEmpty() && !fileName.equals(filePattern)) continue;
+        matches.add(FileInfo.ofFile(filePath, store.get(storeKey).length(), LocalDateTime.now().toString()));
+      }
+      return GlobResult.success(matches);
+    }
+
+    /**
+     * WorkspaceSkillRepository.getAllSkills() reads each SKILL.md with limit=0.
+     * limit <= 0 means "read all content from offset".
+     */
     @Override
     public ReadResult read(RuntimeContext ctx, String path, int offset, int limit) {
       String val = store.get(key(ctx, path));
       if (val == null) return ReadResult.fail("Not found: " + path);
-      String sliced = offset < val.length()
-          ? val.substring(offset, Math.min(val.length(), offset + limit))
-          : "";
-      return ReadResult.success(new FileData(sliced, "utf-8",
-          LocalDateTime.now().toString(), LocalDateTime.now().toString()));
+      String content = offset > 0 && offset < val.length() ? val.substring(offset) : val;
+      if (limit > 0 && content.length() > limit) {
+        content = content.substring(0, limit);
+      }
+      String now = LocalDateTime.now().toString();
+      return ReadResult.success(new FileData(content, "utf-8", now, now));
+    }
+
+    /**
+     * WorkspaceSkillRepository.delete() archives by calling move(ctx, skillDir, archiveDir).
+     * We implement this as: copy all keys under src prefix to dst prefix, then remove originals.
+     */
+    @Override
+    public WriteResult move(RuntimeContext ctx, String src, String dst) {
+      String srcPrefix = prefix(ctx, src);
+      String dstPrefix = prefix(ctx, dst);
+      String srcExact = key(ctx, src);
+
+      // Move single file
+      if (store.containsKey(srcExact)) {
+        String content = store.remove(srcExact);
+        store.put(key(ctx, dst), content);
+        return WriteResult.ok(dst);
+      }
+
+      // Move directory (all keys under src prefix)
+      List<Entry<String, String>> toMove = store.entrySet().stream()
+          .filter(e -> e.getKey().startsWith(srcPrefix))
+          .map(e -> Map.entry(e.getKey(), e.getValue()))
+          .toList();
+      if (toMove.isEmpty()) return WriteResult.fail("Not found: " + src);
+      for (Entry<String, String> entry : toMove) {
+        String newKey = dstPrefix + entry.getKey().substring(srcPrefix.length());
+        store.remove(entry.getKey());
+        store.put(newKey, entry.getValue());
+      }
+      return WriteResult.ok(dst);
+    }
+
+    // ---- secondary operations (used by service directly or not at all) ----
+
+    @Override
+    public WriteResult write(RuntimeContext ctx, String path, String content) {
+      store.put(key(ctx, path), content);
+      return WriteResult.ok(path);
     }
 
     @Override
@@ -200,8 +288,7 @@ class AgentScopeWorkspaceServiceTest {
               FileInfo.ofFile(remainder, entry.getValue().length(), LocalDateTime.now().toString()));
         } else {
           String dir = remainder.substring(0, sep);
-          entries.putIfAbsent(dir,
-              FileInfo.ofDir(dir, LocalDateTime.now().toString()));
+          entries.putIfAbsent(dir, FileInfo.ofDir(dir, LocalDateTime.now().toString()));
         }
       }
       List<FileInfo> list = new ArrayList<>(entries.values());
@@ -214,16 +301,9 @@ class AgentScopeWorkspaceServiceTest {
       String k = key(ctx, path);
       if (store.remove(k) != null) return WriteResult.ok(path);
       String pref = prefix(ctx, path);
-      List<String> toRemove = store.keySet().stream()
-          .filter(x -> x.startsWith(pref)).toList();
+      List<String> toRemove = store.keySet().stream().filter(x -> x.startsWith(pref)).toList();
       toRemove.forEach(store::remove);
-      if (!toRemove.isEmpty()) return WriteResult.ok(path);
-      return WriteResult.fail("Not found: " + path);
-    }
-
-    @Override
-    public WriteResult move(RuntimeContext ctx, String src, String dst) {
-      throw new UnsupportedOperationException();
+      return toRemove.isEmpty() ? WriteResult.fail("Not found: " + path) : WriteResult.ok(path);
     }
 
     @Override
@@ -233,16 +313,6 @@ class AgentScopeWorkspaceServiceTest {
 
     @Override
     public GrepResult grep(RuntimeContext ctx, String query, String include, String path) {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public GlobResult glob(RuntimeContext ctx, String pattern, String path) {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public List<FileUploadResponse> uploadFiles(RuntimeContext ctx, List<Entry<String, byte[]>> files) {
       throw new UnsupportedOperationException();
     }
 
