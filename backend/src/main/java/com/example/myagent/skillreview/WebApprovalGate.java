@@ -7,6 +7,24 @@ import java.time.Duration;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
+/**
+ * AgentScope skill 自学习闭环的 Web 审核闸门。
+ *
+ * <p>当 Agent 通过 SkillManageTool 生成新 skill 草稿后，AgentScope curator 会调用此闸门决定草稿是否
+ * 可以晋升为正式 skill。本实现把晋升决定权交给人工 Web 审核，而不是自动批准：
+ *
+ * <ul>
+ *   <li>审核员通过 {@code POST /api/skill-reviews/{skillName}/approve} 批准草稿后，决定持久化在
+ *       {@link SkillReviewDecisionStore}（Redis 中的 {@code skill-reviews/<name>.json}）；
+ *   <li>curator 下次运行时调用 {@link #review}，读到 APPROVED 决定，返回 {@link PromotionDecision.Approve}，
+ *       草稿晋升为正式 skill；
+ *   <li>若尚未有决定，返回 {@link PromotionDecision.Defer}，curator 5 分钟后重试；
+ *   <li>若已被拒绝（REJECTED），返回 {@link PromotionDecision.Reject}，草稿不晋升。
+ * </ul>
+ *
+ * <p>晋升完成后，已晋升的 skill 还需通过 {@code EnvironmentFilter} 和 {@code CanaryFilter}
+ * 才对特定用户可见（见 {@code AgentScopeConfig#applySkillLearning}）。
+ */
 @Component
 public class WebApprovalGate implements SkillPromotionGate {
 
