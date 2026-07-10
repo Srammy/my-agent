@@ -37,7 +37,6 @@ agent:
     canary-percent: ${AGENT_SKILL_CANARY_PERCENT:10}
     manage-tool-enabled: ${AGENT_SKILL_MANAGE_TOOL_ENABLED:true}
     security-scan-enabled: ${AGENT_SKILL_SECURITY_SCAN_ENABLED:true}
-    approval-mode: ${AGENT_SKILL_APPROVAL_MODE:web}
   permission:
     default-mode: DEFAULT
   tools:

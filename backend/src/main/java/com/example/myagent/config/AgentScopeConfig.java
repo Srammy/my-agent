@@ -21,10 +21,7 @@ import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.skill.curator.CanaryFilter;
 import io.agentscope.harness.agent.skill.curator.CompositeFilter;
 import io.agentscope.harness.agent.skill.curator.EnvironmentFilter;
-import io.agentscope.harness.agent.skill.curator.LocalApprovalGate;
-import io.agentscope.harness.agent.skill.curator.RejectAllGate;
 import io.agentscope.harness.agent.skill.curator.SkillCuratorConfig;
-import io.agentscope.harness.agent.skill.curator.SkillPromotionGate;
 import io.agentscope.harness.agent.skill.curator.SkillUsageStore;
 import io.agentscope.harness.agent.skill.curator.SkillVisibilityFilter;
 import io.agentscope.harness.agent.tool.SkillManageConfig;
@@ -171,14 +168,6 @@ public class AgentScopeConfig {
             .build());
   }
 
-  SkillPromotionGate promotionGate(String mode, WebApprovalGate webApprovalGate) {
-    return switch (mode.toLowerCase(Locale.ROOT)) {
-      case "web" -> webApprovalGate;
-      case "local" -> new LocalApprovalGate();
-      default -> new RejectAllGate();
-    };
-  }
-
   void applySkillLearning(
       HarnessAgent.Builder builder,
       AgentProperties agentProperties,
@@ -191,17 +180,16 @@ public class AgentScopeConfig {
     SkillManageConfig skillManageConfig =
         SkillManageConfig.builder()
             .autoPromote(false)
-            .securityScan(skill.securityScanEnabled())
+            .securityScan(skill.securityScanEnabled())  //  是 AgentScope SkillManageConfig 的一个构建选项，控制 Agent 通过 SkillManageTool 自动创建或修改 skill 草稿时，是否对草稿内容做安全扫描。true（当前默认）— AgentScope 在把 skill 草稿写入 _drafts/ 之前，会扫描草稿内容，检测潜在的危险代码（如 shell 注入、危险系统调用等），不通过则拒绝写入
             .build();
     SkillVisibilityFilter visibilityFilter =
         new CompositeFilter(
             new EnvironmentFilter(skill.environment(), skillUsageStore),
             new CanaryFilter(skill.canaryPercent(), skillUsageStore));
-    SkillPromotionGate gate = promotionGate(skill.approvalMode(), webApprovalGate);
     builder
         .environment(skill.environment())
         .enableSkillManageTool(skillManageConfig)
-        .enableSkillPromotionGate(gate, visibilityFilter)
+        .enableSkillPromotionGate(webApprovalGate, visibilityFilter)
         .enableSkillCurator(SkillCuratorConfig.defaults());
   }
 

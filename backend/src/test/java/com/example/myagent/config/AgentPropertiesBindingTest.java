@@ -52,7 +52,6 @@ class AgentPropertiesBindingTest {
           assertThat(agentProperties.skill().canaryPercent()).isEqualTo(10);
           assertThat(agentProperties.skill().manageToolEnabled()).isTrue();
           assertThat(agentProperties.skill().securityScanEnabled()).isTrue();
-          assertThat(agentProperties.skill().approvalMode()).isEqualTo("web");
           assertThat(agentProperties.permission().defaultMode()).isEqualTo("DEFAULT");
           assertThat(agentProperties.tools().fileToolsEnabled()).isFalse();
           assertThat(agentProperties.tools().shellEnabled()).isFalse();
@@ -72,7 +71,6 @@ class AgentPropertiesBindingTest {
           assertThat(properties.skill().canaryPercent()).isEqualTo(10);
           assertThat(properties.skill().manageToolEnabled()).isTrue();
           assertThat(properties.skill().securityScanEnabled()).isTrue();
-          assertThat(properties.skill().approvalMode()).isEqualTo("web");
         });
   }
 

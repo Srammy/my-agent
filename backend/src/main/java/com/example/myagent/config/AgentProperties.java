@@ -36,8 +36,7 @@ public record AgentProperties(
       @DefaultValue("prod") String environment,
       @DefaultValue("10") int canaryPercent,
       @DefaultValue("true") boolean manageToolEnabled,
-      @DefaultValue("true") boolean securityScanEnabled,
-      @DefaultValue("web") String approvalMode) {}
+      @DefaultValue("true") boolean securityScanEnabled) {}
 
   public record Permission(@DefaultValue("DEFAULT") String defaultMode) {}
 

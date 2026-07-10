@@ -52,7 +52,7 @@ class AgentScopeConfigTest {
             new AgentProperties.Model("dashscope", "qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true),
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
@@ -77,7 +77,7 @@ class AgentScopeConfigTest {
                 "OPENAI_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true),
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
@@ -98,7 +98,7 @@ class AgentScopeConfigTest {
             new AgentProperties.Model("dashscope", "qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true),
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
@@ -116,7 +116,7 @@ class AgentScopeConfigTest {
             new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true),
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
@@ -220,7 +220,7 @@ class AgentScopeConfigTest {
             new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true),
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
@@ -239,7 +239,7 @@ class AgentScopeConfigTest {
             new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "file", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-            new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
+            new AgentProperties.Skill("agentscope", "prod", 10, true, true),
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
@@ -316,7 +316,7 @@ class AgentScopeConfigTest {
         new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
         new AgentProperties.StateStore(
             "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-        new AgentProperties.Skill("agentscope", "prod", 10, true, true, "web"),
+        new AgentProperties.Skill("agentscope", "prod", 10, true, true),
         new AgentProperties.Permission("DEFAULT"),
         new AgentProperties.Tools(
             fileToolsEnabled, shellEnabled, httpFetchEnabled, mcpEnabled));
