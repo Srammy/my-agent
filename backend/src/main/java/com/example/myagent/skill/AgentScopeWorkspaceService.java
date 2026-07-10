@@ -2,9 +2,11 @@ package com.example.myagent.skill;
 
 import com.example.myagent.auth.CurrentUser;
 import io.agentscope.core.agent.RuntimeContext;
-import io.agentscope.core.skill.AgentSkill;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
-import io.agentscope.harness.agent.skill.WorkspaceSkillRepository;
+import io.agentscope.harness.agent.filesystem.model.FileInfo;
+import io.agentscope.harness.agent.filesystem.model.LsResult;
+import io.agentscope.harness.agent.filesystem.model.ReadResult;
+import io.agentscope.harness.agent.filesystem.model.WriteResult;
 import java.nio.charset.StandardCharsets;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -20,7 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class AgentScopeWorkspaceService {
 
-  private static final String SKILLS_DIR = "skills";
+  private static final int READ_LIMIT = 200_000;
 
   private final AbstractFilesystem filesystem;
 
@@ -29,9 +31,17 @@ public class AgentScopeWorkspaceService {
   }
 
   public List<SkillDto> listSkills(CurrentUser user) {
-    return repoFor(user).getAllSkills().stream()
-        .map(skill -> new SkillDto(skill.getName(), skill.getDescription()))
-        .sorted(Comparator.comparing(SkillDto::name))
+    RuntimeContext ctx = runtimeContext(user);
+    LsResult result = filesystem.ls(ctx, "/skills");
+    if (!result.isSuccess()) {
+      return List.of();
+    }
+    return result.entries().stream()
+        .filter(FileInfo::isDirectory)
+        .map(fi -> extractLastSegment(fi.path()))
+        .filter(name -> !name.isBlank() && !"_drafts".equals(name))
+        .sorted()
+        .map(name -> readSkillDto(ctx, name))
         .toList();
   }
 
@@ -47,41 +57,44 @@ public class AgentScopeWorkspaceService {
     SkillValidator.SkillMarkdownMetadata meta = SkillValidator.validateSkillMarkdown(skillMdContent);
 
     String name = validateSkillName(meta.name());
-    WorkspaceSkillRepository repo = repoFor(user);
-    if (repo.skillExists(name)) {
+    RuntimeContext ctx = runtimeContext(user);
+    if (filesystem.exists(ctx, skillRoot(name))) {
       throw new ResponseStatusException(HttpStatus.CONFLICT, "Skill already exists: " + name);
     }
 
-    Map<String, String> resources = new LinkedHashMap<>();
+    requireSuccess(filesystem.write(ctx, skillRoot(name) + "/SKILL.md", skillMdContent));
+
     for (Map.Entry<String, byte[]> entry : files.entrySet()) {
       if ("SKILL.md".equals(entry.getKey())) {
         continue;
       }
       String validatedPath = validateFilePath(entry.getKey());
-      resources.put(validatedPath, new String(entry.getValue(), StandardCharsets.UTF_8));
+      requireSuccess(filesystem.write(
+          ctx, skillRoot(name) + "/" + validatedPath,
+          new String(entry.getValue(), StandardCharsets.UTF_8)));
     }
 
-    AgentSkill skill = AgentSkill.builder()
-        .name(name)
-        .description(meta.description())
-        .skillContent(skillMdContent)
-        .resources(resources)
-        .build();
-    repo.save(List.of(skill), false);
     return new SkillDto(name, meta.description());
   }
 
   public void deleteSkill(CurrentUser user, String skillName) {
     String name = validateSkillName(skillName);
-    WorkspaceSkillRepository repo = repoFor(user);
-    if (!repo.skillExists(name)) {
+    RuntimeContext ctx = runtimeContext(user);
+    if (!filesystem.exists(ctx, skillRoot(name))) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Skill not found");
     }
-    repo.delete(name);
+    requireSuccess(filesystem.delete(ctx, "/" + skillRoot(name)));
   }
 
-  private WorkspaceSkillRepository repoFor(CurrentUser user) {
-    return new WorkspaceSkillRepository(filesystem, SKILLS_DIR, () -> runtimeContext(user));
+  private SkillDto readSkillDto(RuntimeContext ctx, String skillName) {
+    ReadResult result = filesystem.read(ctx, skillRoot(skillName) + "/SKILL.md", 0, READ_LIMIT);
+    if (!result.isSuccess()) {
+      throw new ResponseStatusException(
+          HttpStatus.INTERNAL_SERVER_ERROR, "Failed to read skill: " + skillName);
+    }
+    SkillValidator.SkillMarkdownMetadata meta =
+        SkillValidator.validateSkillMarkdown(result.fileData().content());
+    return new SkillDto(meta.name(), meta.description());
   }
 
   private RuntimeContext runtimeContext(CurrentUser user) {
@@ -89,6 +102,18 @@ public class AgentScopeWorkspaceService {
         .userId(user.id().toString())
         .sessionId("workspace-api")
         .build();
+  }
+
+  private void requireSuccess(WriteResult result) {
+    if (!result.isSuccess()) {
+      throw new ResponseStatusException(
+          HttpStatus.INTERNAL_SERVER_ERROR,
+          StringUtils.hasText(result.error()) ? result.error() : "Workspace operation failed");
+    }
+  }
+
+  private static String skillRoot(String skillName) {
+    return "skills/" + skillName;
   }
 
   private static Map<String, byte[]> collectParts(List<Part> parts) {
@@ -131,5 +156,19 @@ public class AgentScopeWorkspaceService {
     } catch (IllegalArgumentException e) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
     }
+  }
+
+  /** Extracts the last non-empty path segment, e.g. "/skills/java-helper/" → "java-helper". */
+  private static String extractLastSegment(String path) {
+    if (path == null) {
+      return "";
+    }
+    String normalized = path.replace('\\', '/');
+    // Remove trailing slash
+    if (normalized.endsWith("/")) {
+      normalized = normalized.substring(0, normalized.length() - 1);
+    }
+    int lastSlash = normalized.lastIndexOf('/');
+    return lastSlash >= 0 ? normalized.substring(lastSlash + 1) : normalized;
   }
 }
