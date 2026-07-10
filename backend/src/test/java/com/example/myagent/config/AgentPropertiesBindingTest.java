@@ -47,7 +47,6 @@ class AgentPropertiesBindingTest {
           assertThat(agentProperties.stateStore().redis().keyPrefix())
               .isEqualTo("myagent:agent-state:");
           assertThat(agentProperties.workspace().path()).isEqualTo("./.agentscope/workspace");
-          assertThat(agentProperties.memory().enabled()).isTrue();
           assertThat(agentProperties.skill().storage()).isEqualTo("agentscope");
           assertThat(agentProperties.skill().environment()).isEqualTo("prod");
           assertThat(agentProperties.skill().canaryPercent()).isEqualTo(10);
@@ -63,12 +62,11 @@ class AgentPropertiesBindingTest {
   }
 
   @Test
-  void bindsAgentScopeWorkspaceMemoryAndSkillDefaults() {
+  void bindsAgentScopeWorkspaceAndSkillDefaults() {
     this.contextRunner.run(
         context -> {
           AgentProperties properties = context.getBean(AgentProperties.class);
           assertThat(properties.workspace().path()).isEqualTo("./.agentscope/workspace");
-          assertThat(properties.memory().enabled()).isTrue();
           assertThat(properties.skill().storage()).isEqualTo("agentscope");
           assertThat(properties.skill().environment()).isEqualTo("prod");
           assertThat(properties.skill().canaryPercent()).isEqualTo(10);

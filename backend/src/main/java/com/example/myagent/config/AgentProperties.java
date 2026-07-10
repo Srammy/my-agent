@@ -7,7 +7,6 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record AgentProperties(
     @DefaultValue AgentScope agentScope,
     @DefaultValue Workspace workspace,
-    @DefaultValue Memory memory,
     @DefaultValue Model model,
     @DefaultValue StateStore stateStore,
     @DefaultValue Skill skill,
@@ -17,8 +16,6 @@ public record AgentProperties(
   public record AgentScope(@DefaultValue("false") boolean enabled) {}
 
   public record Workspace(@DefaultValue("./.agentscope/workspace") String path) {}
-
-  public record Memory(@DefaultValue("true") boolean enabled) {}
 
   public record Model(
       @DefaultValue("dashscope") String provider,

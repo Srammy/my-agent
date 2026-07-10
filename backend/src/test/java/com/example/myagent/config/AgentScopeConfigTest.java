@@ -49,7 +49,6 @@ class AgentScopeConfigTest {
         new AgentProperties(
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
-            new AgentProperties.Memory(true),
             new AgentProperties.Model("dashscope", "qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
@@ -71,7 +70,6 @@ class AgentScopeConfigTest {
         new AgentProperties(
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
-            new AgentProperties.Memory(true),
             new AgentProperties.Model(
                 "openai-compatible",
                 "gpt-4.1-mini",
@@ -97,7 +95,6 @@ class AgentScopeConfigTest {
         new AgentProperties(
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
-            new AgentProperties.Memory(true),
             new AgentProperties.Model("dashscope", "qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
@@ -116,7 +113,6 @@ class AgentScopeConfigTest {
         new AgentProperties(
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
-            new AgentProperties.Memory(true),
             new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
@@ -221,7 +217,6 @@ class AgentScopeConfigTest {
         new AgentProperties(
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
-            new AgentProperties.Memory(true),
             new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
@@ -241,7 +236,6 @@ class AgentScopeConfigTest {
         new AgentProperties(
             new AgentProperties.AgentScope(true),
             new AgentProperties.Workspace(tempDir.toString()),
-            new AgentProperties.Memory(true),
             new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
             new AgentProperties.StateStore(
                 "file", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
@@ -319,7 +313,6 @@ class AgentScopeConfigTest {
     return new AgentProperties(
         new AgentProperties.AgentScope(true),
         new AgentProperties.Workspace(tempDir.toString()),
-        new AgentProperties.Memory(true),
         new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
         new AgentProperties.StateStore(
             "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),

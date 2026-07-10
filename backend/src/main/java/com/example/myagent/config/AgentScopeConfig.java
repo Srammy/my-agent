@@ -118,12 +118,7 @@ public class AgentScopeConfig {
   HarnessAgent.Builder configureHarnessAgentBuilder(
       HarnessAgent.Builder builder, AgentToolPolicy toolPolicy, AgentProperties agentProperties) {
     applyToolPolicy(builder, toolPolicy);
-    if (agentProperties.memory().enabled()) {
-      builder.memory(MemoryConfig.defaults());
-    } else {
-      builder.disableMemoryTools();
-      builder.disableMemoryHooks();
-    }
+    builder.memory(MemoryConfig.defaults());
 
     return builder
         .disableDynamicSkills()
