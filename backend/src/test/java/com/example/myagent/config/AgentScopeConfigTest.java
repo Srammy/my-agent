@@ -224,7 +224,7 @@ class AgentScopeConfigTest {
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
-    assertThatThrownBy(() -> config.applyFilesystem(builder, props, emptyRedisProvider()))
+    assertThatThrownBy(() -> config.applyDistributedStore(builder, props, emptyRedisProvider()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("Redis");
   }
@@ -243,7 +243,7 @@ class AgentScopeConfigTest {
             new AgentProperties.Permission("DEFAULT"),
             new AgentProperties.Tools(false, false, false, false));
 
-    assertThatThrownBy(() -> config.applyFilesystem(builder, props, emptyRedisProvider()))
+    assertThatThrownBy(() -> config.applyDistributedStore(builder, props, emptyRedisProvider()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("agent.state-store.type=redis");
   }

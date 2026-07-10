@@ -137,8 +137,8 @@ public class AgentScopeConfig {
     HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
     configureHarnessAgentBuilder(builder, toolPolicy(agentProperties), agentProperties);
     applyRequestScope(builder, request);
+    applyDistributedStore(builder, agentProperties, redisTemplateProvider);
     applyFilesystem(builder, agentProperties, redisTemplateProvider);
-    applyStateStore(builder, agentProperties, redisTemplateProvider);
     applySkillLearning(builder, agentProperties, skillUsageStore, webApprovalGate);
     return builder.build();
   }
@@ -152,9 +152,7 @@ public class AgentScopeConfig {
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
     builder.workspace(agentProperties.workspace().path());
-    builder.filesystem(
-        new RemoteFilesystemSpec(buildBaseStore(agentProperties, redisTemplateProvider))
-            .isolationScope(IsolationScope.USER));
+    builder.filesystem(new RemoteFilesystemSpec().isolationScope(IsolationScope.USER));
   }
 
   PermissionContextState permissionContext(ChatAgentRequest request) {
@@ -163,15 +161,12 @@ public class AgentScopeConfig {
         .build();
   }
 
-  void applyStateStore(
+  void applyDistributedStore(
       HarnessAgent.Builder builder,
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
-    AgentStateStore stateStore = buildAgentStateStore(agentProperties, redisTemplateProvider);
-    builder.stateStore(stateStore);
-    builder.distributedStore(
-        DistributedStore.builder()
-            .agentStateStore(stateStore)
+    builder.distributedStore(DistributedStore.builder()
+            .agentStateStore(buildAgentStateStore(agentProperties, redisTemplateProvider))
             .baseStore(buildBaseStore(agentProperties, redisTemplateProvider))
             .build());
   }
