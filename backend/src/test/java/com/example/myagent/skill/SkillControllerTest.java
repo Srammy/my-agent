@@ -1,6 +1,8 @@
 package com.example.myagent.skill;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
@@ -14,11 +16,14 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.web.reactive.function.BodyInserters;
 
 @WebFluxTest(SkillController.class)
 @Import(SkillControllerTest.TestSecurityConfig.class)
@@ -50,6 +55,36 @@ class SkillControllerTest {
         .isEqualTo("Java helper");
 
     verify(workspaceService).listSkills(USER);
+  }
+
+  @Test
+  void postMineAcceptsMultipartAndCreatesSkill() {
+    when(workspaceService.createSkill(eq(USER), any()))
+        .thenReturn(new SkillDto("java-helper", "Java helper"));
+
+    byte[] skillMdBytes =
+        "---\nname: java-helper\ndescription: Java helper\n---\n"
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    LinkedMultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
+    parts.add("SKILL.md", new ByteArrayResource(skillMdBytes) {
+      @Override
+      public String getFilename() {
+        return "SKILL.md";
+      }
+    });
+
+    authenticatedClient()
+        .post()
+        .uri("/api/skills/mine")
+        .contentType(MediaType.MULTIPART_FORM_DATA)
+        .body(BodyInserters.fromMultipartData(parts))
+        .exchange()
+        .expectStatus().isOk()
+        .expectBody()
+        .jsonPath("$.name").isEqualTo("java-helper")
+        .jsonPath("$.description").isEqualTo("Java helper");
+
+    verify(workspaceService).createSkill(eq(USER), any());
   }
 
   private WebTestClient authenticatedClient() {
