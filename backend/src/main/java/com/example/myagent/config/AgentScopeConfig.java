@@ -119,7 +119,13 @@ public class AgentScopeConfig {
       HarnessAgent.Builder builder, AgentToolPolicy toolPolicy, AgentProperties agentProperties) {
     applyToolPolicy(builder, toolPolicy);
     builder.memory(MemoryConfig.defaults());
-    builder.compaction(CompactionConfig.builder().build());
+    // 自动压缩配置：
+    //   - 消息数 ≥ 50 → 触发 LLM summary 压缩（保留最近 20 条原始消息）
+    //   - 预压缩参数截断：消息数 ≥ 25 或 token 数 ≥ 40000 时，把 tool 调用参数截断至 2000 字符
+    builder.compaction(
+        CompactionConfig.builder()
+            .truncateArgs(CompactionConfig.TruncateArgsConfig.builder().build())
+            .build());
 
     return builder
         .disableDynamicSkills()
