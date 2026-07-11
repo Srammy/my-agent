@@ -18,6 +18,7 @@ import io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem;
 import io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
 import io.agentscope.harness.agent.memory.MemoryConfig;
+import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.skill.curator.CanaryFilter;
 import io.agentscope.harness.agent.skill.curator.CompositeFilter;
 import io.agentscope.harness.agent.skill.curator.EnvironmentFilter;
@@ -118,6 +119,7 @@ public class AgentScopeConfig {
       HarnessAgent.Builder builder, AgentToolPolicy toolPolicy, AgentProperties agentProperties) {
     applyToolPolicy(builder, toolPolicy);
     builder.memory(MemoryConfig.defaults());
+    builder.compaction(CompactionConfig.builder().build());
 
     return builder
         .disableDynamicSkills()

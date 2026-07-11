@@ -198,6 +198,17 @@ class AgentScopeConfigTest {
   }
 
   @Test
+  void productionHarnessEnablesAutoCompaction() throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+    AgentProperties properties = properties(false, false, false, false);
+
+    config.configureHarnessAgentBuilder(builder, config.toolPolicy(properties), properties);
+
+    assertThat(booleanField(builder, "disableCompaction")).isFalse();
+    assertThat(objectField(builder, "compactionConfig")).isNotNull();
+  }
+
+  @Test
   void enabledFileAndShellFlagsAreReflectedOnHarnessBuilder() throws Exception {
     HarnessAgent.Builder builder = HarnessAgent.builder();
 
