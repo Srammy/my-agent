@@ -44,7 +44,7 @@
 
 当 AgentScope 产生待确认事件时，后端保存一条待确认记录，并生成稳定的 `confirmationId`。发送给前端的 `permission_required` 事件同时携带展示工具调用和后续提交审批所需的信息。
 
-用户允许或拒绝后，前端调用新的确认接口。后端校验当前用户、会话和待确认记录之间的归属关系，使用原始 `ToolUseBlock` 构造 `ConfirmResult`，再封装为 `UserConfirmResultEvent`，提交回同一个 AgentScope 会话，使原执行流继续运行。
+用户允许或拒绝后，前端调用新的确认接口。后端校验当前用户、会话和待确认记录之间的归属关系，使用原始 `ToolUseBlock` 构造 `ConfirmResult`，放入恢复消息的 `Msg.METADATA_CONFIRM_RESULTS`，再提交回同一个 AgentScope 会话，使原执行流继续运行。
 
 ## 后端设计
 
@@ -116,7 +116,7 @@ Content-Type: application/json
 
 ### AgentScope 恢复桥接
 
-当前流执行器只接收用户消息和 `RuntimeContext`。本次应为其增加确认恢复能力，或者新增一个职责单一的相邻接口，例如：
+当前流执行器只接收用户消息和 `RuntimeContext`。本次为其增加以下确认恢复方法：
 
 ```java
 Flux<Object> confirm(ChatToolConfirmationRequest request, Object runtimeContext)
@@ -126,12 +126,9 @@ AgentScope 适配层使用待确认记录中保存的原始对象构造：
 
 ```java
 new ConfirmResult(confirmed, toolUseBlock)
-new UserConfirmResultEvent(replyId, List.of(confirmResult))
 ```
 
-随后将该事件提交到同一 AgentScope 会话的恢复入口。
-
-AgentScope RC4 的确切恢复方法需要在编码前通过本地依赖源码或字节码确认。如果 RC4 要求调用 `interrupt(...)`、`observe(...)` 或其他入口，该差异必须封装在 AgentScope 适配层内，控制器、业务服务和前端不得依赖这些框架内部细节。
+已通过 AgentScope RC4 字节码确认恢复入口：构建带 `Msg.METADATA_CONFIRM_RESULTS` 元数据的 `UserMessage`，其中保存 `List<ConfirmResult>`；随后使用相同 `userId`、`sessionId` 和已启用 `enablePendingToolRecovery(true)` 的 HarnessAgent 调用 `streamEvents(...)`。AgentScope 从 Redis 中的 AgentState 恢复待处理工具，因此不需要保持原 Agent 实例存活，也不使用 `UserConfirmResultEvent` 作为恢复输入。
 
 ## 前端设计
 
@@ -195,8 +192,10 @@ AgentScope RC4 的确切恢复方法需要在编码前通过本地依赖源码�
 - 修改默认会话权限模式；
 - 将 AgentScope 从 RC4 升级到 GA；
 
-## 编码前必须确认的技术点
+## 已确认的 AgentScope RC4 恢复约束
 
-唯一尚需通过 AgentScope RC4 实际代码确认的是恢复入口：`UserConfirmResultEvent` 应通过事件接收器、`interrupt(...)`、`observe(...)`，还是其他公开方法送回执行流。
-
-这不会改变本设计的接口与数据边界。具体框架调用必须封装在后端的 AgentScope 恢复桥接层中。若确认 RC4 无法在原 Agent 实例关闭后恢复，则实现时需要保持待确认 Agent 实例存活至审批结束；不能退化成修改权限模式后重新发送用户消息。
+- HarnessAgent 必须启用 `enablePendingToolRecovery(true)`。
+- 恢复调用必须重用原 `userId` 与 `sessionId`，使 AgentScope 加载同一份 Redis AgentState。
+- 恢复消息的 `Msg.METADATA_CONFIRM_RESULTS` 必须包含使用 Redis 可信快照构造的 `ConfirmResult`。
+- 可以为恢复请求重建 HarnessAgent，原请求结束后无需保留进程内 Agent 实例。
+- 不得通过修改权限模式后重新发送用户消息来模拟恢复。
