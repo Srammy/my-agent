@@ -127,6 +127,18 @@ class ToolConfirmationServiceTest {
     verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("prefix:tool-confirmations:id")), eq(List.of("token")));
   }
 
+  @Test
+  void completeAndReleaseAcceptOkAndMapMissingToNotFound() {
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenReturn(Flux.just("__OK__"), Flux.just("__OK__"),
+            Flux.just("__NOT_FOUND__"), Flux.just("__NOT_FOUND__"));
+
+    StepVerifier.create(service.complete("id", "token", true)).verifyComplete();
+    StepVerifier.create(service.release("id", "token")).verifyComplete();
+    assertStatus(() -> service.complete("id", "token", true).block(), 404);
+    assertStatus(() -> service.release("id", "token").block(), 404);
+  }
+
   private void assertClaimStatus(String result, int status) {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList())).thenReturn(Flux.just(result));
     assertStatus(() -> service.claim(7L, "session", "id").block(), status);

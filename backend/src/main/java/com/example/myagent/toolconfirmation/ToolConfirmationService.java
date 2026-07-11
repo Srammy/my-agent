@@ -2,6 +2,7 @@ package com.example.myagent.toolconfirmation;
 
 import com.example.myagent.config.AgentProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.message.ToolUseBlock;
 import java.time.Duration;
@@ -78,7 +79,9 @@ public class ToolConfirmationService {
         kind, Instant.now(), ToolConfirmationStatus.PENDING, null, null, null);
     final String json;
     try {
-      json = objectMapper.writeValueAsString(record);
+      ObjectNode value = objectMapper.valueToTree(record);
+      value.put("userId", userId.toString());
+      json = objectMapper.writeValueAsString(value);
     } catch (JsonProcessingException error) {
       return Mono.error(error);
     }
