@@ -40,10 +40,10 @@ agent:
   permission:
     default-mode: DEFAULT
   tools:
-    file-tools-enabled: false
-    shell-enabled: false
-    http-fetch-enabled: false
-    mcp-enabled: false
+    file-tools-enabled: ${AGENT_TOOLS_FILE_TOOLS_ENABLED:false}
+    shell-enabled: ${AGENT_TOOLS_SHELL_ENABLED:false}
+    http-fetch-enabled: ${AGENT_TOOLS_HTTP_FETCH_ENABLED:false}
+    mcp-enabled: ${AGENT_TOOLS_MCP_ENABLED:false}
 
 mybatis-plus:
   configuration:
