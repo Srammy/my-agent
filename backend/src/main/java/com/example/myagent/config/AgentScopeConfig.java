@@ -325,8 +325,48 @@ public class AgentScopeConfig {
   }
 
   record AgentToolPolicy(
+          /**
+           * 让agent 默认无法读写宿主机文件系统.在Docker 容器里运行时，agent 的文件工具操作的是容器内的workspace（.agentscope/workspace），而不是宿主机路径。默认关闭可以防止配置错误导致 agent 意外访问容器外的挂载路径。
+           */
       boolean fileToolsEnabled,
+          /**
+           *   shell 工具让 agent 可以直接执行任意系统命令。一旦 prompt 被注入（用户输入里夹带了恶意指令），agent 可能执行 rm
+           *   -rf、数据泄露命令、网络扫描等。文件工具至少限制在固定路径，shell 没有任何范围限制。
+           *
+           *   Docker 容器里的影响
+           *
+           *   容器里执行 shell 命令可以：
+           *   - 访问挂载的卷
+           *   - 通过 /proc、/etc 探测宿主机信息
+           *   - 如果容器有 --privileged 或特定 capability，甚至可以逃逸
+           *
+           *   业务上不需要
+           *
+           *   这个项目的 agent 主要做对话、skill 管理、文件读写——不需要执行 shell 命令。没有需求就不开，不是为了禁而禁。
+           */
       boolean shellEnabled,
+          /**
+           * 数据泄露风险
+           *
+           *   http_fetch 和 web_fetch 让 agent 可以主动向任意外部 URL 发起请求。如果 agent 被恶意 prompt
+           *   操控，它可以把对话内容、用户数据、内部系统信息通过 HTTP 请求偷传到外部服务器。这是 LLM agent 里最常见的数据外泄路径之一。
+           *
+           *   内网探测
+           *
+           *   在服务器或容器环境里，agent 可以用 HTTP fetch 扫描内网：
+           *   http://192.168.1.1   # 路由器管理页面
+           *   http://10.0.0.x      # 内网其他服务
+           *   http://169.254.169.254/latest/meta-data/  # AWS EC2 实例元数据（包含 IAM 凭证）
+           *
+           *   和 file/shell 的区别
+           *
+           *   file 和 shell 工具的影响范围在容器内部，http fetch 的影响范围是整个互联网和内网——出口更宽，后果更难审计。
+           *
+           *   开启场景
+           *
+           *   如果 agent 需要联网（搜索、调用外部 API），通过 AGENT_TOOLS_HTTP_FETCH_ENABLED=true 显式开启，职责清晰。目前项目里 agent
+           *   的主要场景是基于 skill 和对话完成任务，不需要主动联
+           */
       boolean httpFetchEnabled,
       boolean mcpEnabled) {
 
