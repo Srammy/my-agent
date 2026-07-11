@@ -1,31 +1,36 @@
-# Tool Permission HITL Design
+# 工具调用单次审批闭环设计
 
-## Goal
+## 目标
 
-Fix the current permission confirmation gap for AgentScope tool calls.
+修复当前 AgentScope 工具调用权限确认链路不完整的问题。
 
-Today the app can surface `permission_required`, but users cannot approve or reject one concrete suspended tool call and continue the same AgentScope run. The fix should support a minimal human-in-the-loop loop:
+目前系统虽然能够向前端发送 `permission_required` 事件，但用户无法针对某一次被暂停的工具调用执行“允许一次”或“拒绝一次”，也无法在审批后继续原来的 AgentScope 执行流程。本次修复需要形成以下最小闭环：
 
-1. AgentScope asks for confirmation before executing a tool.
-2. The frontend shows the specific pending tool call.
-3. The user chooses allow once or reject once.
-4. The backend sends the confirmation result back to the same AgentScope session.
-5. The resumed stream continues without switching the whole session to `BYPASS`.
+1. AgentScope 在执行工具前要求用户确认。
+2. 前端展示本次待确认的具体工具调用。
+3. 用户选择“允许一次”或“拒绝一次”。
+4. 后端把确认结果提交回同一个 AgentScope 会话。
+5. 原执行流恢复并继续输出，不修改整个会话的权限模式，也不切换到 `BYPASS`。
 
-This design intentionally does not add persistent "always allow" rules yet.
+本方案暂不支持“始终允许”或“始终拒绝”等持久化规则。
 
-## Current Context
+## 当前问题
 
-The current code maps AgentScope permission events in `AgentEventMapper`:
+当前代码由 `AgentEventMapper` 映射 AgentScope 的权限事件：
 
-- `RequireUserConfirmEvent` becomes `permission_required`.
-- `RequireExternalExecutionEvent` also becomes `permission_required`.
+- `RequireUserConfirmEvent` 被转换为 `permission_required`。
+- `RequireExternalExecutionEvent` 也被转换为 `permission_required`。
 
-The event payload currently only exposes a `permission` string, usually the first tool name. The frontend can display that a permission is required, but it has no stable confirmation id, no full tool call payload, and no endpoint to send a `ConfirmResult`.
+现有事件载荷只提供一个 `permission` 字符串，通常是第一个工具名称。因此前端只能提示“需要权限”，却缺少以下信息：
 
-Permission mode is stored per session. That is useful for coarse behavior, but changing a session mode is not the same as approving one suspended tool call.
+- 可唯一标识本次审批的确认编号；
+- 完整的工具调用信息；
+- 向后端提交本次审批结果的接口；
+- 让暂停中的 AgentScope 执行流继续运行的恢复入口。
 
-AgentScope RC4 exposes the event classes needed for the official-style loop:
+系统现有的会话级 `PermissionMode` 适合控制整体权限策略，但修改整个会话的权限模式不等价于批准某一次具体工具调用。
+
+当前使用的 AgentScope RC4 已提供实现正式审批闭环所需的事件类型：
 
 - `ConfirmResult`
 - `UserConfirmResultEvent`
@@ -33,39 +38,39 @@ AgentScope RC4 exposes the event classes needed for the official-style loop:
 - `RequireUserConfirmEvent`
 - `RequireExternalExecutionEvent`
 
-## Recommended Approach
+## 方案概述
 
-Add a small confirmation bridge in the backend and wire the frontend to it.
+在后端增加一个轻量的“工具确认桥接层”，并让前端通过它提交单次审批结果。
 
-The backend will store pending confirmation records keyed by session and a generated confirmation id. The stream event sent to the frontend will include enough data for the UI to render the pending tool call and enough identifiers for a later approval request.
+当 AgentScope 产生待确认事件时，后端保存一条待确认记录，并生成稳定的 `confirmationId`。发送给前端的 `permission_required` 事件同时携带展示工具调用和后续提交审批所需的信息。
 
-When the user approves or rejects, the frontend calls a new endpoint. The backend checks session ownership, looks up the pending record, creates `ConfirmResult`, wraps it in `UserConfirmResultEvent`, and feeds it back into the AgentScope stream/resume path for the same session.
+用户允许或拒绝后，前端调用新的确认接口。后端校验当前用户、会话和待确认记录之间的归属关系，使用原始 `ToolUseBlock` 构造 `ConfirmResult`，再封装为 `UserConfirmResultEvent`，提交回同一个 AgentScope 会话，使原执行流继续运行。
 
-## Backend Components
+## 后端设计
 
-### Pending Confirmation Store
+### 待确认记录服务
 
-Create a narrow service, for example `ToolConfirmationService`, with in-memory storage first.
+新增职责单一的 `ToolConfirmationService`。第一版使用进程内存保存待确认记录，不提前引入 Redis 持久化。
 
-Each record stores:
+每条记录包含：
 
-- `confirmationId`
-- `userId`
-- `sessionId`
-- `replyId`
-- `toolCallId`
-- `toolName`
-- `toolInput`
-- original `ToolUseBlock`
-- confirmation type: user confirm or external execution
-- created timestamp
-- status: pending, approved, rejected, consumed
+- `confirmationId`：本系统生成的单次确认编号；
+- `userId`：发起对话的用户；
+- `sessionId`：所属会话；
+- `replyId`：AgentScope 要求回复的事件编号；
+- `toolCallId`：具体工具调用编号；
+- `toolName`：工具名称；
+- `toolInput`：仅用于前端展示的工具入参；
+- 原始 `ToolUseBlock`：构造确认结果时使用，禁止信任前端回传的工具调用内容；
+- `kind`：用户确认或外部执行；
+- `createdAt`：创建时间；
+- `status`：`PENDING`、`APPROVED`、`REJECTED` 或 `CONSUMED`。
 
-The first implementation can be process-local because the existing stream is already held by the current backend process. If multi-instance resume is required later, this store can move to Redis next to the AgentScope distributed store.
+进程内存方案符合当前最小修复范围。若以后需要多实例恢复，再把该服务迁移到与 AgentScope 分布式状态相邻的 Redis 存储中。
 
-### Stream Event Payload
+### 权限事件载荷
 
-Extend `StreamEventDto.permissionRequired(...)` to include:
+扩展 `StreamEventDto.permissionRequired(...)`，使 `permission_required` 事件包含：
 
 - `confirmationId`
 - `replyId`
@@ -74,95 +79,110 @@ Extend `StreamEventDto.permissionRequired(...)` to include:
 - `toolInput`
 - `kind`
 
-Keep the old `permission` field as a compatibility alias for `toolName`.
+为兼容现有前端逻辑，保留原有 `permission` 字段，并令其值等于 `toolName`。
 
-### Approval Endpoint
+### 单次确认接口
 
-Add an endpoint similar to:
+新增接口：
 
 ```http
 POST /api/sessions/{sessionId}/tool-confirmations/{confirmationId}
+Content-Type: application/json
+
 {
   "confirmed": true
 }
 ```
 
-Rules:
+接口规则：
 
-- The current user must own the session.
-- The confirmation must exist and belong to that session and user.
-- A consumed confirmation cannot be reused.
-- Approval and rejection are single-use.
+- 当前用户必须拥有该会话；
+- 待确认记录必须存在，并且属于当前用户和当前会话；
+- 已消费的确认记录不得再次提交；
+- 允许与拒绝均只能执行一次；
+- 请求体只接收审批结果，不接收或覆盖原始工具名称、参数和 `ToolUseBlock`。
 
-The response should return a normal stream of chat events if the current HTTP/SSE design allows that cleanly. If the existing client architecture makes a streaming POST awkward, the endpoint can return an accepted result and the frontend can open a follow-up stream using the confirmation id. The implementation should choose the smaller change that preserves one actual AgentScope resume, not a full re-prompt.
+接口应优先直接返回恢复后的 SSE 事件流，使前端能把后续事件追加到同一段对话。如果现有客户端无法稳定处理流式 `POST`，可以由确认接口返回已受理结果，再由前端使用 `confirmationId` 打开后续流；无论采用哪种传输形式，都必须恢复原 AgentScope 执行，不能重新发送原用户消息来模拟恢复。
 
-### AgentScope Resume Bridge
+### AgentScope 恢复桥接
 
-The stream executor abstraction currently accepts a user message and `RuntimeContext`. It should grow a second operation for confirmation resume, or a small sibling abstraction should be added:
+当前流执行器只接收用户消息和 `RuntimeContext`。本次应为其增加确认恢复能力，或者新增一个职责单一的相邻接口，例如：
 
 ```java
 Flux<Object> confirm(ChatToolConfirmationRequest request, Object runtimeContext)
 ```
 
-The AgentScope-facing implementation will construct:
+AgentScope 适配层使用待确认记录中保存的原始对象构造：
 
 ```java
 new ConfirmResult(confirmed, toolUseBlock)
 new UserConfirmResultEvent(replyId, List.of(confirmResult))
 ```
 
-and feed that event into the same AgentScope session state.
+随后将该事件提交到同一 AgentScope 会话的恢复入口。
 
-If RC4 requires using `interrupt(...)` or `observe(...)` rather than direct event submission, the implementation should wrap that detail behind the bridge so controllers and frontend code do not depend on AgentScope internals.
+AgentScope RC4 的确切恢复方法需要在编码前通过本地依赖源码或字节码确认。如果 RC4 要求调用 `interrupt(...)`、`observe(...)` 或其他入口，该差异必须封装在 AgentScope 适配层内，控制器、业务服务和前端不得依赖这些框架内部细节。
 
-## Frontend Components
+## 前端设计
 
-Update the permission card to display the pending tool name and compact input preview.
+权限卡片展示以下内容：
 
-Add two actions:
+- 待执行工具名称；
+- 精简后的工具参数预览；
+- “允许一次”按钮；
+- “拒绝一次”按钮。
 
-- Allow once
-- Reject once
+点击按钮后，前端使用当前 `sessionId` 和事件中的 `confirmationId` 调用单次确认接口，并只提交 `confirmed` 布尔值。
 
-The actions call the new confirmation endpoint with `confirmed: true` or `false`. While the request is pending, disable both buttons. After the response stream resumes, append returned events to the same chat message.
+请求处理中同时禁用两个按钮，避免重复提交。恢复接口返回的流事件继续追加到当前会话中，不创建新的用户消息。
 
-The existing session-level permission panel remains available, but it should not be used as the main way to approve a single tool call.
+现有会话级权限设置面板继续保留，但不再承担某一次工具调用的确认职责。
 
-## Error Handling
+## 状态与错误处理
 
-Return 404 when the session or confirmation does not belong to the current user.
+- 会话或待确认记录不存在，或者不属于当前用户时，返回 `404`，避免泄露其他用户是否存在待确认操作。
+- 待确认记录已经消费时，返回 `409`。
+- 请求体缺失或 `confirmed` 值非法时，返回 `400`。
+- AgentScope 未接受确认事件时，通过正常的 `error` 流事件告知前端。
+- 只有 AgentScope 接受确认事件后，才能把记录标记为已消费；提交失败时应保留可重试状态。
 
-Return 409 when the confirmation has already been consumed.
+## 安全约束
 
-Return 400 for malformed confirmation requests.
+- 后端必须使用首次收到权限事件时保存的原始 `ToolUseBlock`。
+- 前端回传的内容不得改变工具名称、工具参数或工具调用编号。
+- 所有读取和消费待确认记录的操作都必须同时校验 `userId` 与 `sessionId`。
+- 同一个 `confirmationId` 只能成功消费一次，并发重复请求只能有一个成功。
 
-If AgentScope resume fails, surface a normal `error` stream event and mark the confirmation consumed only if AgentScope accepted the confirmation event.
+## 测试范围
 
-## Tests
+后端测试：
 
-Backend tests:
+- 映射 `RequireUserConfirmEvent` 时创建待确认记录，并输出完整确认元数据；
+- 不能审批不属于当前用户的会话；
+- 不存在或已经消费的确认记录会被拒绝；
+- “允许一次”使用原始 `ToolUseBlock` 构造 `ConfirmResult(true, toolCall)`；
+- “拒绝一次”使用原始 `ToolUseBlock` 构造 `ConfirmResult(false, toolCall)`；
+- 并发重复提交只能消费一次；
+- 确认恢复失败时不会提前消费待确认记录。
 
-- `RequireUserConfirmEvent` mapping registers a pending confirmation and emits the confirmation metadata.
-- Approval rejects sessions not owned by the current user.
-- Approval rejects missing or already consumed confirmations.
-- Approval creates `ConfirmResult(true, toolCall)` for allow once.
-- Rejection creates `ConfirmResult(false, toolCall)` for reject once.
-- The confirmation bridge uses the original `ToolUseBlock`, not user-supplied tool input.
+前端测试：
 
-Frontend tests:
+- 带确认元数据的 `permission_required` 事件展示允许和拒绝按钮；
+- 点击允许或拒绝时使用正确的 `sessionId`、`confirmationId` 和 `confirmed` 值调用接口；
+- 请求处理中两个按钮均不可重复点击；
+- 恢复后的事件继续追加到原会话。
 
-- `permission_required` events with confirmation metadata render allow and reject buttons.
-- Clicking allow/reject calls the confirmation API with the correct session and confirmation id.
-- Buttons are disabled while the confirmation request is pending.
+## 不在本次范围内
 
-## Out Of Scope
+- 持久化的“始终允许”或“始终拒绝”规则；
+- 编辑 AgentScope `PermissionRule` 的界面；
+- 外部工具执行完成后回传任意 `ToolResultBlock` 的完整闭环；
+- 修改默认会话权限模式；
+- 将 AgentScope 从 RC4 升级到 GA；
+- 为未来多实例场景提前引入 Redis 待确认存储。
 
-- Persistent "always allow" or "always deny" tool rules.
-- A UI for editing AgentScope `PermissionRule` objects.
-- Support for externally executed tools returning arbitrary `ToolResultBlock` payloads, beyond preserving the existing `RequireExternalExecutionEvent` display.
-- Changing default session permission modes.
-- Migrating from AgentScope RC4 to GA.
+## 编码前必须确认的技术点
 
-## Open Implementation Detail
+唯一尚需通过 AgentScope RC4 实际代码确认的是恢复入口：`UserConfirmResultEvent` 应通过事件接收器、`interrupt(...)`、`observe(...)`，还是其他公开方法送回执行流。
 
-The only detail that must be verified during implementation is the exact RC4 resume API. The public classes prove that `ConfirmResult` and `UserConfirmResultEvent` exist, but the code must confirm whether the event is passed through an event sink, `interrupt(...)`, `observe(...)`, or another AgentScope hook. The chosen implementation should keep this behind the backend bridge.
+这不会改变本设计的接口与数据边界。具体框架调用必须封装在后端的 AgentScope 恢复桥接层中。若确认 RC4 无法在原 Agent 实例关闭后恢复，则实现时需要保持待确认 Agent 实例存活至审批结束；不能退化成修改权限模式后重新发送用户消息。
