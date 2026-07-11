@@ -41,12 +41,12 @@ public class AgentEventMapper {
       return StreamEventDto.toolResult(
           toolResultDataDeltaEvent.getToolCallName(), renderContent(toolResultDataDeltaEvent.getData()));
     }
-    if (agentEvent instanceof RequireUserConfirmEvent requireUserConfirmEvent) {
-      return StreamEventDto.permissionRequired(firstToolName(requireUserConfirmEvent.getToolCalls()));
-    }
     if (agentEvent instanceof RequireExternalExecutionEvent requireExternalExecutionEvent) {
       return StreamEventDto.permissionRequired(
           firstToolName(requireExternalExecutionEvent.getToolCalls()));
+    }
+    if (agentEvent instanceof RequireUserConfirmEvent) {
+      return null;
     }
     if (agentEvent instanceof ExceedMaxItersEvent exceedMaxItersEvent) {
       return StreamEventDto.error(

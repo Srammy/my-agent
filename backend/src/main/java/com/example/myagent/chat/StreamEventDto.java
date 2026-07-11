@@ -1,5 +1,6 @@
 package com.example.myagent.chat;
 
+import com.example.myagent.toolconfirmation.ToolConfirmationRecord;
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.util.Map;
@@ -33,6 +34,19 @@ public record StreamEventDto(String type, @JsonIgnore Map<String, Object> payloa
 
   public static StreamEventDto permissionRequired(String permission) {
     return new StreamEventDto("permission_required", Map.of("permission", permission));
+  }
+
+  public static StreamEventDto permissionRequired(ToolConfirmationRecord record) {
+    return new StreamEventDto(
+        "permission_required",
+        Map.of(
+            "permission", record.toolCall().name(),
+            "confirmationId", record.confirmationId(),
+            "replyId", record.replyId(),
+            "toolCallId", record.toolCall().id(),
+            "toolName", record.toolCall().name(),
+            "toolInput", record.toolCall().input(),
+            "kind", record.kind().name()));
   }
 
   public static StreamEventDto evolutionProposal(String summary) {

@@ -57,14 +57,13 @@ class AgentEventMapperTest {
   }
 
   @Test
-  void mapsConfirmRequestToPermissionRequiredEvent() {
+  void doesNotMapConfirmRequestWithoutRegisteringIt() {
     ToolUseBlock toolUseBlock = shellCommandToolCall();
 
     StreamEventDto event =
         mapper.map(new RequireUserConfirmEvent("reply-1", List.of(toolUseBlock)));
 
-    assertThat(event.type()).isEqualTo("permission_required");
-    assertThat(event.payload()).containsEntry("permission", "shell_command");
+    assertThat(event).isNull();
   }
 
   @Test
@@ -73,7 +72,9 @@ class AgentEventMapperTest {
         mapper.map(new RequireExternalExecutionEvent("reply-1", List.of(shellCommandToolCall())));
 
     assertThat(event.type()).isEqualTo("permission_required");
-    assertThat(event.payload()).containsEntry("permission", "shell_command");
+    assertThat(event.payload())
+        .containsExactly(Map.entry("permission", "shell_command"))
+        .doesNotContainKey("confirmationId");
   }
 
   @Test
