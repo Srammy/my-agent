@@ -30,6 +30,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 @ExtendWith(MockitoExtension.class)
 class AgentScopeChatAgentGatewayTest {
@@ -159,6 +160,27 @@ class AgentScopeChatAgentGatewayTest {
   }
 
   @Test
+  void waitsForConfirmationRegistrationBeforePublishingLaterEvents() {
+    ToolUseBlock toolCall = new ToolUseBlock("call-1", "shell_command", Map.of());
+    Sinks.One<ToolConfirmationRecord> registration = Sinks.one();
+    when(executor.stream(any(ChatAgentRequest.class), any()))
+        .thenReturn(Flux.just(
+            new RequireUserConfirmEvent("reply-1", List.of(toolCall)),
+            new AgentEndEvent("reply-1")));
+    when(toolConfirmationService.create(any(), any(), any(), any(), any()))
+        .thenReturn(registration.asMono());
+
+    var events = new java.util.ArrayList<StreamEventDto>();
+    var subscription = gateway().stream(request()).subscribe(events::add);
+
+    assertThat(events).isEmpty();
+    registration.tryEmitValue(record("confirm-1", "reply-1", toolCall));
+    assertThat(events).extracting(StreamEventDto::type)
+        .containsExactly("permission_required", "done");
+    subscription.dispose();
+  }
+
+  @Test
   void emitsErrorWithoutRegisteringWhenConfirmationHasNoTool() {
     when(executor.stream(any(ChatAgentRequest.class), any()))
         .thenReturn(Flux.just(new RequireUserConfirmEvent("reply-1", List.of())));
@@ -174,19 +196,41 @@ class AgentScopeChatAgentGatewayTest {
   }
 
   @Test
-  void convertsConfirmationRegistrationFailureToProtocolError() {
-    ToolUseBlock toolCall = new ToolUseBlock("call-1", "shell_command", Map.of());
+  void emitsErrorWithoutRegisteringWhenConfirmationToolsAreNull() {
     when(executor.stream(any(ChatAgentRequest.class), any()))
-        .thenReturn(Flux.just(new RequireUserConfirmEvent("reply-1", List.of(toolCall))));
-    when(toolConfirmationService.create(any(), any(), any(), any(), any()))
-        .thenReturn(Mono.error(new IllegalStateException("redis unavailable")));
+        .thenReturn(Flux.just(new RequireUserConfirmEvent("reply-1", null)));
 
     var events = gateway().stream(request()).collectList().block();
 
     assertThat(events).singleElement().satisfies(event -> {
       assertThat(event.type()).isEqualTo("error");
+      assertThat(event.payload()).containsEntry(
+          "message", "AgentScope confirmation event did not include a tool call");
+    });
+    verify(toolConfirmationService, never()).create(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void convertsConfirmationRegistrationFailureToProtocolError() {
+    ToolUseBlock toolCall = new ToolUseBlock("call-1", "shell_command", Map.of());
+    Sinks.One<ToolConfirmationRecord> registration = Sinks.one();
+    when(executor.stream(any(ChatAgentRequest.class), any()))
+        .thenReturn(Flux.just(
+            new RequireUserConfirmEvent("reply-1", List.of(toolCall)),
+            new AgentEndEvent("reply-1")));
+    when(toolConfirmationService.create(any(), any(), any(), any(), any()))
+        .thenReturn(registration.asMono());
+
+    var events = new java.util.ArrayList<StreamEventDto>();
+    var subscription = gateway().stream(request()).subscribe(events::add);
+
+    assertThat(events).isEmpty();
+    registration.tryEmitError(new IllegalStateException("redis unavailable"));
+    assertThat(events).singleElement().satisfies(event -> {
+      assertThat(event.type()).isEqualTo("error");
       assertThat(event.payload()).containsEntry("message", "redis unavailable");
     });
+    subscription.dispose();
   }
 
   private AgentScopeChatAgentGateway gateway() {

@@ -41,7 +41,7 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
 
     return executor
         .stream(request, runtimeContext)
-        .flatMap(
+        .concatMap(
             agentEvent -> {
               if (agentEvent instanceof RequireUserConfirmEvent confirmationEvent) {
                 if (confirmationEvent.getToolCalls() == null
