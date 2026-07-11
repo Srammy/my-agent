@@ -48,9 +48,9 @@
 
 ## 后端设计
 
-### 待确认记录服务
+### Redis 待确认记录服务
 
-新增职责单一的 `ToolConfirmationService`。第一版使用进程内存保存待确认记录，不提前引入 Redis 持久化。
+新增职责单一的 `ToolConfirmationService`，直接使用项目现有的 `ReactiveStringRedisTemplate` 将待确认记录持久化到 Redis。Redis 是该数据的唯一事实来源，服务实例不保存可影响审批结果的本地副本，因此任意后端实例都可以处理后续确认请求。
 
 每条记录包含：
 
@@ -61,12 +61,22 @@
 - `toolCallId`：具体工具调用编号；
 - `toolName`：工具名称；
 - `toolInput`：仅用于前端展示的工具入参；
-- 原始 `ToolUseBlock`：构造确认结果时使用，禁止信任前端回传的工具调用内容；
+- 原始 `ToolUseBlock` 的规范化快照：保存重建该对象所需的调用编号、名称和输入，构造确认结果时使用，禁止信任前端回传的工具调用内容；
 - `kind`：用户确认或外部执行；
 - `createdAt`：创建时间；
-- `status`：`PENDING`、`APPROVED`、`REJECTED` 或 `CONSUMED`。
+- `status`：`PENDING`、`PROCESSING` 或 `CONSUMED`；处理中状态记录租约令牌与租约截止时间，消费结果中记录最终的 `confirmed` 值。
 
-进程内存方案符合当前最小修复范围。若以后需要多实例恢复，再把该服务迁移到与 AgentScope 分布式状态相邻的 Redis 存储中。
+Redis 键使用项目现有的 `agent.state-store.redis.key-prefix`，格式为：
+
+```text
+{keyPrefix}tool-confirmations:{confirmationId}
+```
+
+值使用 JSON 保存，不直接使用 Java 原生序列化。待确认记录默认设置 30 分钟 TTL；过期后视为不存在并返回 `404`。TTL 只在创建记录时设置，查询和失败重试不续期，避免无人处理的审批记录长期占用存储。
+
+创建记录使用带 TTL 的单次 Redis 写入。消费记录必须通过 Lua 脚本执行原子比较并更新：只有状态为 `PENDING` 且 `userId`、`sessionId` 均匹配时，才能取得规范化工具调用快照并进入本次恢复流程。这样可以保证在多实例和并发重复点击场景下，同一个 `confirmationId` 只有一个请求获得执行权。
+
+为满足“AgentScope 未接受确认时允许重试”的要求，消费过程使用短期租约状态 `PROCESSING`：原子脚本把 `PENDING` 改为带处理令牌的 `PROCESSING`；AgentScope 接受事件后，再以同一处理令牌改为 `CONSUMED`。若提交失败，则以同一令牌恢复为 `PENDING`。所有状态转换必须保留创建记录时的原始过期时间，不能重置 TTL。处理实例异常退出时，`PROCESSING` 租约在 30 秒后可被新的请求重新获取，记录本身仍受原始 30 分钟 TTL 限制。
 
 ### 权限事件载荷
 
@@ -142,6 +152,8 @@ AgentScope RC4 的确切恢复方法需要在编码前通过本地依赖源码�
 
 - 会话或待确认记录不存在，或者不属于当前用户时，返回 `404`，避免泄露其他用户是否存在待确认操作。
 - 待确认记录已经消费时，返回 `409`。
+- 待确认记录已过期时，按不存在处理并返回 `404`。
+- 待确认记录正在被其他请求处理且租约尚未过期时，返回 `409`。
 - 请求体缺失或 `confirmed` 值非法时，返回 `400`。
 - AgentScope 未接受确认事件时，通过正常的 `error` 流事件告知前端。
 - 只有 AgentScope 接受确认事件后，才能把记录标记为已消费；提交失败时应保留可重试状态。
@@ -152,6 +164,7 @@ AgentScope RC4 的确切恢复方法需要在编码前通过本地依赖源码�
 - 前端回传的内容不得改变工具名称、工具参数或工具调用编号。
 - 所有读取和消费待确认记录的操作都必须同时校验 `userId` 与 `sessionId`。
 - 同一个 `confirmationId` 只能成功消费一次，并发重复请求只能有一个成功。
+- Redis 中的工具调用快照是确认恢复的唯一可信输入；HTTP 请求只能决定 `confirmed` 的值。
 
 ## 测试范围
 
@@ -163,6 +176,8 @@ AgentScope RC4 的确切恢复方法需要在编码前通过本地依赖源码�
 - “允许一次”使用原始 `ToolUseBlock` 构造 `ConfirmResult(true, toolCall)`；
 - “拒绝一次”使用原始 `ToolUseBlock` 构造 `ConfirmResult(false, toolCall)`；
 - 并发重复提交只能消费一次；
+- Redis 记录带有 30 分钟 TTL，过期记录不能再审批；
+- `PROCESSING` 租约阻止并发处理，并能在处理实例异常后恢复；
 - 确认恢复失败时不会提前消费待确认记录。
 
 前端测试：
@@ -179,7 +194,6 @@ AgentScope RC4 的确切恢复方法需要在编码前通过本地依赖源码�
 - 外部工具执行完成后回传任意 `ToolResultBlock` 的完整闭环；
 - 修改默认会话权限模式；
 - 将 AgentScope 从 RC4 升级到 GA；
-- 为未来多实例场景提前引入 Redis 待确认存储。
 
 ## 编码前必须确认的技术点
 
