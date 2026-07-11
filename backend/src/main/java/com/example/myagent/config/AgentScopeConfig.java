@@ -106,6 +106,24 @@ public class AgentScopeConfig {
     return new AgentToolPolicy(agentProperties.tools());
   }
 
+  /**
+   * 将 AgentProperties.tools 的四个开关翻译成 HarnessAgent.Builder 配置。
+   *
+   * <p>第一步：文件和 shell 工具（直接控制 agent 能力）
+   * <ul>
+   *   <li>fileToolsEnabled=false → disableFilesystemTools()，agent 无法使用 read_file/write_file 等
+   *   <li>shellEnabled=false     → disableShellTool()，agent 无法执行 shell 命令
+   * </ul>
+   *
+   * <p>第二步：toolsConfig（细粒度网络和 MCP 配置）
+   * <ul>
+   *   <li>httpFetchEnabled=true  → allow ["http_fetch","web_fetch"]
+   *   <li>httpFetchEnabled=false → deny  ["http_fetch","web_fetch"]
+   *   <li>mcpEnabled=false       → mcpServers={}，不挂载任何 MCP server
+   * </ul>
+   *
+   * <p>链路：application.yml (agent.tools.*) → AgentProperties.Tools → AgentToolPolicy → 此方法 → HarnessAgent.Builder
+   */
   void applyToolPolicy(HarnessAgent.Builder builder, AgentToolPolicy toolPolicy) {
     if (!toolPolicy.fileToolsEnabled()) {
       builder.disableFilesystemTools();
