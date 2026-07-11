@@ -19,6 +19,7 @@ import io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
 import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
+import io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig;
 import io.agentscope.harness.agent.skill.curator.CanaryFilter;
 import io.agentscope.harness.agent.skill.curator.CompositeFilter;
 import io.agentscope.harness.agent.skill.curator.EnvironmentFilter;
@@ -122,10 +123,12 @@ public class AgentScopeConfig {
     // 自动压缩配置：
     //   - 消息数 ≥ 50 → 触发 LLM summary 压缩（保留最近 20 条原始消息）
     //   - 预压缩参数截断：消息数 ≥ 25 或 token 数 ≥ 40000 时，把 tool 调用参数截断至 2000 字符
+    //   - 大工具结果卸载：tool 结果 > 80000 字符时卸载到 /large_tool_results，保留 2000 字符预览
     builder.compaction(
         CompactionConfig.builder()
             .truncateArgs(CompactionConfig.TruncateArgsConfig.builder().build())
             .build());
+    builder.toolResultEviction(ToolResultEvictionConfig.defaults());
 
     return builder
         .disableDynamicSkills()
