@@ -5,6 +5,8 @@ import com.example.myagent.toolconfirmation.ConfirmationKind;
 import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.RequireUserConfirmEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -16,6 +18,7 @@ import reactor.core.publisher.Flux;
 @ConditionalOnBean(AgentScopeStreamExecutor.class)
 @ConditionalOnProperty(prefix = "agent.agent-scope", name = "enabled", havingValue = "true")
 public class AgentScopeChatAgentGateway implements ChatAgentGateway {
+  private static final Logger log = LoggerFactory.getLogger(AgentScopeChatAgentGateway.class);
 
   private final AgentScopeStreamExecutor executor;
   private final AgentEventMapper agentEventMapper;
@@ -84,6 +87,11 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
     if (confirmationEvent.getToolCalls() == null || confirmationEvent.getToolCalls().isEmpty()) {
       return Flux.just(
           StreamEventDto.error("AgentScope confirmation event did not include a tool call"));
+    }
+    if (confirmationEvent.getToolCalls().size() > 1) {
+      log.warn(
+          "Multiple tool calls in confirmation event for reply {}; only the first will be registered",
+          confirmationEvent.getReplyId());
     }
     return toolConfirmationService
         .create(

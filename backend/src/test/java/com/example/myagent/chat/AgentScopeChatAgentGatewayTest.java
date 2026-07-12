@@ -28,12 +28,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({MockitoExtension.class, OutputCaptureExtension.class})
 class AgentScopeChatAgentGatewayTest {
 
   private static final String PERMISSION_MODE_CONTEXT_KEY =
@@ -144,7 +146,7 @@ class AgentScopeChatAgentGatewayTest {
   }
 
   @Test
-  void registersOnlyTheFirstToolFromAConfirmationEvent() {
+  void registersOnlyTheFirstToolFromAConfirmationEvent(CapturedOutput output) {
     ToolUseBlock first = new ToolUseBlock("call-1", "first", Map.of("one", 1));
     ToolUseBlock second = new ToolUseBlock("call-2", "second", Map.of("two", 2));
     when(executor.stream(any(ChatAgentRequest.class), any()))
@@ -158,6 +160,8 @@ class AgentScopeChatAgentGatewayTest {
         assertThat(event.payload()).containsEntry("toolCallId", "call-1"));
     verify(toolConfirmationService, times(1))
         .create(7L, "s_123", "reply-1", first, ConfirmationKind.USER_CONFIRM);
+    assertThat(output).contains(
+        "Multiple tool calls in confirmation event for reply reply-1; only the first will be registered");
   }
 
   @Test
