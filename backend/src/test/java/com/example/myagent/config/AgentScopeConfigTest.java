@@ -3,6 +3,10 @@ package com.example.myagent.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.example.myagent.chat.AgentEventMapper;
 import com.example.myagent.chat.AgentScopeChatAgentGateway;
@@ -10,6 +14,7 @@ import com.example.myagent.chat.ChatAgentRequest;
 import com.example.myagent.chat.ChatToolConfirmationRequest;
 import com.example.myagent.chat.ChatAgentGateway;
 import com.example.myagent.chat.StubChatAgentGateway;
+import com.example.myagent.agent.AgentScopeStreamExecutor;
 import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.skillreview.SkillReviewDecisionStore;
 import com.example.myagent.skillreview.WebApprovalGate;
@@ -19,6 +24,7 @@ import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.event.ConfirmResult;
+import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
@@ -36,6 +42,10 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.mock.env.MockEnvironment;
+import org.mockito.ArgumentCaptor;
+import org.mockito.MockedStatic;
+import org.mockito.Answers;
+import reactor.core.publisher.Flux;
 
 class AgentScopeConfigTest {
 
@@ -304,7 +314,7 @@ class AgentScopeConfigTest {
     for (boolean confirmed : java.util.List.of(true, false)) {
       ConfirmResult result = config.confirmResult(confirmationRequest(confirmed, snapshot));
       assertThat(result.isConfirmed()).isEqualTo(confirmed);
-      assertThat(result.getRules()).isNull();
+      assertThat(result.getRules()).isEmpty();
       assertThat(result.getToolCall().getId()).isEqualTo("call-1");
       assertThat(result.getToolCall().getName()).isEqualTo("shell_command");
       assertThat(result.getToolCall().getInput()).containsEntry("command", "Get-ChildItem");
@@ -321,6 +331,73 @@ class AgentScopeConfigTest {
         .asList()
         .singleElement()
         .isInstanceOf(ConfirmResult.class);
+  }
+
+  @Test
+  void confirmationExecutorResumesEachDecisionWithOneTrustedConfirmResultAndRequestScope() {
+    HarnessAgent.Builder builder = mock(HarnessAgent.Builder.class, Answers.RETURNS_SELF);
+    HarnessAgent agent = mock(HarnessAgent.class);
+    ReactiveStringRedisTemplate redisTemplate = mock(ReactiveStringRedisTemplate.class);
+    org.springframework.beans.factory.support.DefaultListableBeanFactory beanFactory =
+        new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+    beanFactory.registerSingleton("redisTemplate", redisTemplate);
+    ArgumentCaptor<UserMessage> messageCaptor = ArgumentCaptor.forClass(UserMessage.class);
+    ArgumentCaptor<RuntimeContext> contextCaptor = ArgumentCaptor.forClass(RuntimeContext.class);
+    when(builder.build()).thenReturn(agent);
+    when(agent.streamEvents(messageCaptor.capture(), contextCaptor.capture())).thenReturn(Flux.empty());
+
+    try (MockedStatic<HarnessAgent> harnessAgent = org.mockito.Mockito.mockStatic(HarnessAgent.class)) {
+      harnessAgent.when(HarnessAgent::builder).thenReturn(builder);
+      AgentScopeStreamExecutor executor =
+          config.agentScopeStreamExecutor(
+              mock(Model.class),
+              properties(false, false, false, false),
+              beanFactory.getBeanProvider(ReactiveStringRedisTemplate.class),
+              mock(SkillUsageStore.class),
+              mock(WebApprovalGate.class));
+
+      for (boolean confirmed : java.util.List.of(true, false)) {
+        ChatToolConfirmationRequest request =
+            new ChatToolConfirmationRequest(
+                7L,
+                "s_123",
+                PermissionMode.ACCEPT_EDITS,
+                "reply-1",
+                new com.example.myagent.toolconfirmation.ToolCallSnapshot(
+                    "call-1", "shell_command", Map.of("command", "Get-ChildItem")),
+                confirmed);
+        RuntimeContext context =
+            RuntimeContext.builder().userId("7").sessionId("s_123").build();
+        context.put(ChatAgentRequest.PERMISSION_MODE_CONTEXT_KEY, PermissionMode.ACCEPT_EDITS.name());
+
+        executor.confirm(request, context).blockLast();
+
+        UserMessage message = messageCaptor.getValue();
+        assertThat(message.getMetadata()).containsOnlyKeys(Msg.METADATA_CONFIRM_RESULTS);
+        assertThat(message.getMetadata().get(Msg.METADATA_CONFIRM_RESULTS))
+            .asList()
+            .singleElement()
+            .isInstanceOfSatisfying(
+                ConfirmResult.class,
+                result -> {
+                  assertThat(result.isConfirmed()).isEqualTo(confirmed);
+                  assertThat(result.getRules()).isEmpty();
+                  assertThat(result.getToolCall().getId()).isEqualTo("call-1");
+                  assertThat(result.getToolCall().getName()).isEqualTo("shell_command");
+                  assertThat(result.getToolCall().getInput())
+                      .containsEntry("command", "Get-ChildItem");
+                });
+        assertThat(contextCaptor.getValue().getUserId()).isEqualTo("7");
+        assertThat(contextCaptor.getValue().getSessionId()).isEqualTo("s_123");
+        assertThat(
+                contextCaptor
+                    .getValue()
+                    .get(ChatAgentRequest.PERMISSION_MODE_CONTEXT_KEY, String.class))
+            .isEqualTo(PermissionMode.ACCEPT_EDITS.name());
+      }
+    }
+
+    verify(agent, org.mockito.Mockito.times(2)).close();
   }
 
   @Test

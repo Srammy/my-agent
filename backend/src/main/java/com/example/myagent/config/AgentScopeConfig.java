@@ -241,7 +241,8 @@ public class AgentScopeConfig {
   }
 
   ConfirmResult confirmResult(ChatToolConfirmationRequest request) {
-    return new ConfirmResult(request.confirmed(), request.toolCall().toToolUseBlock());
+    return new ConfirmResult(
+        request.confirmed(), request.toolCall().toToolUseBlock(), Collections.emptyList());
   }
 
   UserMessage confirmationMessage(ChatToolConfirmationRequest request) {
