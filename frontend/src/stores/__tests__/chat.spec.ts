@@ -118,6 +118,23 @@ describe('chat confirmation streams', () => {
     expect(event).toMatchObject({ consumed: false, confirming: false })
   })
 
+  it('keeps a confirmation retryable after an NDJSON error event', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockImplementation(async (_sessionId, _confirmationId, _confirmed, onEvent) => {
+      onEvent({ type: 'error', message: 'tool execution failed' })
+    })
+    const store = useChatStore()
+    const event = toolEvent()
+    store.messagesBySession.s1 = [{ id: 'assistant-1', role: 'assistant', content: '', events: [event] }]
+
+    await store.confirmTool('s1', 'assistant-1', event, true)
+
+    expect(store.messages('s1')[0].events).toMatchObject([
+      { id: event.id, confirmationId: event.confirmationId },
+      { type: 'error', message: 'tool execution failed' }
+    ])
+    expect(event).toMatchObject({ consumed: false, confirming: false })
+  })
+
   it('does not request confirmation without an id or after consumption', async () => {
     const confirmToolCallMock = vi.spyOn(chatApi, 'confirmToolCall')
     const store = useChatStore()
