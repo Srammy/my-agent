@@ -20,6 +20,7 @@ describe('chat confirmation streams', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.restoreAllMocks()
+    localStorage.clear()
   })
 
   it('confirmToolCall sends encoded path, bearer token, body, and parsed NDJSON events', async () => {
@@ -133,6 +134,29 @@ describe('chat confirmation streams', () => {
       { type: 'error', message: 'tool execution failed' }
     ])
     expect(event).toMatchObject({ consumed: false, confirming: false })
+  })
+
+  it('retries confirmation after a streamed NDJSON error', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('{"type":"error","message":"resume failed"}\n', { status: 200 }))
+      .mockResolvedValueOnce(new Response('{"type":"done"}\n', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useChatStore()
+    const event = toolEvent()
+    store.messagesBySession.s1 = [{ id: 'assistant-1', role: 'assistant', content: '', events: [event] }]
+
+    await store.confirmTool('s1', 'assistant-1', event, true)
+
+    expect(store.messages('s1')[0].events).toMatchObject([
+      { id: event.id, confirmationId: event.confirmationId },
+      { type: 'error', message: 'resume failed' }
+    ])
+    expect(event).toMatchObject({ consumed: false, confirming: false })
+
+    await store.confirmTool('s1', 'assistant-1', event, true)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(event).toMatchObject({ consumed: true, confirming: false })
   })
 
   it('does not request confirmation without an id or after consumption', async () => {
