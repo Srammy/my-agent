@@ -66,6 +66,8 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
         .concatMap(
             agentEvent -> {
               if (agentEvent instanceof Throwable throwable) {
+                // AgentScope may surface SDK failures as event values; confirmation recovery
+                // routes them through ChatService's reactive error handling.
                 return Flux.error(throwable);
               }
               if (agentEvent instanceof RequireUserConfirmEvent confirmationEvent) {
