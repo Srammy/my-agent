@@ -35,6 +35,17 @@ public class ChatController {
     return chatService.stream(currentUser, sessionId, request.message()).map(this::toNdjsonLine);
   }
 
+  @PostMapping(path = "/{sessionId}/tool-confirmations/{confirmationId}", produces = "application/x-ndjson")
+  public Flux<String> confirm(
+      @AuthenticationPrincipal CurrentUser currentUser,
+      @PathVariable String sessionId,
+      @PathVariable String confirmationId,
+      @Valid @RequestBody ToolConfirmationRequest request) {
+    return chatService
+        .confirm(currentUser, sessionId, confirmationId, request.confirmed())
+        .map(this::toNdjsonLine);
+  }
+
   private String toNdjsonLine(StreamEventDto event) {
     try {
       return objectMapper.writeValueAsString(event) + "\n";
