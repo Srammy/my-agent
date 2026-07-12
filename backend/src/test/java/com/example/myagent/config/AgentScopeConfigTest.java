@@ -336,7 +336,9 @@ class AgentScopeConfigTest {
   @Test
   void confirmationExecutorResumesEachDecisionWithOneTrustedConfirmResultAndRequestScope() {
     HarnessAgent.Builder builder = mock(HarnessAgent.Builder.class, Answers.RETURNS_SELF);
+    HarnessAgent.Builder secondBuilder = mock(HarnessAgent.Builder.class, Answers.RETURNS_SELF);
     HarnessAgent agent = mock(HarnessAgent.class);
+    HarnessAgent secondAgent = mock(HarnessAgent.class);
     ReactiveStringRedisTemplate redisTemplate = mock(ReactiveStringRedisTemplate.class);
     org.springframework.beans.factory.support.DefaultListableBeanFactory beanFactory =
         new org.springframework.beans.factory.support.DefaultListableBeanFactory();
@@ -344,10 +346,13 @@ class AgentScopeConfigTest {
     ArgumentCaptor<UserMessage> messageCaptor = ArgumentCaptor.forClass(UserMessage.class);
     ArgumentCaptor<RuntimeContext> contextCaptor = ArgumentCaptor.forClass(RuntimeContext.class);
     when(builder.build()).thenReturn(agent);
+    when(secondBuilder.build()).thenReturn(secondAgent);
     when(agent.streamEvents(messageCaptor.capture(), contextCaptor.capture())).thenReturn(Flux.empty());
+    when(secondAgent.streamEvents(messageCaptor.capture(), contextCaptor.capture()))
+        .thenReturn(Flux.empty());
 
     try (MockedStatic<HarnessAgent> harnessAgent = org.mockito.Mockito.mockStatic(HarnessAgent.class)) {
-      harnessAgent.when(HarnessAgent::builder).thenReturn(builder);
+      harnessAgent.when(HarnessAgent::builder).thenReturn(builder, secondBuilder);
       AgentScopeStreamExecutor executor =
           config.agentScopeStreamExecutor(
               mock(Model.class),
@@ -397,7 +402,12 @@ class AgentScopeConfigTest {
       }
     }
 
-    verify(agent, org.mockito.Mockito.times(2)).close();
+    verify(builder).build();
+    verify(secondBuilder).build();
+    verify(agent).streamEvents(any(UserMessage.class), any(RuntimeContext.class));
+    verify(secondAgent).streamEvents(any(UserMessage.class), any(RuntimeContext.class));
+    verify(agent).close();
+    verify(secondAgent).close();
   }
 
   @Test
