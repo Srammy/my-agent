@@ -4,7 +4,7 @@ import java.time.Instant;
 
 public record ToolConfirmationRecord(
     String confirmationId,
-    Long userId,
+    String userId,
     String sessionId,
     String replyId,
     ToolCallSnapshot toolCall,

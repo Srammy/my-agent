@@ -198,7 +198,7 @@ class ChatControllerTest {
 
   private ToolConfirmationClaim claim() {
     ToolConfirmationRecord record = new ToolConfirmationRecord(
-        "confirm_123", USER.id(), "s_123", "reply_123",
+        "confirm_123", USER.id().toString(), "s_123", "reply_123",
         new ToolCallSnapshot("tool_123", "deploy", java.util.Map.of("env", "prod")), ConfirmationKind.USER_CONFIRM,
         Instant.parse("2026-07-04T09:45:00Z"), ToolConfirmationStatus.PENDING, null, null, null);
     return new ToolConfirmationClaim(record, "token_123");

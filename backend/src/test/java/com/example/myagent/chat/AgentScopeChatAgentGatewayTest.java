@@ -332,7 +332,7 @@ class AgentScopeChatAgentGatewayTest {
       String confirmationId, String replyId, ToolUseBlock toolCall) {
     return new ToolConfirmationRecord(
         confirmationId,
-        7L,
+        "7",
         "s_123",
         replyId,
         new ToolCallSnapshot(toolCall.getId(), toolCall.getName(), toolCall.getInput()),

@@ -74,7 +74,8 @@ class ToolConfirmationServiceTest {
     assertThat(key.getValue()).isEqualTo("prefix:tool-confirmations:" + record.confirmationId());
     ToolConfirmationRecord stored = objectMapper.readValue(json.getValue(), ToolConfirmationRecord.class);
     assertThat(stored).usingRecursiveComparison().isEqualTo(record);
-    assertThat(stored.userId()).isEqualTo(7L);
+    assertThat(record.userId()).isEqualTo("7");
+    assertThat(stored.userId()).isEqualTo("7");
     assertThat(stored.sessionId()).isEqualTo("session");
     assertThat(stored.replyId()).isEqualTo("reply");
     assertThat(stored.kind()).isEqualTo(ConfirmationKind.USER_CONFIRM);
@@ -145,7 +146,7 @@ class ToolConfirmationServiceTest {
   }
 
   private String jsonRecord(String id, ToolConfirmationStatus status, String token, Long lease, Boolean confirmed) throws Exception {
-    return objectMapper.writeValueAsString(new ToolConfirmationRecord(id, 7L, "session", "reply",
+    return objectMapper.writeValueAsString(new ToolConfirmationRecord(id, "7", "session", "reply",
         ToolCallSnapshot.from(toolCall()), ConfirmationKind.USER_CONFIRM, Instant.now(), status, token, lease, confirmed));
   }
 

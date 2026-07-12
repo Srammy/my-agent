@@ -236,7 +236,7 @@ class ChatServiceTest {
   private ToolConfirmationClaim claim(String replyId, String toolCallId) {
     ToolCallSnapshot toolCall = new ToolCallSnapshot(toolCallId, "deploy", java.util.Map.of("env", "prod"));
     ToolConfirmationRecord record = new ToolConfirmationRecord(
-        "confirm_123", USER.id(), "s_123", replyId, toolCall, ConfirmationKind.USER_CONFIRM,
+        "confirm_123", USER.id().toString(), "s_123", replyId, toolCall, ConfirmationKind.USER_CONFIRM,
         Instant.parse("2026-07-04T09:45:00Z"), ToolConfirmationStatus.PENDING, null, null, null);
     return new ToolConfirmationClaim(record, "token_123");
   }
