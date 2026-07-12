@@ -263,6 +263,26 @@ class AgentScopeChatAgentGatewayTest {
   }
 
   @Test
+  void confirmationRegistersFollowUpUserConfirmationAndPublishesMetadata() {
+    ToolUseBlock toolCall = new ToolUseBlock("call-2", "shell_command", Map.of("command", "pwd"));
+    ToolConfirmationRecord record = record("confirm-2", "reply-2", toolCall);
+    when(executor.confirm(any(ChatToolConfirmationRequest.class), any()))
+        .thenReturn(Flux.just(new RequireUserConfirmEvent("reply-2", List.of(toolCall))));
+    when(toolConfirmationService.create(any(), any(), any(), any(), any()))
+        .thenReturn(Mono.just(record));
+
+    var events = gateway().confirm(confirmationRequest(true)).collectList().block();
+
+    assertThat(events).singleElement().satisfies(event -> {
+      assertThat(event.type()).isEqualTo("permission_required");
+      assertThat(event.payload()).containsEntry("confirmationId", "confirm-2");
+      assertThat(event.payload()).containsEntry("toolCallId", "call-2");
+    });
+    verify(toolConfirmationService)
+        .create(7L, "s_123", "reply-2", toolCall, ConfirmationKind.USER_CONFIRM);
+  }
+
+  @Test
   void confirmationPropagatesReactiveExecutorErrors() {
     ChatToolConfirmationRequest request = confirmationRequest(true);
     when(executor.confirm(any(ChatToolConfirmationRequest.class), any()))

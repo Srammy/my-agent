@@ -40,21 +40,8 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
         .concatMap(
             agentEvent -> {
               if (agentEvent instanceof RequireUserConfirmEvent confirmationEvent) {
-                if (confirmationEvent.getToolCalls() == null
-                    || confirmationEvent.getToolCalls().isEmpty()) {
-                  return Flux.just(
-                      StreamEventDto.error(
-                          "AgentScope confirmation event did not include a tool call"));
-                }
-                return toolConfirmationService
-                    .create(
-                        request.userId(),
-                        request.sessionId(),
-                        confirmationEvent.getReplyId(),
-                        confirmationEvent.getToolCalls().getFirst(),
-                        ConfirmationKind.USER_CONFIRM)
-                    .map(StreamEventDto::permissionRequired)
-                    .flux();
+                return registerUserConfirmation(
+                    request.userId(), request.sessionId(), confirmationEvent);
               }
               StreamEventDto mapped = agentEventMapper.map(agentEvent);
               if (mapped != null) {
@@ -81,9 +68,30 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
               if (agentEvent instanceof Throwable throwable) {
                 return Flux.error(throwable);
               }
+              if (agentEvent instanceof RequireUserConfirmEvent confirmationEvent) {
+                return registerUserConfirmation(
+                    request.userId(), request.sessionId(), confirmationEvent);
+              }
               StreamEventDto mapped = agentEventMapper.map(agentEvent);
               return mapped == null ? Flux.empty() : Flux.just(mapped);
             });
+  }
+
+  private Flux<StreamEventDto> registerUserConfirmation(
+      Long userId, String sessionId, RequireUserConfirmEvent confirmationEvent) {
+    if (confirmationEvent.getToolCalls() == null || confirmationEvent.getToolCalls().isEmpty()) {
+      return Flux.just(
+          StreamEventDto.error("AgentScope confirmation event did not include a tool call"));
+    }
+    return toolConfirmationService
+        .create(
+            userId,
+            sessionId,
+            confirmationEvent.getReplyId(),
+            confirmationEvent.getToolCalls().getFirst(),
+            ConfirmationKind.USER_CONFIRM)
+        .map(StreamEventDto::permissionRequired)
+        .flux();
   }
 
   private RuntimeContext runtimeContext(
