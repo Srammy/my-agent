@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.example.myagent.chat.AgentEventMapper;
 import com.example.myagent.chat.AgentScopeChatAgentGateway;
 import com.example.myagent.chat.ChatAgentRequest;
+import com.example.myagent.chat.ChatToolConfirmationRequest;
 import com.example.myagent.chat.ChatAgentGateway;
 import com.example.myagent.chat.StubChatAgentGateway;
 import com.example.myagent.permission.PermissionMode;
@@ -17,10 +18,14 @@ import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.core.permission.PermissionContextState;
+import io.agentscope.core.event.ConfirmResult;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.nio.file.Path;
 import java.lang.reflect.Field;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -272,6 +277,62 @@ class AgentScopeConfigTest {
   }
 
   @Test
+  void confirmationRequestScopeUsesTheSamePermissionContext() {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+    ChatToolConfirmationRequest request =
+        new ChatToolConfirmationRequest(
+            7L,
+            "s_123",
+            PermissionMode.ACCEPT_EDITS,
+            "reply-1",
+            new com.example.myagent.toolconfirmation.ToolCallSnapshot(
+                "call-1", "shell_command", Map.of("command", "Get-ChildItem")),
+            true);
+
+    config.applyRequestScope(builder, request);
+
+    assertThat(config.permissionContext(request).getMode())
+        .isEqualTo(io.agentscope.core.permission.PermissionMode.ACCEPT_EDITS);
+  }
+
+  @Test
+  void confirmationResultCarriesTrustedToolSnapshotForApprovalAndRejection() {
+    com.example.myagent.toolconfirmation.ToolCallSnapshot snapshot =
+        new com.example.myagent.toolconfirmation.ToolCallSnapshot(
+            "call-1", "shell_command", Map.of("command", "Get-ChildItem"));
+
+    for (boolean confirmed : java.util.List.of(true, false)) {
+      ConfirmResult result = config.confirmResult(confirmationRequest(confirmed, snapshot));
+      assertThat(result.isConfirmed()).isEqualTo(confirmed);
+      assertThat(result.getRules()).isNull();
+      assertThat(result.getToolCall().getId()).isEqualTo("call-1");
+      assertThat(result.getToolCall().getName()).isEqualTo("shell_command");
+      assertThat(result.getToolCall().getInput()).containsEntry("command", "Get-ChildItem");
+    }
+  }
+
+  @Test
+  void confirmationMessageUsesAgentScopeConfirmResultsMetadata() {
+    UserMessage message = config.confirmationMessage(confirmationRequest(true, new com.example.myagent.toolconfirmation.ToolCallSnapshot(
+        "call-1", "shell_command", Map.of())));
+
+    assertThat(message.getMetadata()).containsOnlyKeys(Msg.METADATA_CONFIRM_RESULTS);
+    assertThat(message.getMetadata().get(Msg.METADATA_CONFIRM_RESULTS))
+        .asList()
+        .singleElement()
+        .isInstanceOf(ConfirmResult.class);
+  }
+
+  @Test
+  void productionHarnessEnablesPendingToolRecovery() throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+
+    config.configureHarnessAgentBuilder(builder, config.toolPolicy(properties(false, false, false, false)), properties(false, false, false, false));
+
+    assertThat(booleanField(objectField(builder, "inner"), "enablePendingToolRecovery")).isTrue();
+  }
+
+  @Test
   void contextUsesStubGatewayWhenAgentScopeDisabledWithoutApiKey() {
     contextRunner.run(
         context -> {
@@ -349,6 +410,12 @@ class AgentScopeConfigTest {
         new AgentProperties.Permission("DEFAULT"),
         new AgentProperties.Tools(
             fileToolsEnabled, shellEnabled, httpFetchEnabled, mcpEnabled));
+  }
+
+  private ChatToolConfirmationRequest confirmationRequest(
+      boolean confirmed, com.example.myagent.toolconfirmation.ToolCallSnapshot snapshot) {
+    return new ChatToolConfirmationRequest(
+        7L, "s_123", PermissionMode.DEFAULT, "reply-1", snapshot, confirmed);
   }
 
   private org.springframework.beans.factory.ObjectProvider<ReactiveStringRedisTemplate>

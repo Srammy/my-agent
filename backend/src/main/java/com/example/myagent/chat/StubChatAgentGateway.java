@@ -13,4 +13,9 @@ public class StubChatAgentGateway implements ChatAgentGateway {
     return Flux.just(
         StreamEventDto.replyStart(), StreamEventDto.textDelta(request.message()), StreamEventDto.done());
   }
+
+  @Override
+  public Flux<StreamEventDto> confirm(ChatToolConfirmationRequest request) {
+    return Flux.just(StreamEventDto.replyStart(), StreamEventDto.done());
+  }
 }

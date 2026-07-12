@@ -33,11 +33,7 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
   @Override
   public Flux<StreamEventDto> stream(ChatAgentRequest request) {
     RuntimeContext runtimeContext =
-        RuntimeContext.builder()
-            .userId(request.userId().toString())
-            .sessionId(request.sessionId())
-            .build();
-    runtimeContext.put(ChatAgentRequest.PERMISSION_MODE_CONTEXT_KEY, request.permissionMode().name());
+        runtimeContext(request.userId(), request.sessionId(), request.permissionMode());
 
     return executor
         .stream(request, runtimeContext)
@@ -71,6 +67,31 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
             })
         .onErrorResume(
             throwable -> Flux.just(StreamEventDto.error(errorMessage(throwable))));
+  }
+
+  @Override
+  public Flux<StreamEventDto> confirm(ChatToolConfirmationRequest request) {
+    RuntimeContext runtimeContext =
+        runtimeContext(request.userId(), request.sessionId(), request.permissionMode());
+
+    return executor
+        .confirm(request, runtimeContext)
+        .concatMap(
+            agentEvent -> {
+              if (agentEvent instanceof Throwable throwable) {
+                return Flux.error(throwable);
+              }
+              StreamEventDto mapped = agentEventMapper.map(agentEvent);
+              return mapped == null ? Flux.empty() : Flux.just(mapped);
+            });
+  }
+
+  private RuntimeContext runtimeContext(
+      Long userId, String sessionId, com.example.myagent.permission.PermissionMode permissionMode) {
+    RuntimeContext runtimeContext =
+        RuntimeContext.builder().userId(userId.toString()).sessionId(sessionId).build();
+    runtimeContext.put(ChatAgentRequest.PERMISSION_MODE_CONTEXT_KEY, permissionMode.name());
+    return runtimeContext;
   }
 
   private String errorMessage(Throwable throwable) {

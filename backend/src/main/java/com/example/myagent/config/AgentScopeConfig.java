@@ -2,8 +2,12 @@ package com.example.myagent.config;
 
 import com.example.myagent.agent.AgentScopeStreamExecutor;
 import com.example.myagent.chat.ChatAgentRequest;
+import com.example.myagent.chat.ChatToolConfirmationRequest;
 import com.example.myagent.skillreview.WebApprovalGate;
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.event.ConfirmResult;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
@@ -78,10 +82,36 @@ public class AgentScopeConfig {
       @Override
       public reactor.core.publisher.Flux<Object> stream(ChatAgentRequest request, Object runtimeContext) {
         return reactor.core.publisher.Flux.using(
-            () -> buildHarnessAgent(agentScopeModel, agentProperties, redisTemplateProvider, request, skillUsageStore, webApprovalGate),
+            () ->
+                buildHarnessAgent(
+                    agentScopeModel,
+                    agentProperties,
+                    redisTemplateProvider,
+                    requestScope(request),
+                    skillUsageStore,
+                    webApprovalGate),
             harnessAgent ->
                 harnessAgent
                     .streamEvents(request.message(), (RuntimeContext) runtimeContext)
+                    .cast(Object.class),
+            HarnessAgent::close);
+      }
+
+      @Override
+      public reactor.core.publisher.Flux<Object> confirm(
+          ChatToolConfirmationRequest request, Object runtimeContext) {
+        return reactor.core.publisher.Flux.using(
+            () ->
+                buildHarnessAgent(
+                    agentScopeModel,
+                    agentProperties,
+                    redisTemplateProvider,
+                    requestScope(request),
+                    skillUsageStore,
+                    webApprovalGate),
+            harnessAgent ->
+                harnessAgent
+                    .streamEvents(confirmationMessage(request), (RuntimeContext) runtimeContext)
                     .cast(Object.class),
             HarnessAgent::close);
       }
@@ -138,6 +168,7 @@ public class AgentScopeConfig {
       HarnessAgent.Builder builder, AgentToolPolicy toolPolicy, AgentProperties agentProperties) {
     applyToolPolicy(builder, toolPolicy);
     builder.memory(MemoryConfig.defaults());
+    builder.enablePendingToolRecovery(true);
     // 自动压缩配置：
     //   - 消息数 ≥ 50 → 触发 LLM summary 压缩（保留最近 20 条原始消息）
     //   - 预压缩参数截断：消息数 ≥ 25 或 token 数 ≥ 40000 时，把 tool 调用参数截断至 2000 字符
@@ -163,12 +194,12 @@ public class AgentScopeConfig {
       Model agentScopeModel,
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider,
-      ChatAgentRequest request,
+      AgentRequestScope requestScope,
       SkillUsageStore skillUsageStore,
       WebApprovalGate webApprovalGate) {
     HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
     configureHarnessAgentBuilder(builder, toolPolicy(agentProperties), agentProperties);
-    applyRequestScope(builder, request);
+    applyRequestScope(builder, requestScope);
     applyDistributedStore(builder, agentProperties, redisTemplateProvider);
     applyFilesystem(builder, agentProperties, redisTemplateProvider);
     applySkillLearning(builder, agentProperties, skillUsageStore, webApprovalGate);
@@ -176,7 +207,15 @@ public class AgentScopeConfig {
   }
 
   void applyRequestScope(HarnessAgent.Builder builder, ChatAgentRequest request) {
-    builder.permissionContext(permissionContext(request));
+    applyRequestScope(builder, requestScope(request));
+  }
+
+  void applyRequestScope(HarnessAgent.Builder builder, ChatToolConfirmationRequest request) {
+    applyRequestScope(builder, requestScope(request));
+  }
+
+  private void applyRequestScope(HarnessAgent.Builder builder, AgentRequestScope requestScope) {
+    builder.permissionContext(permissionContext(requestScope));
   }
 
   void applyFilesystem(
@@ -188,10 +227,41 @@ public class AgentScopeConfig {
   }
 
   PermissionContextState permissionContext(ChatAgentRequest request) {
+    return permissionContext(requestScope(request));
+  }
+
+  PermissionContextState permissionContext(ChatToolConfirmationRequest request) {
+    return permissionContext(requestScope(request));
+  }
+
+  private PermissionContextState permissionContext(AgentRequestScope requestScope) {
     return PermissionContextState.builder()
-        .mode(PermissionMode.valueOf(request.permissionMode().name()))
+        .mode(io.agentscope.core.permission.PermissionMode.valueOf(requestScope.permissionMode().name()))
         .build();
   }
+
+  ConfirmResult confirmResult(ChatToolConfirmationRequest request) {
+    return new ConfirmResult(request.confirmed(), request.toolCall().toToolUseBlock());
+  }
+
+  UserMessage confirmationMessage(ChatToolConfirmationRequest request) {
+    return UserMessage.builder()
+        .metadata(java.util.Map.of(Msg.METADATA_CONFIRM_RESULTS, java.util.List.of(confirmResult(request))))
+        .build();
+  }
+
+  private AgentRequestScope requestScope(ChatAgentRequest request) {
+    return new AgentRequestScope(request.userId(), request.sessionId(), request.permissionMode());
+  }
+
+  private AgentRequestScope requestScope(ChatToolConfirmationRequest request) {
+    return new AgentRequestScope(request.userId(), request.sessionId(), request.permissionMode());
+  }
+
+  private record AgentRequestScope(
+      Long userId,
+      String sessionId,
+      com.example.myagent.permission.PermissionMode permissionMode) {}
 
   void applyDistributedStore(
       HarnessAgent.Builder builder,

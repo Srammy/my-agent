@@ -31,6 +31,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.test.StepVerifier;
 
 @ExtendWith(MockitoExtension.class)
 class AgentScopeChatAgentGatewayTest {
@@ -233,12 +234,78 @@ class AgentScopeChatAgentGatewayTest {
     subscription.dispose();
   }
 
+  @Test
+  void confirmationPassesTrustedSnapshotAndRequestScopeToExecutor() {
+    ToolCallSnapshot snapshot =
+        new ToolCallSnapshot("call-1", "shell_command", Map.of("command", "Get-ChildItem"));
+    ChatToolConfirmationRequest request =
+        new ChatToolConfirmationRequest(
+            7L, "s_123", PermissionMode.ACCEPT_EDITS, "reply-1", snapshot, true);
+    when(executor.confirm(any(ChatToolConfirmationRequest.class), any()))
+        .thenReturn(Flux.just(new TextBlockDeltaEvent("reply-1", "block-1", "resumed")));
+
+    var events = gateway().confirm(request).collectList().block();
+
+    assertThat(events).singleElement().satisfies(event -> {
+      assertThat(event.type()).isEqualTo("text_delta");
+      assertThat(event.payload()).containsEntry("delta", "resumed");
+    });
+    ArgumentCaptor<ChatToolConfirmationRequest> requestCaptor =
+        ArgumentCaptor.forClass(ChatToolConfirmationRequest.class);
+    ArgumentCaptor<Object> runtimeContextCaptor = ArgumentCaptor.forClass(Object.class);
+    verify(executor).confirm(requestCaptor.capture(), runtimeContextCaptor.capture());
+    assertThat(requestCaptor.getValue()).isEqualTo(request);
+    RuntimeContext runtimeContext = (RuntimeContext) runtimeContextCaptor.getValue();
+    assertThat(runtimeContext.getUserId()).isEqualTo("7");
+    assertThat(runtimeContext.getSessionId()).isEqualTo("s_123");
+    assertThat(runtimeContext.get(PERMISSION_MODE_CONTEXT_KEY, String.class))
+        .isEqualTo(PermissionMode.ACCEPT_EDITS.name());
+  }
+
+  @Test
+  void confirmationPropagatesReactiveExecutorErrors() {
+    ChatToolConfirmationRequest request = confirmationRequest(true);
+    when(executor.confirm(any(ChatToolConfirmationRequest.class), any()))
+        .thenReturn(Flux.error(new IllegalStateException("redis unavailable")));
+
+    StepVerifier.create(gateway().confirm(request))
+        .expectErrorMatches(
+            throwable ->
+                throwable instanceof IllegalStateException
+                    && throwable.getMessage().equals("redis unavailable"))
+        .verify();
+  }
+
+  @Test
+  void confirmationPropagatesThrowableEvents() {
+    ChatToolConfirmationRequest request = confirmationRequest(false);
+    when(executor.confirm(any(ChatToolConfirmationRequest.class), any()))
+        .thenReturn(Flux.just(new IllegalArgumentException("sdk confirmation error")));
+
+    StepVerifier.create(gateway().confirm(request))
+        .expectErrorMatches(
+            throwable ->
+                throwable instanceof IllegalArgumentException
+                    && throwable.getMessage().equals("sdk confirmation error"))
+        .verify();
+  }
+
   private AgentScopeChatAgentGateway gateway() {
     return new AgentScopeChatAgentGateway(executor, new AgentEventMapper(), toolConfirmationService);
   }
 
   private ChatAgentRequest request() {
     return new ChatAgentRequest(7L, "s_123", "hello", PermissionMode.DEFAULT);
+  }
+
+  private ChatToolConfirmationRequest confirmationRequest(boolean confirmed) {
+    return new ChatToolConfirmationRequest(
+        7L,
+        "s_123",
+        PermissionMode.DEFAULT,
+        "reply-1",
+        new ToolCallSnapshot("call-1", "shell_command", Map.of("command", "Get-ChildItem")),
+        confirmed);
   }
 
   private ToolConfirmationRecord record(
