@@ -26,6 +26,12 @@ export interface StreamEvent {
   permission?: string
   summary?: string
   message?: string
+  confirmationId?: string
+  replyId?: string
+  toolCallId?: string
+  toolName?: string
+  toolInput?: unknown
+  kind?: 'USER_CONFIRM' | 'EXTERNAL_EXECUTION' | string
   [key: string]: unknown
 }
 
@@ -101,9 +107,9 @@ async function readError(response: Response) {
   return text
 }
 
-export async function streamChat(
-  sessionId: string,
-  message: string,
+export async function streamNdjson(
+  path: string,
+  body: unknown,
   onEvent: (event: StreamEvent) => void
 ): Promise<void> {
   const headers = new Headers({ 'Content-Type': 'application/json' })
@@ -113,10 +119,10 @@ export async function streamChat(
     headers.set('Authorization', `Bearer ${token}`)
   }
 
-  const response = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/stream`, {
+  const response = await fetch(path, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ message })
+    body: JSON.stringify(body)
   })
 
   if (!response.ok) {
@@ -143,4 +149,25 @@ export async function streamChat(
 
   parser.push(decoder.decode())
   parser.flush()
+}
+
+export function streamChat(
+  sessionId: string,
+  message: string,
+  onEvent: (event: StreamEvent) => void
+): Promise<void> {
+  return streamNdjson(`/api/chat/sessions/${encodeURIComponent(sessionId)}/stream`, { message }, onEvent)
+}
+
+export function confirmToolCall(
+  sessionId: string,
+  confirmationId: string,
+  confirmed: boolean,
+  onEvent: (event: StreamEvent) => void
+): Promise<void> {
+  return streamNdjson(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/tool-confirmations/${encodeURIComponent(confirmationId)}`,
+    { confirmed },
+    onEvent
+  )
 }

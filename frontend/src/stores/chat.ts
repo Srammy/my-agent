@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { streamChat, type StreamEvent } from '../api/chat'
+import { confirmToolCall, streamChat, type StreamEvent } from '../api/chat'
 
 export type ChatRole = 'user' | 'assistant' | 'system' | 'tool'
 
@@ -19,6 +19,14 @@ export interface ToolEvent {
   permission?: string
   summary?: string
   message?: string
+  confirmationId?: string
+  replyId?: string
+  toolCallId?: string
+  toolName?: string
+  toolInput?: unknown
+  kind?: 'USER_CONFIRM' | 'EXTERNAL_EXECUTION' | string
+  confirming?: boolean
+  consumed?: boolean
 }
 
 export interface ChatMessage {
@@ -65,7 +73,13 @@ function toToolEvent(event: StreamEvent): ToolEvent | null {
     output: event.output,
     permission: typeof event.permission === 'string' ? event.permission : undefined,
     summary: typeof event.summary === 'string' ? event.summary : undefined,
-    message: typeof event.message === 'string' ? event.message : undefined
+    message: typeof event.message === 'string' ? event.message : undefined,
+    confirmationId: typeof event.confirmationId === 'string' ? event.confirmationId : undefined,
+    replyId: typeof event.replyId === 'string' ? event.replyId : undefined,
+    toolCallId: typeof event.toolCallId === 'string' ? event.toolCallId : undefined,
+    toolName: typeof event.toolName === 'string' ? event.toolName : undefined,
+    toolInput: event.toolInput,
+    kind: typeof event.kind === 'string' ? event.kind : undefined
   }
 }
 
@@ -93,6 +107,49 @@ export const useChatStore = defineStore('chat', {
 
       if (message) {
         message.events.push(event)
+      }
+    },
+    async confirmTool(sessionId: string, messageId: string, event: ToolEvent, confirmed: boolean) {
+      if (!event.confirmationId || event.confirming || event.consumed) {
+        return
+      }
+
+      event.confirming = true
+      this.error = ''
+
+      try {
+        await confirmToolCall(sessionId, event.confirmationId, confirmed, (streamEvent) => {
+          if (streamEvent.type === 'text_delta') {
+            const message = this.messagesBySession[sessionId]?.find((item) => item.id === messageId)
+
+            if (message) {
+              message.content += typeof streamEvent.delta === 'string' ? streamEvent.delta : ''
+            }
+            return
+          }
+
+          if (streamEvent.type === 'done') {
+            return
+          }
+
+          const toolEvent = toToolEvent(streamEvent)
+
+          if (toolEvent) {
+            this.appendEvent(sessionId, messageId, toolEvent)
+          }
+        })
+        event.consumed = true
+      } catch (error) {
+        const message = errorMessage(error)
+        this.error = message
+        event.consumed = false
+        this.appendEvent(sessionId, messageId, {
+          id: makeId('event'),
+          type: 'error',
+          message
+        })
+      } finally {
+        event.confirming = false
       }
     },
     async sendMessage(sessionId: string, content: string) {
