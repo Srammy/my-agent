@@ -119,7 +119,7 @@ describe('chat confirmation streams', () => {
     expect(event).toMatchObject({ consumed: false, confirming: false })
   })
 
-  it('keeps a confirmation retryable after an NDJSON error event', async () => {
+  it('consumes a confirmation after an NDJSON error event', async () => {
     vi.spyOn(chatApi, 'confirmToolCall').mockImplementation(async (_sessionId, _confirmationId, _confirmed, onEvent) => {
       onEvent({ type: 'error', message: 'tool execution failed' })
     })
@@ -133,10 +133,10 @@ describe('chat confirmation streams', () => {
       { id: event.id, confirmationId: event.confirmationId },
       { type: 'error', message: 'tool execution failed' }
     ])
-    expect(event).toMatchObject({ consumed: false, confirming: false })
+    expect(event).toMatchObject({ consumed: true, confirming: false })
   })
 
-  it('retries confirmation after a streamed NDJSON error', async () => {
+  it('does not retry confirmation after a streamed NDJSON error', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response('{"type":"error","message":"resume failed"}\n', { status: 200 }))
       .mockResolvedValueOnce(new Response('{"type":"done"}\n', { status: 200 }))
@@ -151,11 +151,11 @@ describe('chat confirmation streams', () => {
       { id: event.id, confirmationId: event.confirmationId },
       { type: 'error', message: 'resume failed' }
     ])
-    expect(event).toMatchObject({ consumed: false, confirming: false })
+    expect(event).toMatchObject({ consumed: true, confirming: false })
 
     await store.confirmTool('s1', 'assistant-1', event, true)
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(event).toMatchObject({ consumed: true, confirming: false })
   })
 

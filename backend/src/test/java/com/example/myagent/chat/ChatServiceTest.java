@@ -18,6 +18,8 @@ import com.example.myagent.toolconfirmation.ToolConfirmationStatus;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -64,15 +66,15 @@ class ChatServiceTest {
   }
 
   @Test
-  void confirmUsesClaimedRecordAndCompletesAfterGatewayEvents() {
+  void confirmConsumesClaimedRecordBeforeCallingGateway() {
     ToolConfirmationClaim claim = claim("reply_123", "tool_123");
     when(sessionService.requireOwnedSession(USER, "s_123"))
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
     when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.ACCEPT_EDITS);
     when(toolConfirmationService.claim(USER.id(), "s_123", "confirm_123")).thenReturn(Mono.just(claim));
+    when(toolConfirmationService.consume("confirm_123", claim.processingToken(), true)).thenReturn(Mono.empty());
     when(chatAgentGateway.confirm(org.mockito.ArgumentMatchers.any()))
         .thenReturn(Flux.just(StreamEventDto.replyStart(), StreamEventDto.done()));
-    when(toolConfirmationService.complete("confirm_123", claim.processingToken(), true)).thenReturn(Mono.empty());
 
     ChatService chatService = new ChatService(
         sessionService, chatAgentGateway, permissionService, toolConfirmationService);
@@ -87,22 +89,66 @@ class ChatServiceTest {
     inOrder.verify(sessionService).requireOwnedSession(USER, "s_123");
     inOrder.verify(permissionService).getModeForOwnedSession("s_123");
     inOrder.verify(toolConfirmationService).claim(USER.id(), "s_123", "confirm_123");
+    inOrder.verify(toolConfirmationService).consume("confirm_123", claim.processingToken(), true);
     inOrder.verify(chatAgentGateway).confirm(requestCaptor.capture());
-    inOrder.verify(toolConfirmationService).complete("confirm_123", claim.processingToken(), true);
     assertThat(requestCaptor.getValue()).isEqualTo(new ChatToolConfirmationRequest(
         USER.id(), "s_123", PermissionMode.ACCEPT_EDITS, "reply_123",
         claim.record().toolCall(), true));
   }
 
   @Test
-  void confirmForwardsFalseToGatewayAndComplete() {
+  void confirmConsumesBeforeAnUnfinishedGatewayRecoveryFlow() {
     ToolConfirmationClaim claim = claim("reply_123", "tool_123");
     when(sessionService.requireOwnedSession(USER, "s_123"))
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
     when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
     when(toolConfirmationService.claim(USER.id(), "s_123", "confirm_123")).thenReturn(Mono.just(claim));
+    when(toolConfirmationService.consume("confirm_123", claim.processingToken(), true)).thenReturn(Mono.empty());
+    when(chatAgentGateway.confirm(org.mockito.ArgumentMatchers.any())).thenReturn(Flux.never());
+
+    reactor.core.Disposable subscription = new ChatService(
+        sessionService, chatAgentGateway, permissionService, toolConfirmationService)
+        .confirm(USER, "s_123", "confirm_123", true).subscribe();
+
+    org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(toolConfirmationService, chatAgentGateway);
+    inOrder.verify(toolConfirmationService).consume("confirm_123", claim.processingToken(), true);
+    inOrder.verify(chatAgentGateway).confirm(org.mockito.ArgumentMatchers.any());
+    subscription.dispose();
+  }
+
+  @Test
+  void cancellingAnUnfinishedGatewayRecoveryFlowDoesNotUndoConsumption() throws InterruptedException {
+    ToolConfirmationClaim claim = claim("reply_123", "tool_123");
+    CountDownLatch gatewaySubscribed = new CountDownLatch(1);
+    when(sessionService.requireOwnedSession(USER, "s_123"))
+        .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
+    when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
+    when(toolConfirmationService.claim(USER.id(), "s_123", "confirm_123")).thenReturn(Mono.just(claim));
+    when(toolConfirmationService.consume("confirm_123", claim.processingToken(), true)).thenReturn(Mono.empty());
+    when(chatAgentGateway.confirm(org.mockito.ArgumentMatchers.any())).thenReturn(
+        Flux.<StreamEventDto>never().doOnSubscribe(ignored -> gatewaySubscribed.countDown()));
+
+    reactor.core.Disposable subscription = new ChatService(
+        sessionService, chatAgentGateway, permissionService, toolConfirmationService)
+        .confirm(USER, "s_123", "confirm_123", true).subscribe();
+
+    assertThat(gatewaySubscribed.await(5, TimeUnit.SECONDS)).isTrue();
+    subscription.dispose();
+
+    verify(toolConfirmationService).claim(USER.id(), "s_123", "confirm_123");
+    verify(toolConfirmationService).consume("confirm_123", claim.processingToken(), true);
+    org.mockito.Mockito.verifyNoMoreInteractions(toolConfirmationService);
+  }
+
+  @Test
+  void confirmForwardsFalseToGatewayAfterConsumption() {
+    ToolConfirmationClaim claim = claim("reply_123", "tool_123");
+    when(sessionService.requireOwnedSession(USER, "s_123"))
+        .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
+    when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
+    when(toolConfirmationService.claim(USER.id(), "s_123", "confirm_123")).thenReturn(Mono.just(claim));
+    when(toolConfirmationService.consume("confirm_123", claim.processingToken(), false)).thenReturn(Mono.empty());
     when(chatAgentGateway.confirm(org.mockito.ArgumentMatchers.any())).thenReturn(Flux.empty());
-    when(toolConfirmationService.complete("confirm_123", claim.processingToken(), false)).thenReturn(Mono.empty());
 
     new ChatService(sessionService, chatAgentGateway, permissionService, toolConfirmationService)
         .confirm(USER, "s_123", "confirm_123", false)
@@ -112,48 +158,43 @@ class ChatServiceTest {
         ArgumentCaptor.forClass(ChatToolConfirmationRequest.class);
     verify(chatAgentGateway).confirm(requestCaptor.capture());
     assertThat(requestCaptor.getValue().confirmed()).isFalse();
-    verify(toolConfirmationService).complete("confirm_123", claim.processingToken(), false);
+    verify(toolConfirmationService).consume("confirm_123", claim.processingToken(), false);
   }
 
   @Test
-  void confirmGatewayErrorReleasesLeaseAndReturnsOneErrorEvent() {
+  void confirmGatewayErrorKeepsConsumedRecordAndReturnsOneErrorEvent() {
     ToolConfirmationClaim claim = claim("reply_123", "tool_123");
     when(sessionService.requireOwnedSession(USER, "s_123"))
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
     when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
     when(toolConfirmationService.claim(USER.id(), "s_123", "confirm_123")).thenReturn(Mono.just(claim));
+    when(toolConfirmationService.consume("confirm_123", claim.processingToken(), true)).thenReturn(Mono.empty());
     when(chatAgentGateway.confirm(org.mockito.ArgumentMatchers.any()))
         .thenReturn(Flux.error(new IllegalStateException("gateway failed")));
-    when(toolConfirmationService.release("confirm_123", claim.processingToken())).thenReturn(Mono.empty());
 
     List<StreamEventDto> events = new ChatService(
         sessionService, chatAgentGateway, permissionService, toolConfirmationService)
         .confirm(USER, "s_123", "confirm_123", true).collectList().block();
 
     assertThat(events).containsExactly(StreamEventDto.error("gateway failed"));
-    verify(toolConfirmationService).release("confirm_123", claim.processingToken());
-    verify(toolConfirmationService, org.mockito.Mockito.never())
-        .complete(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean());
+    verify(toolConfirmationService).consume("confirm_123", claim.processingToken(), true);
   }
 
   @Test
-  void confirmCompleteErrorDoesNotReleaseLeaseAndReturnsOneErrorEvent() {
+  void confirmConsumeErrorDoesNotCallGateway() {
     ToolConfirmationClaim claim = claim("reply_123", "tool_123");
     when(sessionService.requireOwnedSession(USER, "s_123"))
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
     when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
     when(toolConfirmationService.claim(USER.id(), "s_123", "confirm_123")).thenReturn(Mono.just(claim));
-    when(chatAgentGateway.confirm(org.mockito.ArgumentMatchers.any())).thenReturn(Flux.empty());
-    when(toolConfirmationService.complete("confirm_123", claim.processingToken(), true))
-        .thenReturn(Mono.error(new IllegalStateException("complete failed")));
+    when(toolConfirmationService.consume("confirm_123", claim.processingToken(), true))
+        .thenReturn(Mono.error(new IllegalStateException("consume failed")));
 
-    List<StreamEventDto> events = new ChatService(
-        sessionService, chatAgentGateway, permissionService, toolConfirmationService)
-        .confirm(USER, "s_123", "confirm_123", true).collectList().block();
-
-    assertThat(events).containsExactly(StreamEventDto.error("complete failed"));
-    verify(toolConfirmationService, org.mockito.Mockito.never())
-        .release(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    org.junit.jupiter.api.Assertions.assertThrows(
+        IllegalStateException.class,
+        () -> new ChatService(sessionService, chatAgentGateway, permissionService, toolConfirmationService)
+            .confirm(USER, "s_123", "confirm_123", true).blockLast());
+    verify(chatAgentGateway, org.mockito.Mockito.never()).confirm(org.mockito.ArgumentMatchers.any());
   }
 
   @Test
@@ -189,9 +230,7 @@ class ChatServiceTest {
 
     verify(chatAgentGateway, org.mockito.Mockito.never()).confirm(org.mockito.ArgumentMatchers.any());
     verify(toolConfirmationService, org.mockito.Mockito.never())
-        .complete(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean());
-    verify(toolConfirmationService, org.mockito.Mockito.never())
-        .release(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        .consume(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean());
   }
 
   private ToolConfirmationClaim claim(String replyId, String toolCallId) {

@@ -89,13 +89,13 @@ class ToolConfirmationRedisIntegrationTest {
   }
 
   @Test
-  void completeConsumesRecordClearsLeaseAndPreservesTtl() throws Exception {
+  void consumeConsumesRecordClearsLeaseAndPreservesTtl() throws Exception {
     ToolConfirmationRecord created = create();
     String key = key(created);
     ToolConfirmationClaim claim = service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
     Duration before = ttl(key);
 
-    service.complete(created.confirmationId(), claim.processingToken(), true).block();
+    service.consume(created.confirmationId(), claim.processingToken(), true).block();
 
     JsonNode completed = json(key);
     assertThat(completed.get("status").asText()).isEqualTo("CONSUMED");
@@ -106,19 +106,22 @@ class ToolConfirmationRedisIntegrationTest {
   }
 
   @Test
-  void releaseRestoresPendingClearsLeaseAndPreservesTtl() throws Exception {
+  void consumedRecordCannotBeClaimedAgainAfterTheFormerLeaseWindow() throws Exception {
     ToolConfirmationRecord created = create();
     String key = key(created);
     ToolConfirmationClaim claim = service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
-    Duration before = ttl(key);
 
-    service.release(created.confirmationId(), claim.processingToken()).block();
+    service.consume(created.confirmationId(), claim.processingToken(), true).block();
 
-    JsonNode released = json(key);
-    assertThat(released.get("status").asText()).isEqualTo("PENDING");
-    assertThat(released.has("processingToken")).isFalse();
-    assertThat(released.has("leaseExpiresAtEpochMs")).isFalse();
-    assertTtlNotReset(before, ttl(key));
+    ObjectNode consumed = (ObjectNode) json(key);
+    // This represents a recovery flow outliving the former 30-second PROCESSING lease.
+    consumed.put("leaseExpiresAtEpochMs", System.currentTimeMillis() - Duration.ofSeconds(31).toMillis());
+    redisTemplate.opsForValue().set(key, objectMapper.writeValueAsString(consumed), ttl(key)).block();
+
+    assertStatus(
+        () -> service.claim(LARGE_USER_ID, "session", created.confirmationId()).block(),
+        HttpStatus.CONFLICT);
+    assertThat(json(key).get("status").asText()).isEqualTo("CONSUMED");
   }
 
   @Test
@@ -127,9 +130,8 @@ class ToolConfirmationRedisIntegrationTest {
     assertStatus(() -> service.claim(LARGE_USER_ID - 1, "session", created.confirmationId()).block(), HttpStatus.NOT_FOUND);
     assertStatus(() -> service.claim(LARGE_USER_ID, "other", created.confirmationId()).block(), HttpStatus.NOT_FOUND);
     ToolConfirmationClaim claim = service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
-    assertStatus(() -> service.complete(created.confirmationId(), "wrong", true).block(), HttpStatus.CONFLICT);
-    assertStatus(() -> service.release(created.confirmationId(), "wrong").block(), HttpStatus.CONFLICT);
-    service.release(created.confirmationId(), claim.processingToken()).block();
+    assertStatus(() -> service.consume(created.confirmationId(), "wrong", true).block(), HttpStatus.CONFLICT);
+    service.consume(created.confirmationId(), claim.processingToken(), true).block();
   }
 
   private ToolConfirmationRecord create() {

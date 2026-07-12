@@ -35,7 +35,7 @@ public class ToolConfirmationService {
       redis.call('SET', KEYS[1], updated, 'PX', ttl)
       return updated
       """);
-  private static final DefaultRedisScript<String> COMPLETE_SCRIPT = script("""
+  private static final DefaultRedisScript<String> CONSUME_SCRIPT = script("""
       local value = redis.call('GET', KEYS[1])
       local ttl = redis.call('PTTL', KEYS[1])
       if not value or ttl <= 0 then return '__NOT_FOUND__' end
@@ -43,18 +43,6 @@ public class ToolConfirmationService {
       if data.status ~= 'PROCESSING' or data.processingToken ~= ARGV[1] then return '__CONFLICT__' end
       data.status = 'CONSUMED'
       data.confirmed = ARGV[2] == 'true'
-      data.processingToken = nil
-      data.leaseExpiresAtEpochMs = nil
-      redis.call('SET', KEYS[1], cjson.encode(data), 'PX', ttl)
-      return '__OK__'
-      """);
-  private static final DefaultRedisScript<String> RELEASE_SCRIPT = script("""
-      local value = redis.call('GET', KEYS[1])
-      local ttl = redis.call('PTTL', KEYS[1])
-      if not value or ttl <= 0 then return '__NOT_FOUND__' end
-      local data = cjson.decode(value)
-      if data.status ~= 'PROCESSING' or data.processingToken ~= ARGV[1] then return '__CONFLICT__' end
-      data.status = 'PENDING'
       data.processingToken = nil
       data.leaseExpiresAtEpochMs = nil
       redis.call('SET', KEYS[1], cjson.encode(data), 'PX', ttl)
@@ -103,12 +91,8 @@ public class ToolConfirmationService {
         });
   }
 
-  public Mono<Void> complete(String confirmationId, String processingToken, boolean confirmed) {
-    return transition(COMPLETE_SCRIPT, confirmationId, List.of(processingToken, Boolean.toString(confirmed)));
-  }
-
-  public Mono<Void> release(String confirmationId, String processingToken) {
-    return transition(RELEASE_SCRIPT, confirmationId, List.of(processingToken));
+  public Mono<Void> consume(String confirmationId, String processingToken, boolean confirmed) {
+    return transition(CONSUME_SCRIPT, confirmationId, List.of(processingToken, Boolean.toString(confirmed)));
   }
 
   private Mono<Void> transition(DefaultRedisScript<String> script, String confirmationId, List<Object> args) {

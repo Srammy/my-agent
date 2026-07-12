@@ -128,7 +128,7 @@ class ChatControllerTest {
     ownedSession();
     ToolConfirmationClaim claim = claim();
     when(toolConfirmationService.claim(USER.id(), "s_123", "confirm_123")).thenReturn(reactor.core.publisher.Mono.just(claim));
-    when(toolConfirmationService.complete("confirm_123", claim.processingToken(), true))
+    when(toolConfirmationService.consume("confirm_123", claim.processingToken(), true))
         .thenReturn(reactor.core.publisher.Mono.empty());
 
     authenticatedClient()
@@ -144,7 +144,7 @@ class ChatControllerTest {
         .isEqualTo("{\"type\":\"reply_start\"}\n{\"type\":\"done\"}\n");
 
     verify(toolConfirmationService).claim(USER.id(), "s_123", "confirm_123");
-    verify(toolConfirmationService).complete("confirm_123", claim.processingToken(), true);
+    verify(toolConfirmationService).consume("confirm_123", claim.processingToken(), true);
     verify(chatService).confirm(USER, "s_123", "confirm_123", true);
   }
 

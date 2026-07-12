@@ -67,26 +67,15 @@ public class ChatService {
                       claim.record().replyId(),
                       claim.record().toolCall(),
                       confirmed);
-              return chatAgentGateway
-                  .confirm(request)
-                  .materialize()
-                  .concatMap(
-                      signal -> {
-                        if (signal.isOnNext()) {
-                          return Mono.just(signal.get());
-                        }
-                        if (signal.isOnError()) {
-                          return toolConfirmationService
-                              .release(confirmationId, claim.processingToken())
-                              .onErrorResume(ignored -> Mono.empty())
-                              .thenReturn(StreamEventDto.error(errorMessage(signal.getThrowable())));
-                        }
-                        return toolConfirmationService
-                            .complete(confirmationId, claim.processingToken(), confirmed)
-                            .then(Mono.<StreamEventDto>empty())
-                            .onErrorResume(
-                                error -> Mono.just(StreamEventDto.error(errorMessage(error))));
-                      });
+              return toolConfirmationService
+                  .consume(confirmationId, claim.processingToken(), confirmed)
+                  .thenMany(
+                      Flux.defer(
+                          () ->
+                              chatAgentGateway
+                                  .confirm(request)
+                                  .onErrorResume(
+                                      error -> Flux.just(StreamEventDto.error(errorMessage(error))))));
             });
   }
 

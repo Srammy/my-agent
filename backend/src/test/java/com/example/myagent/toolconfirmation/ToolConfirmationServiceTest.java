@@ -119,24 +119,19 @@ class ToolConfirmationServiceTest {
   }
 
   @Test
-  void completeAndReleasePassTokenAndMapConflict() {
+  void consumePassesTokenAndDecisionAndMapsConflict() {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList())).thenReturn(Flux.just("__CONFLICT__"));
-    assertStatus(() -> service.complete("id", "token", true).block(), 409);
-    assertStatus(() -> service.release("id", "token").block(), 409);
+    assertStatus(() -> service.consume("id", "token", true).block(), 409);
     verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("prefix:tool-confirmations:id")), eq(List.of("token", "true")));
-    verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("prefix:tool-confirmations:id")), eq(List.of("token")));
   }
 
   @Test
-  void completeAndReleaseAcceptOkAndMapMissingToNotFound() {
+  void consumeAcceptsOkAndMapsMissingToNotFound() {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
-        .thenReturn(Flux.just("__OK__"), Flux.just("__OK__"),
-            Flux.just("__NOT_FOUND__"), Flux.just("__NOT_FOUND__"));
+        .thenReturn(Flux.just("__OK__"), Flux.just("__NOT_FOUND__"));
 
-    StepVerifier.create(service.complete("id", "token", true)).verifyComplete();
-    StepVerifier.create(service.release("id", "token")).verifyComplete();
-    assertStatus(() -> service.complete("id", "token", true).block(), 404);
-    assertStatus(() -> service.release("id", "token").block(), 404);
+    StepVerifier.create(service.consume("id", "token", true)).verifyComplete();
+    assertStatus(() -> service.consume("id", "token", true).block(), 404);
   }
 
   private void assertClaimStatus(String result, int status) {

@@ -116,7 +116,6 @@ export const useChatStore = defineStore('chat', {
 
       event.confirming = true
       this.error = ''
-      let streamError = false
 
       try {
         await confirmToolCall(sessionId, event.confirmationId, confirmed, (streamEvent) => {
@@ -139,12 +138,11 @@ export const useChatStore = defineStore('chat', {
             this.appendEvent(sessionId, messageId, toolEvent)
 
             if (toolEvent.type === 'error') {
-              streamError = true
               this.error = toolEvent.message ?? '流式响应返回错误'
             }
           }
         })
-        event.consumed = !streamError
+        event.consumed = true
       } catch (error) {
         const message = errorMessage(error)
         this.error = message
