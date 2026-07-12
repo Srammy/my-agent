@@ -1,10 +1,37 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ToolEvent } from '../stores/chat'
+import { useChatStore, type ToolEvent } from '../stores/chat'
 
 const props = defineProps<{
   event: ToolEvent
+  sessionId: string
+  messageId: string
 }>()
+
+const chat = useChatStore()
+
+const isUserConfirmation = computed(
+  () =>
+    props.event.type === 'permission_required' &&
+    props.event.kind === 'USER_CONFIRM' &&
+    Boolean(props.event.confirmationId)
+)
+
+const confirmationToolName = computed(() =>
+  isUserConfirmation.value ? props.event.toolName || props.event.permission : ''
+)
+
+const confirmationInput = computed(() =>
+  isUserConfirmation.value ? props.event.toolInput : undefined
+)
+
+const confirmationDisabled = computed(
+  () =>
+    props.event.confirming ||
+    props.event.consumed ||
+    !props.sessionId ||
+    !props.messageId
+)
 
 const title = computed(() => {
   switch (props.event.type) {
@@ -52,22 +79,33 @@ const text = computed(() => {
 })
 
 const formattedPayload = computed(() => {
-  if (payload.value === null || payload.value === undefined) {
+  const value = payload.value ?? confirmationInput.value
+
+  if (value === null || value === undefined) {
     return ''
   }
 
-  if (typeof payload.value === 'string') {
-    return payload.value
+  if (typeof value === 'string') {
+    return value
   }
 
-  return JSON.stringify(payload.value, null, 2)
+  return JSON.stringify(value, null, 2)
 })
+
+function confirm(confirmed: boolean) {
+  void chat.confirmTool(props.sessionId, props.messageId, props.event, confirmed)
+}
 </script>
 
 <template>
   <div class="tool-event" :class="`tool-event--${event.type}`">
     <div class="tool-event__title">{{ title }}</div>
     <p v-if="text" class="tool-event__text">{{ text }}</p>
+    <div v-if="confirmationToolName" class="tool-event__tool-name">{{ confirmationToolName }}</div>
     <pre v-if="formattedPayload" class="tool-event__payload">{{ formattedPayload }}</pre>
+    <div v-if="isUserConfirmation" class="tool-event__actions">
+      <el-button :disabled="confirmationDisabled" @click="confirm(true)">允许一次</el-button>
+      <el-button :disabled="confirmationDisabled" @click="confirm(false)">拒绝一次</el-button>
+    </div>
   </div>
 </template>

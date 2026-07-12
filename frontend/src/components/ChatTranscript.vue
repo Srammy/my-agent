@@ -6,6 +6,7 @@ defineProps<{
   messages: ChatMessage[]
   loading: boolean
   hasSession: boolean
+  sessionId: string
 }>()
 
 function roleLabel(role: ChatMessage['role']) {
@@ -51,7 +52,13 @@ function roleLabel(role: ChatMessage['role']) {
           正在思考...
         </div>
         <div v-if="message.events.length" class="message-events">
-          <ToolEventCard v-for="event in message.events" :key="event.id" :event="event" />
+          <ToolEventCard
+            v-for="event in message.events"
+            :key="event.id"
+            :event="event"
+            :session-id="sessionId"
+            :message-id="message.id"
+          />
         </div>
       </div>
     </article>

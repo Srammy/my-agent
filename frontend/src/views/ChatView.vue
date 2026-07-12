@@ -103,6 +103,7 @@ async function logout() {
           :messages="currentMessages"
           :loading="isSending"
           :has-session="Boolean(currentSessionId)"
+          :session-id="currentSessionId"
         />
         <Composer
           :disabled="isSending || sessions.loading"
