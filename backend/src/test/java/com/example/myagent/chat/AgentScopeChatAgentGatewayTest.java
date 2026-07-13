@@ -21,6 +21,7 @@ import io.agentscope.core.event.TextBlockDeltaEvent;
 import io.agentscope.core.event.RequireUserConfirmEvent;
 import io.agentscope.core.message.ToolUseBlock;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -138,6 +139,28 @@ class AgentScopeChatAgentGatewayTest {
           "toolCalls", List.of(Map.of(
               "toolCallId", "call-1", "toolName", "shell_command", "toolInput", input)),
           "kind", "USER_CONFIRM"));
+    });
+    verify(toolConfirmationService)
+        .create(7L, "s_123", "reply-1", List.of(toolCall), ConfirmationKind.USER_CONFIRM);
+  }
+
+  @Test
+  void registersAndPublishesConfirmationWithNullToolInput() {
+    Map<String, Object> input = new LinkedHashMap<>();
+    input.put("optional", null);
+    input.put("command", "Get-ChildItem");
+    ToolUseBlock toolCall = new ToolUseBlock("call-1", "shell_command", input);
+    when(executor.stream(any(ChatAgentRequest.class), any()))
+        .thenReturn(Flux.just(new RequireUserConfirmEvent("reply-1", List.of(toolCall))));
+    when(toolConfirmationService.create(any(), any(), any(), any(), any()))
+        .thenAnswer(ignored -> Mono.fromCallable(() -> record("confirm-1", "reply-1", toolCall)));
+
+    var events = gateway().stream(request()).collectList().block();
+
+    assertThat(events).singleElement().satisfies(event -> {
+      assertThat(event.type()).isEqualTo("permission_required");
+      assertThat((List<?>) event.payload().get("toolCalls")).singleElement().satisfies(tool ->
+          assertThat(((Map<?, ?>) tool).get("toolInput")).isEqualTo(input));
     });
     verify(toolConfirmationService)
         .create(7L, "s_123", "reply-1", List.of(toolCall), ConfirmationKind.USER_CONFIRM);
@@ -360,8 +383,7 @@ class AgentScopeChatAgentGatewayTest {
         "s_123",
         replyId,
         java.util.Arrays.stream(toolCalls)
-            .map(toolCall -> new ToolCallSnapshot(
-                toolCall.getId(), toolCall.getName(), toolCall.getInput()))
+            .map(ToolCallSnapshot::from)
             .toList(),
         ConfirmationKind.USER_CONFIRM,
         Instant.parse("2026-07-11T00:00:00Z"),

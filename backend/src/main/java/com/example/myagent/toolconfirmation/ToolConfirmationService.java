@@ -26,10 +26,12 @@ public class ToolConfirmationService {
       local data = cjson.decode(value)
       if tostring(data.userId) ~= ARGV[1] or data.sessionId ~= ARGV[2] then return '__NOT_OWNED__' end
       if data.status == 'CONSUMED' then return '__CONFLICT__' end
-      if data.status == 'PROCESSING' and data.leaseExpiresAtEpochMs > tonumber(ARGV[3]) then return '__CONFLICT__' end
+      local time = redis.call('TIME')
+      local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+      if data.status == 'PROCESSING' and data.leaseExpiresAtEpochMs > now then return '__CONFLICT__' end
       data.status = 'PROCESSING'
-      data.processingToken = ARGV[4]
-      data.leaseExpiresAtEpochMs = tonumber(ARGV[3]) + tonumber(ARGV[5])
+      data.processingToken = ARGV[3]
+      data.leaseExpiresAtEpochMs = now + tonumber(ARGV[4])
       local updated = cjson.encode(data)
       redis.call('SET', KEYS[1], updated, 'PX', ttl)
       return updated
@@ -89,8 +91,7 @@ public class ToolConfirmationService {
 
   public Mono<ToolConfirmationClaim> claim(Long userId, String sessionId, String confirmationId) {
     String token = UUID.randomUUID().toString();
-    List<Object> args = List.of(userId.toString(), sessionId, Long.toString(System.currentTimeMillis()), token,
-        Long.toString(LEASE_MILLIS));
+    List<Object> args = List.of(userId.toString(), sessionId, token, Long.toString(LEASE_MILLIS));
     return redisTemplate.execute(CLAIM_SCRIPT, List.of(key(confirmationId)), args)
         .next()
         .switchIfEmpty(Mono.error(notFound()))

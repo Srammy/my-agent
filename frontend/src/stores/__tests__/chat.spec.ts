@@ -112,6 +112,18 @@ describe('chat confirmation streams', () => {
     expect(confirmToolCallMock).toHaveBeenCalledTimes(1)
   })
 
+  it('does not submit a consumed confirmation again', async () => {
+    const confirmToolCallMock = vi.spyOn(chatApi, 'confirmToolCall')
+    const store = useChatStore()
+    const event = toolEvent()
+    selectAll(store, event)
+    event.consumed = true
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(confirmToolCallMock).not.toHaveBeenCalled()
+  })
+
   it('consumes a confirmation after an NDJSON error event', async () => {
     vi.spyOn(chatApi, 'confirmToolCall').mockImplementation(async (_sessionId, _confirmationId, _decisions, onEvent) => {
       onEvent({ type: 'error', message: 'tool execution failed' })

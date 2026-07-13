@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 import org.springframework.web.server.ResponseStatusException;
@@ -71,18 +72,20 @@ class ToolConfirmationRedisIntegrationTest {
     assertThat(pending.get("userId").isTextual()).isTrue();
     assertThat(pending.get("userId").asText()).isEqualTo(Long.toString(LARGE_USER_ID));
 
+    long beforeClaim = redisEpochMillis();
     ToolConfirmationClaim first = service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
+    long afterClaim = redisEpochMillis();
     JsonNode processing = json(key);
     assertThat(processing.get("status").asText()).isEqualTo("PROCESSING");
     assertThat(processing.get("processingToken").asText()).isEqualTo(first.processingToken());
-    assertThat(processing.get("leaseExpiresAtEpochMs").asLong() - System.currentTimeMillis())
-        .isBetween(28_000L, 30_000L);
+    assertThat(processing.get("leaseExpiresAtEpochMs").asLong())
+        .isBetween(beforeClaim + 30_000L, afterClaim + 30_000L);
     assertTtlNotReset(createdTtl, ttl(key));
     assertStatus(() -> service.claim(LARGE_USER_ID, "session", created.confirmationId()).block(), HttpStatus.CONFLICT);
 
     Duration remaining = ttl(key);
     ObjectNode expired = (ObjectNode) processing;
-    expired.put("leaseExpiresAtEpochMs", System.currentTimeMillis() - 1);
+    expired.put("leaseExpiresAtEpochMs", redisEpochMillis() - 1);
     redisTemplate.opsForValue().set(key, objectMapper.writeValueAsString(expired), remaining).block();
     ToolConfirmationClaim reclaimed = service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
     assertThat(reclaimed.processingToken()).isNotEqualTo(first.processingToken());
@@ -120,7 +123,7 @@ class ToolConfirmationRedisIntegrationTest {
 
     ObjectNode consumed = (ObjectNode) json(key);
     // This represents a recovery flow outliving the former 30-second PROCESSING lease.
-    consumed.put("leaseExpiresAtEpochMs", System.currentTimeMillis() - Duration.ofSeconds(31).toMillis());
+    consumed.put("leaseExpiresAtEpochMs", redisEpochMillis() - Duration.ofSeconds(31).toMillis());
     redisTemplate.opsForValue().set(key, objectMapper.writeValueAsString(consumed), ttl(key)).block();
 
     assertStatus(
@@ -171,6 +174,13 @@ class ToolConfirmationRedisIntegrationTest {
 
   private Duration ttl(String key) {
     return redisTemplate.getExpire(key).block();
+  }
+
+  private long redisEpochMillis() {
+    DefaultRedisScript<Long> script = new DefaultRedisScript<>(
+        "local t = redis.call('TIME'); return tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)",
+        Long.class);
+    return redisTemplate.execute(script, List.of()).next().block();
   }
 
   private void assertTtlNotReset(Duration before, Duration after) {

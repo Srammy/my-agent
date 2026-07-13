@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.message.ToolUseBlock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -51,12 +52,24 @@ class ToolConfirmationServiceTest {
   }
 
   @Test
-  void snapshotRoundTripPreservesToolCall() {
-    ToolUseBlock original = new ToolUseBlock("call-1", "shell", Map.of("command", "pwd"));
-    ToolUseBlock restored = ToolCallSnapshot.from(original).toToolUseBlock();
+  void snapshotRoundTripPreservesNullInputAndIsDefensive() {
+    Map<String, Object> input = new LinkedHashMap<>();
+    input.put("optional", null);
+    input.put("command", "pwd");
+    ToolUseBlock original = new ToolUseBlock("call-1", "shell", input);
+
+    ToolCallSnapshot snapshot = ToolCallSnapshot.from(original);
+    input.put("command", "changed");
+    ToolUseBlock restored = snapshot.toToolUseBlock();
+    Map<String, Object> expected = new LinkedHashMap<>();
+    expected.put("optional", null);
+    expected.put("command", "pwd");
+
     assertThat(restored.getId()).isEqualTo(original.getId());
     assertThat(restored.getName()).isEqualTo(original.getName());
-    assertThat(restored.getInput()).isEqualTo(original.getInput());
+    assertThat(restored.getInput()).containsExactlyEntriesOf(expected);
+    assertThatThrownBy(() -> snapshot.input().put("another", "value"))
+        .isInstanceOf(UnsupportedOperationException.class);
   }
 
   @Test
@@ -91,24 +104,25 @@ class ToolConfirmationServiceTest {
   }
 
   @Test
-  void claimPassesOwnerTimeTokenAndLeaseAndReturnsMatchingToken() throws Exception {
+  void claimUsesRedisTimeAndPassesOwnerTokenAndLease() throws Exception {
     when(redisTemplate.execute(any(RedisScript.class), eq(List.of("prefix:tool-confirmations:id")), anyList()))
         .thenAnswer(invocation -> {
           List<?> args = invocation.getArgument(2);
-          String token = (String) args.get(3);
-          long now = Long.parseLong((String) args.get(2));
-          return Flux.just(jsonRecord("id", ToolConfirmationStatus.PROCESSING, token, now + 30000, null));
+          String token = (String) args.get(args.size() - 2);
+          return Flux.just(jsonRecord("id", ToolConfirmationStatus.PROCESSING, token, 30000L, null));
         });
 
     ToolConfirmationClaim claim = service.claim(7L, "session", "id").block();
 
+    @SuppressWarnings("unchecked") ArgumentCaptor<RedisScript<String>> script = ArgumentCaptor.forClass(RedisScript.class);
     @SuppressWarnings("unchecked") ArgumentCaptor<List<Object>> args = ArgumentCaptor.forClass(List.class);
-    verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("prefix:tool-confirmations:id")), args.capture());
+    verify(redisTemplate).execute(script.capture(), eq(List.of("prefix:tool-confirmations:id")), args.capture());
+    assertThat(script.getValue().getScriptAsString()).contains("redis.call('TIME')");
+    assertThat(args.getValue()).hasSize(4);
     assertThat(args.getValue().get(0)).isEqualTo("7");
     assertThat(args.getValue().get(1)).isEqualTo("session");
-    assertThat(Long.parseLong((String) args.getValue().get(2))).isPositive();
-    assertThat(UUID.fromString((String) args.getValue().get(3)).version()).isEqualTo(4);
-    assertThat(args.getValue().get(4)).isEqualTo("30000");
+    assertThat(UUID.fromString((String) args.getValue().get(2)).version()).isEqualTo(4);
+    assertThat(args.getValue().get(3)).isEqualTo("30000");
     assertThat(claim.processingToken()).isEqualTo(claim.record().processingToken());
   }
 
