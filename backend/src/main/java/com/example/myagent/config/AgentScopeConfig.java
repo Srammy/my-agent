@@ -240,14 +240,16 @@ public class AgentScopeConfig {
         .build();
   }
 
-  ConfirmResult confirmResult(ChatToolConfirmationRequest request) {
-    return new ConfirmResult(
-        request.confirmed(), request.toolCall().toToolUseBlock(), Collections.emptyList());
+  List<ConfirmResult> confirmResults(ChatToolConfirmationRequest request) {
+    return request.decisions().stream()
+        .map(decision -> new ConfirmResult(
+            decision.confirmed(), decision.toolCall().toToolUseBlock(), Collections.emptyList()))
+        .toList();
   }
 
   UserMessage confirmationMessage(ChatToolConfirmationRequest request) {
     return UserMessage.builder()
-        .metadata(java.util.Map.of(Msg.METADATA_CONFIRM_RESULTS, java.util.List.of(confirmResult(request))))
+        .metadata(java.util.Map.of(Msg.METADATA_CONFIRM_RESULTS, confirmResults(request)))
         .build();
   }
 

@@ -41,7 +41,19 @@ public class ToolConfirmationService {
       local data = cjson.decode(value)
       if data.status ~= 'PROCESSING' or data.processingToken ~= ARGV[1] then return '__CONFLICT__' end
       data.status = 'CONSUMED'
-      data.confirmed = ARGV[2] == 'true'
+      data.decisions = cjson.decode(ARGV[2])
+      data.processingToken = nil
+      data.leaseExpiresAtEpochMs = nil
+      redis.call('SET', KEYS[1], cjson.encode(data), 'PX', ttl)
+      return '__OK__'
+      """);
+  private static final DefaultRedisScript<String> RELEASE_SCRIPT = script("""
+      local value = redis.call('GET', KEYS[1])
+      local ttl = redis.call('PTTL', KEYS[1])
+      if not value or ttl <= 0 then return '__NOT_FOUND__' end
+      local data = cjson.decode(value)
+      if data.status ~= 'PROCESSING' or data.processingToken ~= ARGV[1] then return '__CONFLICT__' end
+      data.status = 'PENDING'
       data.processingToken = nil
       data.leaseExpiresAtEpochMs = nil
       redis.call('SET', KEYS[1], cjson.encode(data), 'PX', ttl)
@@ -60,9 +72,10 @@ public class ToolConfirmationService {
   }
 
   public Mono<ToolConfirmationRecord> create(
-      Long userId, String sessionId, String replyId, ToolUseBlock toolCall, ConfirmationKind kind) {
+      Long userId, String sessionId, String replyId, List<ToolUseBlock> toolCalls, ConfirmationKind kind) {
     ToolConfirmationRecord record = new ToolConfirmationRecord(
-        UUID.randomUUID().toString(), userId.toString(), sessionId, replyId, ToolCallSnapshot.from(toolCall),
+        UUID.randomUUID().toString(), userId.toString(), sessionId, replyId,
+        toolCalls.stream().map(ToolCallSnapshot::from).toList(),
         kind, Instant.now(), ToolConfirmationStatus.PENDING, null, null, null);
     final String json;
     try {
@@ -88,8 +101,18 @@ public class ToolConfirmationService {
         });
   }
 
-  public Mono<Void> consume(String confirmationId, String processingToken, boolean confirmed) {
-    return transition(CONSUME_SCRIPT, confirmationId, List.of(processingToken, Boolean.toString(confirmed)));
+  public Mono<Void> release(String confirmationId, String processingToken) {
+    return transition(RELEASE_SCRIPT, confirmationId, List.of(processingToken));
+  }
+
+  public Mono<Void> consume(
+      String confirmationId, String processingToken, List<ToolConfirmationDecision> decisions) {
+    try {
+      return transition(CONSUME_SCRIPT, confirmationId,
+          List.of(processingToken, objectMapper.writeValueAsString(decisions)));
+    } catch (JsonProcessingException error) {
+      return Mono.error(error);
+    }
   }
 
   private Mono<Void> transition(DefaultRedisScript<String> script, String confirmationId, List<Object> args) {

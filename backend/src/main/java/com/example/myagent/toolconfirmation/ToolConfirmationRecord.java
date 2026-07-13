@@ -1,16 +1,17 @@
 package com.example.myagent.toolconfirmation;
 
 import java.time.Instant;
+import java.util.List;
 
 public record ToolConfirmationRecord(
     String confirmationId,
     String userId,
     String sessionId,
     String replyId,
-    ToolCallSnapshot toolCall,
+    List<ToolCallSnapshot> toolCalls,
     ConfirmationKind kind,
     Instant createdAt,
     ToolConfirmationStatus status,
     String processingToken,
     Long leaseExpiresAtEpochMs,
-    Boolean confirmed) {}
+    List<ToolConfirmationDecision> decisions) {}

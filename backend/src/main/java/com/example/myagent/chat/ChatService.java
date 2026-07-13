@@ -4,8 +4,14 @@ import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ToolConfirmationClaim;
+import com.example.myagent.toolconfirmation.ToolConfirmationDecision;
 import com.example.myagent.toolconfirmation.ToolConfirmationService;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -44,7 +50,8 @@ public class ChatService {
   }
 
   public Flux<StreamEventDto> confirm(
-      CurrentUser currentUser, String sessionId, String confirmationId, boolean confirmed) {
+      CurrentUser currentUser, String sessionId, String confirmationId,
+      List<ToolConfirmationDecisionRequest> decisions) {
     return Mono.fromCallable(
             () -> {
               sessionService.requireOwnedSession(currentUser, sessionId);
@@ -59,16 +66,33 @@ public class ChatService {
         .flatMapMany(
             context -> {
               ToolConfirmationClaim claim = context.claim();
-              ChatToolConfirmationRequest request =
-                  new ChatToolConfirmationRequest(
-                      currentUser.id(),
-                      sessionId,
-                      context.permissionMode(),
-                      claim.record().replyId(),
-                      claim.record().toolCall(),
-                      confirmed);
+              Map<String, Boolean> byId = new HashMap<>();
+              boolean invalid = decisions == null || decisions.stream().anyMatch(
+                  decision -> decision == null || decision.toolCallId() == null
+                      || byId.put(decision.toolCallId(), decision.confirmed()) != null);
+              invalid = invalid
+                  || byId.size() != claim.record().toolCalls().size()
+                  || claim.record().toolCalls().stream().anyMatch(tool -> !byId.containsKey(tool.id()));
+              if (invalid) {
+                return toolConfirmationService
+                    .release(confirmationId, claim.processingToken())
+                    .then(Mono.<StreamEventDto>error(new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Decisions must match every pending tool call exactly")))
+                    .flux();
+              }
+              List<ToolCallDecision> trustedDecisions = claim.record().toolCalls().stream()
+                  .map(tool -> new ToolCallDecision(tool, byId.get(tool.id())))
+                  .toList();
+              List<ToolConfirmationDecision> persisted = trustedDecisions.stream()
+                  .map(decision -> new ToolConfirmationDecision(
+                      decision.toolCall().id(), decision.confirmed()))
+                  .toList();
+              ChatToolConfirmationRequest request = new ChatToolConfirmationRequest(
+                  currentUser.id(), sessionId, context.permissionMode(),
+                  claim.record().replyId(), trustedDecisions);
               return toolConfirmationService
-                  .consume(confirmationId, claim.processingToken(), confirmed)
+                  .consume(confirmationId, claim.processingToken(), persisted)
                   .thenMany(
                       Flux.defer(
                           () ->

@@ -3,6 +3,7 @@ package com.example.myagent.chat;
 import com.example.myagent.toolconfirmation.ToolConfirmationRecord;
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.util.List;
 import java.util.Map;
 
 public record StreamEventDto(String type, @JsonIgnore Map<String, Object> payload) {
@@ -37,15 +38,19 @@ public record StreamEventDto(String type, @JsonIgnore Map<String, Object> payloa
   }
 
   public static StreamEventDto permissionRequired(ToolConfirmationRecord record) {
+    List<Map<String, Object>> toolCalls = record.toolCalls().stream()
+        .map(tool -> Map.<String, Object>of(
+            "toolCallId", tool.id(),
+            "toolName", tool.name(),
+            "toolInput", tool.input()))
+        .toList();
     return new StreamEventDto(
         "permission_required",
         Map.of(
-            "permission", record.toolCall().name(),
+            "permission", record.toolCalls().getFirst().name(),
             "confirmationId", record.confirmationId(),
             "replyId", record.replyId(),
-            "toolCallId", record.toolCall().id(),
-            "toolName", record.toolCall().name(),
-            "toolInput", record.toolCall().input(),
+            "toolCalls", toolCalls,
             "kind", record.kind().name()));
   }
 

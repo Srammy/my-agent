@@ -13,11 +13,13 @@ import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ConfirmationKind;
 import com.example.myagent.toolconfirmation.ToolCallSnapshot;
 import com.example.myagent.toolconfirmation.ToolConfirmationClaim;
+import com.example.myagent.toolconfirmation.ToolConfirmationDecision;
 import com.example.myagent.toolconfirmation.ToolConfirmationRecord;
 import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import com.example.myagent.toolconfirmation.ToolConfirmationStatus;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -128,7 +130,7 @@ class ChatControllerTest {
     ownedSession();
     ToolConfirmationClaim claim = claim();
     when(toolConfirmationService.claim(USER.id(), "s_123", "confirm_123")).thenReturn(reactor.core.publisher.Mono.just(claim));
-    when(toolConfirmationService.consume("confirm_123", claim.processingToken(), true))
+    when(toolConfirmationService.consume("confirm_123", claim.processingToken(), persisted()))
         .thenReturn(reactor.core.publisher.Mono.empty());
 
     authenticatedClient()
@@ -136,7 +138,7 @@ class ChatControllerTest {
         .uri("/api/chat/sessions/s_123/tool-confirmations/confirm_123")
         .contentType(MediaType.APPLICATION_JSON)
         .accept(MediaType.parseMediaType("application/x-ndjson"))
-        .bodyValue("{\"confirmed\":true}")
+        .bodyValue("{\"decisions\":[{\"toolCallId\":\"tool_123\",\"confirmed\":true}]}")
         .exchange()
         .expectStatus().isOk()
         .expectHeader().contentTypeCompatibleWith(MediaType.parseMediaType("application/x-ndjson"))
@@ -144,8 +146,9 @@ class ChatControllerTest {
         .isEqualTo("{\"type\":\"reply_start\"}\n{\"type\":\"done\"}\n");
 
     verify(toolConfirmationService).claim(USER.id(), "s_123", "confirm_123");
-    verify(toolConfirmationService).consume("confirm_123", claim.processingToken(), true);
-    verify(chatService).confirm(USER, "s_123", "confirm_123", true);
+    verify(toolConfirmationService).consume("confirm_123", claim.processingToken(), persisted());
+    verify(chatService).confirm(USER, "s_123", "confirm_123",
+        List.of(new ToolConfirmationDecisionRequest("tool_123", true)));
   }
 
   @Test
@@ -153,13 +156,22 @@ class ChatControllerTest {
     authenticatedClient().post()
         .uri("/api/chat/sessions/s_123/tool-confirmations/confirm_123")
         .contentType(MediaType.APPLICATION_JSON)
-        .bodyValue("{}")
+        .bodyValue("{\"decisions\":[]}")
         .exchange().expectStatus().isBadRequest();
     authenticatedClient().post()
         .uri("/api/chat/sessions/s_123/tool-confirmations/confirm_123")
         .contentType(MediaType.APPLICATION_JSON)
-        .bodyValue("{\"confirmed\":true,\"toolName\":\"deploy\"}")
+        .bodyValue("{\"decisions\":[{\"toolCallId\":\"tool_123\",\"confirmed\":true,\"toolName\":\"deploy\"}]}")
         .exchange().expectStatus().isBadRequest();
+    for (String body : List.of(
+        "{\"decisions\":[{\"confirmed\":true}]}",
+        "{\"decisions\":[{\"toolCallId\":\"tool_123\"}]}",
+        "{\"decisions\":[{\"toolCallId\":\"tool_123\",\"confirmed\":true}],\"extra\":1}")) {
+      authenticatedClient().post()
+          .uri("/api/chat/sessions/s_123/tool-confirmations/confirm_123")
+          .contentType(MediaType.APPLICATION_JSON).bodyValue(body)
+          .exchange().expectStatus().isBadRequest();
+    }
   }
 
   @Test
@@ -169,7 +181,7 @@ class ChatControllerTest {
     authenticatedClient().post()
         .uri("/api/chat/sessions/missing/tool-confirmations/confirm_123")
         .contentType(MediaType.APPLICATION_JSON)
-        .bodyValue("{\"confirmed\":true}")
+        .bodyValue("{\"decisions\":[{\"toolCallId\":\"tool_123\",\"confirmed\":true}]}")
         .exchange().expectStatus().isNotFound();
 
     ownedSession();
@@ -178,7 +190,7 @@ class ChatControllerTest {
     authenticatedClient().post()
         .uri("/api/chat/sessions/s_123/tool-confirmations/missing")
         .contentType(MediaType.APPLICATION_JSON)
-        .bodyValue("{\"confirmed\":true}")
+        .bodyValue("{\"decisions\":[{\"toolCallId\":\"tool_123\",\"confirmed\":true}]}")
         .exchange().expectStatus().isNotFound();
 
     when(toolConfirmationService.claim(USER.id(), "s_123", "conflict"))
@@ -186,7 +198,7 @@ class ChatControllerTest {
     authenticatedClient().post()
         .uri("/api/chat/sessions/s_123/tool-confirmations/conflict")
         .contentType(MediaType.APPLICATION_JSON)
-        .bodyValue("{\"confirmed\":true}")
+        .bodyValue("{\"decisions\":[{\"toolCallId\":\"tool_123\",\"confirmed\":true}]}")
         .exchange().expectStatus().isEqualTo(HttpStatus.CONFLICT);
   }
 
@@ -199,9 +211,13 @@ class ChatControllerTest {
   private ToolConfirmationClaim claim() {
     ToolConfirmationRecord record = new ToolConfirmationRecord(
         "confirm_123", USER.id().toString(), "s_123", "reply_123",
-        new ToolCallSnapshot("tool_123", "deploy", java.util.Map.of("env", "prod")), ConfirmationKind.USER_CONFIRM,
+        List.of(new ToolCallSnapshot("tool_123", "deploy", java.util.Map.of("env", "prod"))), ConfirmationKind.USER_CONFIRM,
         Instant.parse("2026-07-04T09:45:00Z"), ToolConfirmationStatus.PENDING, null, null, null);
     return new ToolConfirmationClaim(record, "token_123");
+  }
+
+  private List<ToolConfirmationDecision> persisted() {
+    return List.of(new ToolConfirmationDecision("tool_123", true));
   }
 
   private WebTestClient authenticatedClient() {

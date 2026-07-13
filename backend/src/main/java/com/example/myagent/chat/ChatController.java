@@ -42,7 +42,7 @@ public class ChatController {
       @PathVariable String confirmationId,
       @Valid @RequestBody ToolConfirmationRequest request) {
     return chatService
-        .confirm(currentUser, sessionId, confirmationId, request.confirmed())
+        .confirm(currentUser, sessionId, confirmationId, request.decisions())
         .map(this::toNdjsonLine);
   }
 

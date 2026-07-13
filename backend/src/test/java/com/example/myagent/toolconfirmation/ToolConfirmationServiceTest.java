@@ -64,7 +64,7 @@ class ToolConfirmationServiceTest {
     when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     when(valueOperations.set(any(), any(), eq(Duration.ofMinutes(30)))).thenReturn(Mono.just(true));
 
-    ToolConfirmationRecord record = service.create(7L, "session", "reply", toolCall(), ConfirmationKind.USER_CONFIRM).block();
+    ToolConfirmationRecord record = service.create(7L, "session", "reply", toolCalls(), ConfirmationKind.USER_CONFIRM).block();
 
     assertThat(UUID.fromString(record.confirmationId()).version()).isEqualTo(4);
     assertThat(record.status()).isEqualTo(ToolConfirmationStatus.PENDING);
@@ -86,7 +86,7 @@ class ToolConfirmationServiceTest {
   void createFailsWhenRedisRejectsSet() {
     when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     when(valueOperations.set(any(), any(), any(Duration.class))).thenReturn(Mono.just(false));
-    StepVerifier.create(service.create(7L, "session", "reply", toolCall(), ConfirmationKind.USER_CONFIRM))
+    StepVerifier.create(service.create(7L, "session", "reply", toolCalls(), ConfirmationKind.USER_CONFIRM))
         .expectError(IllegalStateException.class).verify();
   }
 
@@ -120,10 +120,14 @@ class ToolConfirmationServiceTest {
   }
 
   @Test
-  void consumePassesTokenAndDecisionAndMapsConflict() {
+  void consumePassesTokenAndDecisionsAndMapsConflict() throws Exception {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList())).thenReturn(Flux.just("__CONFLICT__"));
-    assertStatus(() -> service.consume("id", "token", true).block(), 409);
-    verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("prefix:tool-confirmations:id")), eq(List.of("token", "true")));
+    List<ToolConfirmationDecision> decisions = List.of(
+        new ToolConfirmationDecision("call-1", true),
+        new ToolConfirmationDecision("call-2", false));
+    assertStatus(() -> service.consume("id", "token", decisions).block(), 409);
+    verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("prefix:tool-confirmations:id")),
+        eq(List.of("token", objectMapper.writeValueAsString(decisions))));
   }
 
   @Test
@@ -131,8 +135,16 @@ class ToolConfirmationServiceTest {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
         .thenReturn(Flux.just("__OK__"), Flux.just("__NOT_FOUND__"));
 
-    StepVerifier.create(service.consume("id", "token", true)).verifyComplete();
-    assertStatus(() -> service.consume("id", "token", true).block(), 404);
+    StepVerifier.create(service.consume("id", "token", List.of())).verifyComplete();
+    assertStatus(() -> service.consume("id", "token", List.of()).block(), 404);
+  }
+
+  @Test
+  void releaseAcceptsOkAndMapsConflict() {
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenReturn(Flux.just("__OK__"), Flux.just("__CONFLICT__"));
+    StepVerifier.create(service.release("id", "token")).verifyComplete();
+    assertStatus(() -> service.release("id", "token").block(), 409);
   }
 
   private void assertClaimStatus(String result, int status) {
@@ -147,10 +159,15 @@ class ToolConfirmationServiceTest {
 
   private String jsonRecord(String id, ToolConfirmationStatus status, String token, Long lease, Boolean confirmed) throws Exception {
     return objectMapper.writeValueAsString(new ToolConfirmationRecord(id, "7", "session", "reply",
-        ToolCallSnapshot.from(toolCall()), ConfirmationKind.USER_CONFIRM, Instant.now(), status, token, lease, confirmed));
+        List.of(ToolCallSnapshot.from(toolCall())), ConfirmationKind.USER_CONFIRM, Instant.now(), status, token, lease,
+        confirmed == null ? null : List.of(new ToolConfirmationDecision("call-1", confirmed))));
   }
 
   private ToolUseBlock toolCall() {
     return new ToolUseBlock("call-1", "shell", Map.of("command", "pwd"));
+  }
+
+  private List<ToolUseBlock> toolCalls() {
+    return List.of(toolCall(), new ToolUseBlock("call-2", "read_file", Map.of("path", "a.md")));
   }
 }

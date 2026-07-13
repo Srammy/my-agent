@@ -135,33 +135,31 @@ class AgentScopeChatAgentGatewayTest {
           "permission", "shell_command",
           "confirmationId", "confirm-1",
           "replyId", "reply-1",
-          "toolCallId", "call-1",
-          "toolName", "shell_command",
-          "toolInput", input,
+          "toolCalls", List.of(Map.of(
+              "toolCallId", "call-1", "toolName", "shell_command", "toolInput", input)),
           "kind", "USER_CONFIRM"));
-      assertThat(event.payload().get("toolInput")).isEqualTo(input);
     });
     verify(toolConfirmationService)
-        .create(7L, "s_123", "reply-1", toolCall, ConfirmationKind.USER_CONFIRM);
+        .create(7L, "s_123", "reply-1", List.of(toolCall), ConfirmationKind.USER_CONFIRM);
   }
 
   @Test
-  void registersOnlyTheFirstToolFromAConfirmationEvent(CapturedOutput output) {
+  void registersAllToolsFromAConfirmationEvent(CapturedOutput output) {
     ToolUseBlock first = new ToolUseBlock("call-1", "first", Map.of("one", 1));
     ToolUseBlock second = new ToolUseBlock("call-2", "second", Map.of("two", 2));
     when(executor.stream(any(ChatAgentRequest.class), any()))
         .thenReturn(Flux.just(new RequireUserConfirmEvent("reply-1", List.of(first, second))));
     when(toolConfirmationService.create(any(), any(), any(), any(), any()))
-        .thenReturn(Mono.just(record("confirm-1", "reply-1", first)));
+        .thenReturn(Mono.just(record("confirm-1", "reply-1", first, second)));
 
     var events = gateway().stream(request()).collectList().block();
 
-    assertThat(events).singleElement().satisfies(event ->
-        assertThat(event.payload()).containsEntry("toolCallId", "call-1"));
+    assertThat(events).singleElement().satisfies(event -> {
+      assertThat(event.type()).isEqualTo("permission_required");
+      assertThat((List<?>) event.payload().get("toolCalls")).hasSize(2);
+    });
     verify(toolConfirmationService, times(1))
-        .create(7L, "s_123", "reply-1", first, ConfirmationKind.USER_CONFIRM);
-    assertThat(output).contains(
-        "Multiple tool calls in confirmation event for reply reply-1; only the first will be registered");
+        .create(7L, "s_123", "reply-1", List.of(first, second), ConfirmationKind.USER_CONFIRM);
   }
 
   @Test
@@ -216,6 +214,26 @@ class AgentScopeChatAgentGatewayTest {
   }
 
   @Test
+  void emitsErrorWithoutRegisteringForBlankOrDuplicateToolCallIds() {
+    ToolUseBlock blank = new ToolUseBlock(" ", "read_file", Map.of());
+    ToolUseBlock first = new ToolUseBlock("call-1", "read_file", Map.of());
+    ToolUseBlock duplicate = new ToolUseBlock("call-1", "shell_command", Map.of());
+    when(executor.stream(any(ChatAgentRequest.class), any()))
+        .thenReturn(
+            Flux.just(new RequireUserConfirmEvent("reply-1", List.of(blank))),
+            Flux.just(new RequireUserConfirmEvent("reply-1", List.of(first, duplicate))));
+
+    for (int attempt = 0; attempt < 2; attempt++) {
+      assertThat(gateway().stream(request()).collectList().block()).singleElement().satisfies(event -> {
+        assertThat(event.type()).isEqualTo("error");
+        assertThat(event.payload()).containsEntry(
+            "message", "AgentScope confirmation event included invalid or duplicate tool call ids");
+      });
+    }
+    verify(toolConfirmationService, never()).create(any(), any(), any(), any(), any());
+  }
+
+  @Test
   void convertsConfirmationRegistrationFailureToProtocolError() {
     ToolUseBlock toolCall = new ToolUseBlock("call-1", "shell_command", Map.of());
     Sinks.One<ToolConfirmationRecord> registration = Sinks.one();
@@ -244,7 +262,8 @@ class AgentScopeChatAgentGatewayTest {
         new ToolCallSnapshot("call-1", "shell_command", Map.of("command", "Get-ChildItem"));
     ChatToolConfirmationRequest request =
         new ChatToolConfirmationRequest(
-            7L, "s_123", PermissionMode.ACCEPT_EDITS, "reply-1", snapshot, true);
+            7L, "s_123", PermissionMode.ACCEPT_EDITS, "reply-1",
+            List.of(new ToolCallDecision(snapshot, true)));
     when(executor.confirm(any(ChatToolConfirmationRequest.class), any()))
         .thenReturn(Flux.just(new TextBlockDeltaEvent("reply-1", "block-1", "resumed")));
 
@@ -280,10 +299,10 @@ class AgentScopeChatAgentGatewayTest {
     assertThat(events).singleElement().satisfies(event -> {
       assertThat(event.type()).isEqualTo("permission_required");
       assertThat(event.payload()).containsEntry("confirmationId", "confirm-2");
-      assertThat(event.payload()).containsEntry("toolCallId", "call-2");
+      assertThat((List<?>) event.payload().get("toolCalls")).hasSize(1);
     });
     verify(toolConfirmationService)
-        .create(7L, "s_123", "reply-2", toolCall, ConfirmationKind.USER_CONFIRM);
+        .create(7L, "s_123", "reply-2", List.of(toolCall), ConfirmationKind.USER_CONFIRM);
   }
 
   @Test
@@ -328,18 +347,22 @@ class AgentScopeChatAgentGatewayTest {
         "s_123",
         PermissionMode.DEFAULT,
         "reply-1",
-        new ToolCallSnapshot("call-1", "shell_command", Map.of("command", "Get-ChildItem")),
-        confirmed);
+        List.of(new ToolCallDecision(
+            new ToolCallSnapshot("call-1", "shell_command", Map.of("command", "Get-ChildItem")),
+            confirmed)));
   }
 
   private ToolConfirmationRecord record(
-      String confirmationId, String replyId, ToolUseBlock toolCall) {
+      String confirmationId, String replyId, ToolUseBlock... toolCalls) {
     return new ToolConfirmationRecord(
         confirmationId,
         "7",
         "s_123",
         replyId,
-        new ToolCallSnapshot(toolCall.getId(), toolCall.getName(), toolCall.getInput()),
+        java.util.Arrays.stream(toolCalls)
+            .map(toolCall -> new ToolCallSnapshot(
+                toolCall.getId(), toolCall.getName(), toolCall.getInput()))
+            .toList(),
         ConfirmationKind.USER_CONFIRM,
         Instant.parse("2026-07-11T00:00:00Z"),
         ToolConfirmationStatus.PENDING,

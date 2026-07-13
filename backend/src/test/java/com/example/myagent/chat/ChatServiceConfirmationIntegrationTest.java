@@ -16,6 +16,7 @@ import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import io.agentscope.core.message.ToolUseBlock;
 import java.time.LocalDateTime;
 import java.util.Map;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterAll;
@@ -73,7 +74,7 @@ class ChatServiceConfirmationIntegrationTest {
   @Test
   void cancellingGatewayConfirmationKeepsTheRedisRecordConsumed() throws Exception {
     String confirmationId = toolConfirmationService.create(
-        USER.id(), SESSION_ID, "reply", new ToolUseBlock("call", "shell", Map.of("command", "pwd")),
+        USER.id(), SESSION_ID, "reply", List.of(new ToolUseBlock("call", "shell", Map.of("command", "pwd"))),
         ConfirmationKind.USER_CONFIRM).block().confirmationId();
     CountDownLatch gatewaySubscribed = new CountDownLatch(1);
     CountDownLatch gatewayCancelled = new CountDownLatch(1);
@@ -85,7 +86,8 @@ class ChatServiceConfirmationIntegrationTest {
 
     ChatService chatService = new ChatService(
         sessionService(), gateway, permissionService(), toolConfirmationService);
-    Disposable subscription = chatService.confirm(USER, SESSION_ID, confirmationId, true).subscribe();
+    Disposable subscription = chatService.confirm(USER, SESSION_ID, confirmationId,
+        List.of(new ToolConfirmationDecisionRequest("call", true))).subscribe();
 
     assertThat(gatewaySubscribed.await(5, TimeUnit.SECONDS)).isTrue();
     subscription.dispose();

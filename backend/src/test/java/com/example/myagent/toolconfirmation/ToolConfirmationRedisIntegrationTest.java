@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.agentscope.core.message.ToolUseBlock;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -95,11 +96,15 @@ class ToolConfirmationRedisIntegrationTest {
     ToolConfirmationClaim claim = service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
     Duration before = ttl(key);
 
-    service.consume(created.confirmationId(), claim.processingToken(), true).block();
+    List<ToolConfirmationDecision> decisions = List.of(
+        new ToolConfirmationDecision("call-1", true),
+        new ToolConfirmationDecision("call-2", false));
+    service.consume(created.confirmationId(), claim.processingToken(), decisions).block();
 
     JsonNode completed = json(key);
     assertThat(completed.get("status").asText()).isEqualTo("CONSUMED");
-    assertThat(completed.get("confirmed").asBoolean()).isTrue();
+    assertThat(objectMapper.treeToValue(completed.get("decisions"), ToolConfirmationDecision[].class))
+        .containsExactlyElementsOf(decisions);
     assertThat(completed.has("processingToken")).isFalse();
     assertThat(completed.has("leaseExpiresAtEpochMs")).isFalse();
     assertTtlNotReset(before, ttl(key));
@@ -111,7 +116,7 @@ class ToolConfirmationRedisIntegrationTest {
     String key = key(created);
     ToolConfirmationClaim claim = service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
 
-    service.consume(created.confirmationId(), claim.processingToken(), true).block();
+    service.consume(created.confirmationId(), claim.processingToken(), List.of()).block();
 
     ObjectNode consumed = (ObjectNode) json(key);
     // This represents a recovery flow outliving the former 30-second PROCESSING lease.
@@ -130,13 +135,30 @@ class ToolConfirmationRedisIntegrationTest {
     assertStatus(() -> service.claim(LARGE_USER_ID - 1, "session", created.confirmationId()).block(), HttpStatus.NOT_FOUND);
     assertStatus(() -> service.claim(LARGE_USER_ID, "other", created.confirmationId()).block(), HttpStatus.NOT_FOUND);
     ToolConfirmationClaim claim = service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
-    assertStatus(() -> service.consume(created.confirmationId(), "wrong", true).block(), HttpStatus.CONFLICT);
-    service.consume(created.confirmationId(), claim.processingToken(), true).block();
+    assertStatus(() -> service.consume(created.confirmationId(), "wrong", List.of()).block(), HttpStatus.CONFLICT);
+    service.consume(created.confirmationId(), claim.processingToken(), List.of()).block();
+  }
+
+  @Test
+  void releaseReturnsRecordToPendingClearsLeaseAndPreservesTtl() throws Exception {
+    ToolConfirmationRecord created = create();
+    String key = key(created);
+    ToolConfirmationClaim claim = service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
+    Duration before = ttl(key);
+    service.release(created.confirmationId(), claim.processingToken()).block();
+    JsonNode pending = json(key);
+    assertThat(pending.get("status").asText()).isEqualTo("PENDING");
+    assertThat(pending.has("processingToken")).isFalse();
+    assertThat(pending.has("leaseExpiresAtEpochMs")).isFalse();
+    assertTtlNotReset(before, ttl(key));
   }
 
   private ToolConfirmationRecord create() {
     return service.create(LARGE_USER_ID, "session", "reply",
-        new ToolUseBlock("call", "shell", Map.of("command", "pwd")), ConfirmationKind.USER_CONFIRM).block();
+        List.of(
+            new ToolUseBlock("call-1", "read_file", Map.of("path", "a.md")),
+            new ToolUseBlock("call-2", "shell_command", Map.of("command", "npm test"))),
+        ConfirmationKind.USER_CONFIRM).block();
   }
 
   private String key(ToolConfirmationRecord record) {

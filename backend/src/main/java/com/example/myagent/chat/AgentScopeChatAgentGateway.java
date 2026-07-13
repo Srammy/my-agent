@@ -5,8 +5,10 @@ import com.example.myagent.toolconfirmation.ConfirmationKind;
 import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.RequireUserConfirmEvent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import io.agentscope.core.message.ToolUseBlock;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -18,8 +20,6 @@ import reactor.core.publisher.Flux;
 @ConditionalOnBean(AgentScopeStreamExecutor.class)
 @ConditionalOnProperty(prefix = "agent.agent-scope", name = "enabled", havingValue = "true")
 public class AgentScopeChatAgentGateway implements ChatAgentGateway {
-  private static final Logger log = LoggerFactory.getLogger(AgentScopeChatAgentGateway.class);
-
   private final AgentScopeStreamExecutor executor;
   private final AgentEventMapper agentEventMapper;
   private final ToolConfirmationService toolConfirmationService;
@@ -84,21 +84,23 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
 
   private Flux<StreamEventDto> registerUserConfirmation(
       Long userId, String sessionId, RequireUserConfirmEvent confirmationEvent) {
-    if (confirmationEvent.getToolCalls() == null || confirmationEvent.getToolCalls().isEmpty()) {
+    List<ToolUseBlock> toolCalls = confirmationEvent.getToolCalls();
+    if (toolCalls == null || toolCalls.isEmpty()) {
       return Flux.just(
           StreamEventDto.error("AgentScope confirmation event did not include a tool call"));
     }
-    if (confirmationEvent.getToolCalls().size() > 1) {
-      log.warn(
-          "Multiple tool calls in confirmation event for reply {}; only the first will be registered",
-          confirmationEvent.getReplyId());
+    Set<String> ids = new HashSet<>();
+    if (toolCalls.stream().anyMatch(tool ->
+        tool.getId() == null || tool.getId().isBlank() || !ids.add(tool.getId()))) {
+      return Flux.just(StreamEventDto.error(
+          "AgentScope confirmation event included invalid or duplicate tool call ids"));
     }
     return toolConfirmationService
         .create(
             userId,
             sessionId,
             confirmationEvent.getReplyId(),
-            confirmationEvent.getToolCalls().getFirst(),
+            toolCalls,
             ConfirmationKind.USER_CONFIRM)
         .map(StreamEventDto::permissionRequired)
         .flux();
