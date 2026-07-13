@@ -41,20 +41,7 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
     return executor
         .stream(request, runtimeContext)
         .concatMap(
-            agentEvent -> {
-              if (agentEvent instanceof RequireUserConfirmEvent confirmationEvent) {
-                return registerUserConfirmation(
-                    request.userId(), request.sessionId(), confirmationEvent);
-              }
-              StreamEventDto mapped = agentEventMapper.map(agentEvent);
-              if (mapped != null) {
-                return Flux.just(mapped);
-              }
-              if (agentEvent instanceof Throwable throwable) {
-                return Flux.just(StreamEventDto.error(errorMessage(throwable)));
-              }
-              return Flux.empty();
-            })
+            agentEvent -> mapAgentEvent(request.userId(), request.sessionId(), agentEvent))
         .onErrorResume(
             throwable -> Flux.just(StreamEventDto.error(errorMessage(throwable))));
   }
@@ -67,19 +54,19 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
     return executor
         .confirm(request, runtimeContext)
         .concatMap(
-            agentEvent -> {
-              if (agentEvent instanceof Throwable throwable) {
-                // AgentScope may surface SDK failures as event values; confirmation recovery
-                // routes them through ChatService's reactive error handling.
-                return Flux.error(throwable);
-              }
-              if (agentEvent instanceof RequireUserConfirmEvent confirmationEvent) {
-                return registerUserConfirmation(
-                    request.userId(), request.sessionId(), confirmationEvent);
-              }
-              StreamEventDto mapped = agentEventMapper.map(agentEvent);
-              return mapped == null ? Flux.empty() : Flux.just(mapped);
-            });
+            agentEvent -> mapAgentEvent(request.userId(), request.sessionId(), agentEvent));
+  }
+
+  private Flux<StreamEventDto> mapAgentEvent(
+      Long userId, String sessionId, Object agentEvent) {
+    if (agentEvent instanceof Throwable throwable) {
+      return Flux.error(throwable);
+    }
+    if (agentEvent instanceof RequireUserConfirmEvent confirmationEvent) {
+      return registerUserConfirmation(userId, sessionId, confirmationEvent);
+    }
+    StreamEventDto mapped = agentEventMapper.map(agentEvent);
+    return mapped == null ? Flux.empty() : Flux.just(mapped);
   }
 
   private Flux<StreamEventDto> registerUserConfirmation(

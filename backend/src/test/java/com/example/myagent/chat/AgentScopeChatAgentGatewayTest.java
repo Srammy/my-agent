@@ -119,6 +119,21 @@ class AgentScopeChatAgentGatewayTest {
   }
 
   @Test
+  void sdkThrowableEventTerminatesStreamBeforeLaterEvents() {
+    when(executor.stream(any(ChatAgentRequest.class), any()))
+        .thenReturn(Flux.just(
+            new TextBlockDeltaEvent("reply-1", "block-1", "before error"),
+            new IllegalArgumentException("sdk error event"),
+            new AgentEndEvent("reply-1")));
+
+    var events = gateway().stream(request()).collectList().block();
+
+    assertThat(events)
+        .extracting(StreamEventDto::type)
+        .containsExactly("text_delta", "error");
+  }
+
+  @Test
   void registersUserConfirmationAndPublishesStableMetadata() {
     Map<String, Object> input = Map.of("command", "Get-ChildItem", "timeout", 30);
     ToolUseBlock toolCall = new ToolUseBlock("call-1", "shell_command", input);
