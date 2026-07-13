@@ -17,6 +17,24 @@ export type StreamEventType =
   | 'done'
   | 'error'
 
+export interface ConfirmationToolCall {
+  toolCallId: string
+  toolName: string
+  toolInput: unknown
+}
+
+export interface ToolConfirmationDecision {
+  toolCallId: string
+  confirmed: boolean
+}
+
+export class StreamRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'StreamRequestError'
+  }
+}
+
 export interface StreamEvent {
   type: StreamEventType | string
   delta?: string
@@ -31,6 +49,7 @@ export interface StreamEvent {
   toolCallId?: string
   toolName?: string
   toolInput?: unknown
+  toolCalls?: ConfirmationToolCall[]
   kind?: 'USER_CONFIRM' | 'EXTERNAL_EXECUTION' | string
   [key: string]: unknown
 }
@@ -126,7 +145,7 @@ export async function streamNdjson(
   })
 
   if (!response.ok) {
-    throw new Error(await readError(response))
+    throw new StreamRequestError(await readError(response), response.status)
   }
 
   if (!response.body) {
@@ -162,12 +181,12 @@ export function streamChat(
 export function confirmToolCall(
   sessionId: string,
   confirmationId: string,
-  confirmed: boolean,
+  decisions: ToolConfirmationDecision[],
   onEvent: (event: StreamEvent) => void
 ): Promise<void> {
   return streamNdjson(
     `/api/chat/sessions/${encodeURIComponent(sessionId)}/tool-confirmations/${encodeURIComponent(confirmationId)}`,
-    { confirmed },
+    { decisions },
     onEvent
   )
 }

@@ -1,5 +1,12 @@
 import { defineStore } from 'pinia'
-import { confirmToolCall, streamChat, type StreamEvent } from '../api/chat'
+import {
+  confirmToolCall,
+  StreamRequestError,
+  streamChat,
+  type ConfirmationToolCall,
+  type StreamEvent,
+  type ToolConfirmationDecision
+} from '../api/chat'
 
 export type ChatRole = 'user' | 'assistant' | 'system' | 'tool'
 
@@ -24,6 +31,8 @@ export interface ToolEvent {
   toolCallId?: string
   toolName?: string
   toolInput?: unknown
+  toolCalls?: ConfirmationToolCall[]
+  decisions?: Record<string, boolean | undefined>
   kind?: 'USER_CONFIRM' | 'EXTERNAL_EXECUTION' | string
   confirming?: boolean
   consumed?: boolean
@@ -65,6 +74,21 @@ function toToolEvent(event: StreamEvent): ToolEvent | null {
     return null
   }
 
+  const toolCalls = Array.isArray(event.toolCalls)
+    ? event.toolCalls
+        .filter((tool): tool is ConfirmationToolCall =>
+          tool !== null &&
+          typeof tool === 'object' &&
+          typeof tool.toolCallId === 'string' &&
+          typeof tool.toolName === 'string'
+        )
+        .map((tool) => ({
+          toolCallId: tool.toolCallId,
+          toolName: tool.toolName,
+          toolInput: tool.toolInput
+        }))
+    : undefined
+
   return {
     id: makeId('event'),
     type: event.type,
@@ -79,6 +103,8 @@ function toToolEvent(event: StreamEvent): ToolEvent | null {
     toolCallId: typeof event.toolCallId === 'string' ? event.toolCallId : undefined,
     toolName: typeof event.toolName === 'string' ? event.toolName : undefined,
     toolInput: event.toolInput,
+    toolCalls,
+    decisions: event.type === 'permission_required' && event.kind === 'USER_CONFIRM' ? {} : undefined,
     kind: typeof event.kind === 'string' ? event.kind : undefined
   }
 }
@@ -109,16 +135,35 @@ export const useChatStore = defineStore('chat', {
         message.events.push(event)
       }
     },
-    async confirmTool(sessionId: string, messageId: string, event: ToolEvent, confirmed: boolean) {
+    setToolDecision(event: ToolEvent, toolCallId: string, confirmed: boolean) {
+      if (event.confirming || event.consumed || !event.toolCalls?.some(
+        (tool) => tool.toolCallId === toolCallId
+      )) return
+
+      event.decisions ??= {}
+      event.decisions[toolCallId] = confirmed
+    },
+    async confirmTool(sessionId: string, messageId: string, event: ToolEvent) {
       if (!event.confirmationId || event.confirming || event.consumed) {
         return
       }
+
+      if (!event.toolCalls || event.toolCalls.some(
+        (tool) => typeof event.decisions?.[tool.toolCallId] !== 'boolean'
+      )) {
+        return
+      }
+
+      const decisions: ToolConfirmationDecision[] = event.toolCalls.map((tool) => ({
+        toolCallId: tool.toolCallId,
+        confirmed: event.decisions?.[tool.toolCallId] as boolean
+      }))
 
       event.confirming = true
       this.error = ''
 
       try {
-        await confirmToolCall(sessionId, event.confirmationId, confirmed, (streamEvent) => {
+        await confirmToolCall(sessionId, event.confirmationId, decisions, (streamEvent) => {
           if (streamEvent.type === 'text_delta') {
             const message = this.messagesBySession[sessionId]?.find((item) => item.id === messageId)
 
@@ -146,7 +191,11 @@ export const useChatStore = defineStore('chat', {
       } catch (error) {
         const message = errorMessage(error)
         this.error = message
-        event.consumed = false
+        if (error instanceof StreamRequestError && (error.status === 404 || error.status === 409)) {
+          event.consumed = true
+        } else {
+          event.consumed = false
+        }
         this.appendEvent(sessionId, messageId, {
           id: makeId('event'),
           type: 'error',
