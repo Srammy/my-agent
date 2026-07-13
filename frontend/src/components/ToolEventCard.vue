@@ -17,20 +17,20 @@ const isUserConfirmation = computed(
     Boolean(props.event.confirmationId)
 )
 
-const confirmationToolName = computed(() =>
-  isUserConfirmation.value ? props.event.toolName || props.event.permission : ''
-)
-
-const confirmationInput = computed(() =>
-  isUserConfirmation.value ? props.event.toolInput : undefined
-)
-
-const confirmationDisabled = computed(
+const confirmationLocked = computed(
   () =>
     props.event.confirming ||
     props.event.consumed ||
     !props.sessionId ||
     !props.messageId
+)
+
+const allDecided = computed(
+  () =>
+    Boolean(props.event.toolCalls?.length) &&
+    props.event.toolCalls!.every(
+      (tool) => typeof props.event.decisions?.[tool.toolCallId] === 'boolean'
+    )
 )
 
 const title = computed(() => {
@@ -78,9 +78,7 @@ const text = computed(() => {
   return ''
 })
 
-const formattedPayload = computed(() => {
-  const value = payload.value ?? confirmationInput.value
-
+function formatValue(value: unknown) {
   if (value === null || value === undefined) {
     return ''
   }
@@ -90,22 +88,50 @@ const formattedPayload = computed(() => {
   }
 
   return JSON.stringify(value, null, 2)
-})
-
-function confirm(confirmed: boolean) {
-  void chat.confirmTool(props.sessionId, props.messageId, props.event, confirmed)
 }
+
+const formattedPayload = computed(() => formatValue(payload.value))
 </script>
 
 <template>
   <div class="tool-event" :class="`tool-event--${event.type}`">
     <div class="tool-event__title">{{ title }}</div>
     <p v-if="text" class="tool-event__text">{{ text }}</p>
-    <div v-if="confirmationToolName" class="tool-event__tool-name">{{ confirmationToolName }}</div>
     <pre v-if="formattedPayload" class="tool-event__payload">{{ formattedPayload }}</pre>
-    <div v-if="isUserConfirmation" class="tool-event__actions">
-      <el-button :disabled="confirmationDisabled" @click="confirm(true)">允许一次</el-button>
-      <el-button :disabled="confirmationDisabled" @click="confirm(false)">拒绝一次</el-button>
+    <div v-if="isUserConfirmation" class="tool-event__confirmation-list">
+      <div
+        v-for="tool in event.toolCalls"
+        :key="tool.toolCallId"
+        class="tool-event__confirmation-item"
+      >
+        <div class="tool-event__tool-name">{{ tool.toolName }}</div>
+        <pre class="tool-event__payload">{{ formatValue(tool.toolInput) }}</pre>
+        <el-button
+          :type="event.decisions?.[tool.toolCallId] === true ? 'primary' : 'default'"
+          :disabled="confirmationLocked"
+          @click="chat.setToolDecision(event, tool.toolCallId, true)"
+        >允许</el-button>
+        <el-button
+          :type="event.decisions?.[tool.toolCallId] === false ? 'danger' : 'default'"
+          :disabled="confirmationLocked"
+          @click="chat.setToolDecision(event, tool.toolCallId, false)"
+        >拒绝</el-button>
+      </div>
+      <el-button
+        :disabled="confirmationLocked || !allDecided"
+        @click="chat.confirmTool(sessionId, messageId, event)"
+      >提交本组决策</el-button>
     </div>
   </div>
 </template>
+
+<style scoped>
+.tool-event__confirmation-list {
+  display: grid;
+  gap: 12px;
+}
+
+.tool-event__confirmation-item .tool-event__payload {
+  margin: 4px 0 8px;
+}
+</style>

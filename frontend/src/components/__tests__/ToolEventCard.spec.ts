@@ -10,9 +10,12 @@ function confirmationEvent(overrides: Partial<ToolEvent> = {}): ToolEvent {
     id: 'permission-1',
     type: 'permission_required',
     confirmationId: 'confirm-1',
-    toolName: 'shell',
-    toolInput: { command: 'pwd' },
     kind: 'USER_CONFIRM',
+    toolCalls: [
+      { toolCallId: 'call-1', toolName: 'read_file', toolInput: { path: 'a.md' } },
+      { toolCallId: 'call-2', toolName: 'shell_command', toolInput: { command: 'npm test' } }
+    ],
+    decisions: {},
     ...overrides
   }
 }
@@ -29,26 +32,47 @@ describe('ToolEventCard', () => {
     setActivePinia(createPinia())
   })
 
-  it('shows a user confirmation tool name, JSON input, and action buttons', () => {
+  it('shows every tool name and JSON input in a confirmation group', () => {
     const wrapper = mountCard()
 
-    expect(wrapper.text()).toContain('shell')
-    expect(wrapper.find('pre').text()).toContain('"command": "pwd"')
-    expect(wrapper.get('button').text()).toBe('允许一次')
-    expect(wrapper.findAll('button')[1].text()).toBe('拒绝一次')
+    expect(wrapper.text()).toContain('read_file')
+    expect(wrapper.text()).toContain('shell_command')
+    expect(wrapper.text()).toContain('"path": "a.md"')
+    expect(wrapper.text()).toContain('"command": "npm test"')
   })
 
-  it('confirms or rejects through the chat store', async () => {
+  it('records an allow or reject decision for an individual tool', async () => {
     const chat = useChatStore()
-    const confirmTool = vi.spyOn(chat, 'confirmTool').mockResolvedValue()
+    const setToolDecision = vi.spyOn(chat, 'setToolDecision')
     const event = confirmationEvent()
     const wrapper = mountCard(event)
+    const buttons = wrapper.findAll('button')
 
-    await wrapper.get('button').trigger('click')
-    await wrapper.findAll('button')[1].trigger('click')
+    expect(buttons).toHaveLength(5)
+    await buttons[0].trigger('click')
+    await buttons[3].trigger('click')
 
-    expect(confirmTool).toHaveBeenNthCalledWith(1, 's_123', 'assistant-1', event, true)
-    expect(confirmTool).toHaveBeenNthCalledWith(2, 's_123', 'assistant-1', event, false)
+    expect(setToolDecision).toHaveBeenNthCalledWith(1, event, 'call-1', true)
+    expect(setToolDecision).toHaveBeenNthCalledWith(2, event, 'call-2', false)
+  })
+
+  it('enables group submission only after every tool has a decision', async () => {
+    const chat = useChatStore()
+    const confirmTool = vi.spyOn(chat, 'confirmTool').mockResolvedValue()
+    let event = confirmationEvent()
+    const wrapper = mountCard(event)
+    const initialButtons = wrapper.findAll('button')
+
+    expect(initialButtons).toHaveLength(5)
+    expect(initialButtons[4].attributes('disabled')).toBeDefined()
+
+    event = confirmationEvent({ decisions: { 'call-1': true, 'call-2': false } })
+    await wrapper.setProps({ event })
+    const submit = wrapper.findAll('button')[4]
+    expect(submit.attributes('disabled')).toBeUndefined()
+
+    await submit.trigger('click')
+    expect(confirmTool).toHaveBeenCalledWith('s_123', 'assistant-1', event)
   })
 
   it.each([
@@ -56,10 +80,10 @@ describe('ToolEventCard', () => {
     ['consumed', confirmationEvent({ consumed: true }), 's_123', 'assistant-1'],
     ['missing session id', confirmationEvent(), '', 'assistant-1'],
     ['missing message id', confirmationEvent(), 's_123', '']
-  ])('disables both actions when %s', (_reason, event, sessionId, messageId) => {
+  ])('disables all confirmation controls when %s', (_reason, event, sessionId, messageId) => {
     const wrapper = mountCard(event, sessionId, messageId)
 
-    expect(wrapper.findAll('button')).toHaveLength(2)
+    expect(wrapper.findAll('button')).toHaveLength(5)
     expect(wrapper.findAll('button').every((button) => button.attributes('disabled') !== undefined)).toBe(true)
   })
 
@@ -78,7 +102,7 @@ describe('ToolEventCard', () => {
   })
 
   it('falls back to permission and omits an empty tool input preview', () => {
-    const wrapper = mountCard(confirmationEvent({ toolName: undefined, permission: 'filesystem', toolInput: undefined }))
+    const wrapper = mountCard(confirmationEvent({ kind: 'EXTERNAL_EXECUTION', permission: 'filesystem', toolCalls: undefined }))
 
     expect(wrapper.text()).toContain('filesystem')
     expect(wrapper.find('pre').exists()).toBe(false)
