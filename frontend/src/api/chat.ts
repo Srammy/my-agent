@@ -46,9 +46,6 @@ export interface StreamEvent {
   message?: string
   confirmationId?: string
   replyId?: string
-  toolCallId?: string
-  toolName?: string
-  toolInput?: unknown
   toolCalls?: ConfirmationToolCall[]
   kind?: 'USER_CONFIRM' | 'EXTERNAL_EXECUTION' | string
   [key: string]: unknown

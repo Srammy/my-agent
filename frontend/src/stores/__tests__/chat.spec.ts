@@ -288,6 +288,39 @@ describe('chat confirmation streams', () => {
     })
   })
 
+  it('does not copy obsolete top-level tool metadata from permission events', async () => {
+    vi.spyOn(chatApi, 'streamChat').mockImplementation(async (_sessionId, _message, onEvent) => {
+      onEvent({
+        type: 'permission_required',
+        confirmationId: 'confirm-1',
+        replyId: 'reply-1',
+        kind: 'USER_CONFIRM',
+        toolCallId: 'obsolete-call',
+        toolName: 'obsolete-tool',
+        toolInput: { obsolete: true },
+        toolCalls: [
+          { toolCallId: 'call-1', toolName: 'shell_command', toolInput: { command: 'npm test' } }
+        ]
+      })
+      onEvent({ type: 'done' })
+    })
+    const store = useChatStore()
+
+    await store.sendMessage('s1', 'hello')
+
+    const event = store.messages('s1')[1].events[0]
+    expect(event).toMatchObject({
+      confirmationId: 'confirm-1',
+      replyId: 'reply-1',
+      toolCalls: [
+        { toolCallId: 'call-1', toolName: 'shell_command', toolInput: { command: 'npm test' } }
+      ]
+    })
+    expect(event).not.toHaveProperty('toolCallId')
+    expect(event).not.toHaveProperty('toolName')
+    expect(event).not.toHaveProperty('toolInput')
+  })
+
   it('does not change decisions for unknown, confirming, or consumed events', () => {
     const store = useChatStore()
     const event = toolEvent()

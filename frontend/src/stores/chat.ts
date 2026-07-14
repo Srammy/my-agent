@@ -28,9 +28,6 @@ export interface ToolEvent {
   message?: string
   confirmationId?: string
   replyId?: string
-  toolCallId?: string
-  toolName?: string
-  toolInput?: unknown
   toolCalls?: ConfirmationToolCall[]
   decisions?: Record<string, boolean | undefined>
   kind?: 'USER_CONFIRM' | 'EXTERNAL_EXECUTION' | string
@@ -100,9 +97,6 @@ function toToolEvent(event: StreamEvent): ToolEvent | null {
     message: typeof event.message === 'string' ? event.message : undefined,
     confirmationId: typeof event.confirmationId === 'string' ? event.confirmationId : undefined,
     replyId: typeof event.replyId === 'string' ? event.replyId : undefined,
-    toolCallId: typeof event.toolCallId === 'string' ? event.toolCallId : undefined,
-    toolName: typeof event.toolName === 'string' ? event.toolName : undefined,
-    toolInput: event.toolInput,
     toolCalls,
     decisions: event.type === 'permission_required' && event.kind === 'USER_CONFIRM' ? {} : undefined,
     kind: typeof event.kind === 'string' ? event.kind : undefined
