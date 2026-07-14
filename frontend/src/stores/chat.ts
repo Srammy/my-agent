@@ -251,7 +251,6 @@ export const useChatStore = defineStore('chat', {
 
           if (event.type === 'done') {
             assistant.loading = false
-            this.loadingSessionId = ''
             return
           }
 
@@ -263,7 +262,6 @@ export const useChatStore = defineStore('chat', {
             if (toolEvent.type === 'error') {
               this.error = toolEvent.message ?? '流式响应返回错误'
               assistant.loading = false
-              this.loadingSessionId = ''
             }
           }
         })
@@ -277,7 +275,9 @@ export const useChatStore = defineStore('chat', {
         })
       } finally {
         assistant.loading = false
-        this.loadingSessionId = ''
+        if (this.loadingSessionId === sessionId) {
+          this.loadingSessionId = ''
+        }
       }
     },
     clearSession(sessionId: string) {

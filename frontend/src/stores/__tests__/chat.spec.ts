@@ -154,6 +154,39 @@ describe('chat confirmation streams', () => {
     await message
   })
 
+  it.each(['done', 'error'] as const)(
+    'retains the chat lock until the stream resolves after a %s event',
+    async (eventType) => {
+      let resolveStream: (() => void) | undefined
+      vi.spyOn(chatApi, 'streamChat').mockImplementation((_sessionId, _message, onEvent) => {
+        if (eventType === 'done') {
+          onEvent({ type: 'done' })
+        } else {
+          onEvent({ type: 'error', message: 'stream failed' })
+        }
+        return new Promise<void>((resolve) => { resolveStream = resolve })
+      })
+      const confirmToolCallMock = vi.spyOn(chatApi, 'confirmToolCall').mockResolvedValue()
+      const store = useChatStore()
+      const event = toolEvent()
+      selectAll(store, event)
+      let messageSettled = false
+
+      const message = store.sendMessage('s1', 'hello').finally(() => { messageSettled = true })
+      await Promise.resolve()
+
+      expect(messageSettled).toBe(false)
+      expect(store.loadingSessionId).toBe('s1')
+      await store.confirmTool('s1', 'assistant-1', event)
+      expect(confirmToolCallMock).not.toHaveBeenCalled()
+
+      resolveStream?.()
+      await message
+
+      expect(store.loadingSessionId).toBe('')
+    }
+  )
+
   it('releases the chat lock when tool confirmation fails', async () => {
     vi.spyOn(chatApi, 'confirmToolCall').mockRejectedValue(new Error('confirmation failed'))
     const store = useChatStore()
