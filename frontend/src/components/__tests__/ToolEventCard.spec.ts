@@ -87,6 +87,17 @@ describe('ToolEventCard', () => {
     expect(wrapper.findAll('button').every((button) => button.attributes('disabled') !== undefined)).toBe(true)
   })
 
+  it('disables all confirmation controls while the chat store is busy', () => {
+    const chat = useChatStore()
+    chat.loadingSessionId = 's_123'
+    const wrapper = mountCard(confirmationEvent({
+      decisions: { 'call-1': true, 'call-2': false }
+    }))
+
+    expect(wrapper.findAll('button')).toHaveLength(5)
+    expect(wrapper.findAll('button').every((button) => button.attributes('disabled') !== undefined)).toBe(true)
+  })
+
   it('keeps external permissions as notices without action buttons', () => {
     const wrapper = mountCard(confirmationEvent({ kind: 'EXTERNAL_EXECUTION', permission: 'network' }))
 

@@ -112,6 +112,60 @@ describe('chat confirmation streams', () => {
     expect(confirmToolCallMock).toHaveBeenCalledTimes(1)
   })
 
+  it('blocks message sending while tool confirmation is in flight', async () => {
+    let resolveConfirmation: (() => void) | undefined
+    vi.spyOn(chatApi, 'confirmToolCall').mockImplementation(
+      () => new Promise<void>((resolve) => { resolveConfirmation = resolve })
+    )
+    const streamChatMock = vi.spyOn(chatApi, 'streamChat')
+    const store = useChatStore()
+    const event = toolEvent()
+    selectAll(store, event)
+
+    const confirmation = store.confirmTool('s1', 'assistant-1', event)
+
+    expect(store.loadingSessionId).toBe('s1')
+    await store.sendMessage('s2', 'hello')
+    expect(streamChatMock).not.toHaveBeenCalled()
+
+    resolveConfirmation?.()
+    await confirmation
+
+    expect(store.loadingSessionId).toBe('')
+  })
+
+  it('blocks tool confirmation while message sending is in flight', async () => {
+    let resolveMessage: (() => void) | undefined
+    vi.spyOn(chatApi, 'streamChat').mockImplementation(
+      () => new Promise<void>((resolve) => { resolveMessage = resolve })
+    )
+    const confirmToolCallMock = vi.spyOn(chatApi, 'confirmToolCall')
+    const store = useChatStore()
+    const event = toolEvent()
+    selectAll(store, event)
+
+    const message = store.sendMessage('s1', 'hello')
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(confirmToolCallMock).not.toHaveBeenCalled()
+    expect(event.confirming).toBeUndefined()
+
+    resolveMessage?.()
+    await message
+  })
+
+  it('releases the chat lock when tool confirmation fails', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockRejectedValue(new Error('confirmation failed'))
+    const store = useChatStore()
+    const event = toolEvent()
+    selectAll(store, event)
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(store.loadingSessionId).toBe('')
+    expect(event.confirming).toBe(false)
+  })
+
   it('does not submit a consumed confirmation again', async () => {
     const confirmToolCallMock = vi.spyOn(chatApi, 'confirmToolCall')
     const store = useChatStore()
