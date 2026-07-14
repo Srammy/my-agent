@@ -90,7 +90,7 @@ public class ChatService {
                   .toList();
               ChatToolConfirmationRequest request = new ChatToolConfirmationRequest(
                   currentUser.id(), sessionId, context.permissionMode(),
-                  claim.record().replyId(), trustedDecisions);
+                  trustedDecisions);
               return toolConfirmationService
                   .consume(confirmationId, claim.processingToken(), persisted)
                   .thenMany(

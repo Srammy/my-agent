@@ -43,6 +43,14 @@ class ChatServiceTest {
   @Mock private ToolConfirmationService toolConfirmationService;
 
   @Test
+  void confirmationGatewayRequestDoesNotExposeUnusedReplyId() {
+    assertThat(java.util.Arrays.stream(ChatToolConfirmationRequest.class.getRecordComponents())
+            .map(component -> component.getName())
+            .toList())
+        .doesNotContain("replyId");
+  }
+
+  @Test
   void streamBuildsCurrentUsersChatRequestBeforeCallingGateway() {
     when(sessionService.requireOwnedSession(USER, "s_123"))
         .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
@@ -94,7 +102,7 @@ class ChatServiceTest {
     inOrder.verify(toolConfirmationService).consume("confirm_123", claim.processingToken(), persisted(true));
     inOrder.verify(chatAgentGateway).confirm(requestCaptor.capture());
     assertThat(requestCaptor.getValue()).isEqualTo(new ChatToolConfirmationRequest(
-        USER.id(), "s_123", PermissionMode.ACCEPT_EDITS, "reply_123",
+        USER.id(), "s_123", PermissionMode.ACCEPT_EDITS,
         List.of(new ToolCallDecision(claim.record().toolCalls().getFirst(), true))));
   }
 

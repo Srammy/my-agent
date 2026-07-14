@@ -7,5 +7,4 @@ public record ChatToolConfirmationRequest(
     Long userId,
     String sessionId,
     PermissionMode permissionMode,
-    String replyId,
     List<ToolCallDecision> decisions) {}

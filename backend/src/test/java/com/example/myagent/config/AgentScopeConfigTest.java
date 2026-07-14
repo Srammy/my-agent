@@ -294,7 +294,6 @@ class AgentScopeConfigTest {
             7L,
             "s_123",
             PermissionMode.ACCEPT_EDITS,
-            "reply-1",
             java.util.List.of(new com.example.myagent.chat.ToolCallDecision(
                 new com.example.myagent.toolconfirmation.ToolCallSnapshot(
                     "call-1", "shell_command", Map.of("command", "Get-ChildItem")), true)));
@@ -357,7 +356,7 @@ class AgentScopeConfigTest {
               mock(WebApprovalGate.class));
 
       ChatToolConfirmationRequest request = new ChatToolConfirmationRequest(
-          7L, "s_123", PermissionMode.ACCEPT_EDITS, "reply-1", java.util.List.of(
+          7L, "s_123", PermissionMode.ACCEPT_EDITS, java.util.List.of(
               new com.example.myagent.chat.ToolCallDecision(
                   new com.example.myagent.toolconfirmation.ToolCallSnapshot(
                       "call-1", "read_file", Map.of("path", "a.md")), true),
@@ -484,7 +483,7 @@ class AgentScopeConfigTest {
   private ChatToolConfirmationRequest confirmationRequest(
       boolean confirmed, com.example.myagent.toolconfirmation.ToolCallSnapshot snapshot) {
     return new ChatToolConfirmationRequest(
-        7L, "s_123", PermissionMode.DEFAULT, "reply-1",
+        7L, "s_123", PermissionMode.DEFAULT,
         java.util.List.of(new com.example.myagent.chat.ToolCallDecision(snapshot, confirmed)));
   }
 

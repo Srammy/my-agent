@@ -300,7 +300,7 @@ class AgentScopeChatAgentGatewayTest {
         new ToolCallSnapshot("call-1", "shell_command", Map.of("command", "Get-ChildItem"));
     ChatToolConfirmationRequest request =
         new ChatToolConfirmationRequest(
-            7L, "s_123", PermissionMode.ACCEPT_EDITS, "reply-1",
+            7L, "s_123", PermissionMode.ACCEPT_EDITS,
             List.of(new ToolCallDecision(snapshot, true)));
     when(executor.confirm(any(ChatToolConfirmationRequest.class), any()))
         .thenReturn(Flux.just(new TextBlockDeltaEvent("reply-1", "block-1", "resumed")));
@@ -384,7 +384,6 @@ class AgentScopeChatAgentGatewayTest {
         7L,
         "s_123",
         PermissionMode.DEFAULT,
-        "reply-1",
         List.of(new ToolCallDecision(
             new ToolCallSnapshot("call-1", "shell_command", Map.of("command", "Get-ChildItem")),
             confirmed)));
