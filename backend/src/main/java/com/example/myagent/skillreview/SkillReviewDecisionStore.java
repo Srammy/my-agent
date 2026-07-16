@@ -69,11 +69,10 @@ public class SkillReviewDecisionStore {
   public Optional<SkillReviewDecision> find(String skillName, String userId) {
     RuntimeContext ctx = userContext(userId);
     String path = entryPath(skillName);
-    if (!filesystem.exists(ctx, path)) {
-      return Optional.empty();
-    }
     ReadResult result = filesystem.read(ctx, path, 0, READ_LIMIT);
-    if (!result.isSuccess()) {
+    if (!result.isSuccess()
+        || result.fileData() == null
+        || result.fileData().content() == null) {
       return Optional.empty();
     }
     try {

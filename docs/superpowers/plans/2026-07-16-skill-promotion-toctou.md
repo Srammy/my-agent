@@ -29,6 +29,9 @@
 - Create `backend/src/main/java/com/example/myagent/skillreview/SkillPromotionGuard.java` — final decision/hash authorization.
 - Create `backend/src/main/java/com/example/myagent/skillreview/SkillApprovalGuardedFilesystem.java` — `AbstractFilesystem` decorator.
 - Create `backend/src/test/java/com/example/myagent/skillreview/SkillApprovalGuardedFilesystemTest.java` — stale approval, decision, delegation, and isolation behavior.
+- Modify `backend/src/main/java/com/example/myagent/skillreview/SkillDraftFingerprint.java` — accept the full paths and virtual-directory semantics returned by `RemoteFilesystem`.
+- Modify `backend/src/main/java/com/example/myagent/skillreview/SkillReviewDecisionStore.java` — read the decision directly because `RemoteFilesystem.exists` has an exact bare-key false negative.
+- Modify `backend/src/test/java/com/example/myagent/skillreview/SkillDraftFingerprintTest.java` — real `RemoteFilesystem` path regression.
 - Modify `backend/src/main/java/com/example/myagent/config/UserScopedFilesystemFactory.java` — cache guarded fixed-user filesystems.
 - Modify `backend/src/main/java/com/example/myagent/config/AgentScopeConfig.java` — expose the shared lock bean and inject the guarded factory dependencies.
 - Modify `backend/src/main/java/com/example/myagent/skillreview/SkillReviewService.java` — lock fingerprint plus decision persistence.
@@ -121,6 +124,19 @@ feat: add distributed skill draft lock
 - Create `SkillPromotionGuard.java`
 - Create `SkillApprovalGuardedFilesystem.java`
 - Create `SkillApprovalGuardedFilesystemTest.java`
+- Modify `SkillDraftFingerprint.java`
+- Modify `SkillReviewDecisionStore.java`
+- Modify `SkillDraftFingerprintTest.java`
+
+### RemoteFilesystem path prerequisite
+
+AgentScope writes logical paths without a leading slash, while `RemoteFilesystem.ls` returns full paths with a leading slash and directory paths with a trailing slash. Its `exists` implementation can also report false for an exact bare-key file that `read` can retrieve. Before the final guard can operate on real AgentScope drafts:
+
+- fingerprint recursion must normalize leading/trailing separators and accept full `FileInfo.path` values;
+- a false exact `exists(SKILL.md)` result must not override a successful directory listing containing `SKILL.md`;
+- decision lookup must use the direct `read` result instead of requiring a preceding `exists` check.
+
+Keep this adaptation limited to fingerprint and decision reads. The separate filesystem-exception normalization issue remains Task 4 of the overall review and is not part of this branch.
 
 ### Final authorization
 

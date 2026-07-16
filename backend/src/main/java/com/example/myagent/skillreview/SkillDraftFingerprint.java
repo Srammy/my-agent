@@ -28,19 +28,21 @@ public final class SkillDraftFingerprint {
 
   public String computeDraftHash(RuntimeContext context, String skillName) {
     String root = DRAFTS_DIR + "/" + skillName;
-    if (!filesystem.exists(context, root)
-        || !filesystem.exists(context, root + "/SKILL.md")) {
+    if (!filesystem.exists(context, root)) {
       throw new SkillDraftFingerprintException(
           SkillDraftFingerprintException.Reason.NOT_FOUND,
           "Skill draft not found: " + skillName);
     }
+    boolean skillMarkdownExists = filesystem.exists(context, root + "/SKILL.md");
 
     List<String> paths = new ArrayList<>();
     collectFilePaths(context, root, root, paths);
     paths.sort(Comparator.naturalOrder());
     if (!paths.contains("SKILL.md")) {
       throw new SkillDraftFingerprintException(
-          SkillDraftFingerprintException.Reason.READ_FAILURE,
+          skillMarkdownExists
+              ? SkillDraftFingerprintException.Reason.READ_FAILURE
+              : SkillDraftFingerprintException.Reason.NOT_FOUND,
           "Skill draft changed while fingerprinting: " + skillName);
     }
 
@@ -64,14 +66,19 @@ public final class SkillDraftFingerprint {
 
   private void collectFilePaths(
       RuntimeContext context, String root, String directory, List<String> result) {
-    LsResult lsResult = filesystem.ls(context, directory);
+    String normalizedDirectory = stripTrailingSlash(
+        stripLeadingSlash(directory.replace('\\', '/')));
+    LsResult lsResult = filesystem.ls(context, "/" + normalizedDirectory);
+    if (lsResult == null) {
+      lsResult = filesystem.ls(context, normalizedDirectory);
+    }
     if (!lsResult.isSuccess() || lsResult.entries() == null) {
       throw new SkillDraftFingerprintException(
           SkillDraftFingerprintException.Reason.READ_FAILURE,
-          "Failed to list skill draft directory: " + directory);
+          "Failed to list skill draft directory: " + normalizedDirectory);
     }
     for (FileInfo entry : lsResult.entries()) {
-      String path = childPath(directory, entry.path());
+      String path = childPath(normalizedDirectory, entry.path());
       if (entry.isDirectory()) {
         collectFilePaths(context, root, path, result);
       } else {
@@ -81,10 +88,29 @@ public final class SkillDraftFingerprint {
   }
 
   private static String childPath(String directory, String entryPath) {
-    String normalized = entryPath.replace('\\', '/');
-    return normalized.startsWith(directory + "/")
-        ? normalized
-        : directory + "/" + normalized;
+    String normalizedDirectory = stripTrailingSlash(
+        stripLeadingSlash(directory.replace('\\', '/')));
+    String normalizedEntry = stripTrailingSlash(
+        stripLeadingSlash(entryPath.replace('\\', '/')));
+    return normalizedEntry.startsWith(normalizedDirectory + "/")
+        ? normalizedEntry
+        : normalizedDirectory + "/" + normalizedEntry;
+  }
+
+  private static String stripLeadingSlash(String path) {
+    String normalized = path;
+    while (normalized.startsWith("/")) {
+      normalized = normalized.substring(1);
+    }
+    return normalized;
+  }
+
+  private static String stripTrailingSlash(String path) {
+    String normalized = path;
+    while (!normalized.isEmpty() && normalized.endsWith("/")) {
+      normalized = normalized.substring(0, normalized.length() - 1);
+    }
+    return normalized;
   }
 
   private static void updateLengthPrefixed(MessageDigest digest, byte[] value) {
