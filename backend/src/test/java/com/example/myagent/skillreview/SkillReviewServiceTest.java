@@ -63,6 +63,31 @@ class SkillReviewServiceTest {
   }
 
   @Test
+  void listStillAcceptsABareDirectoryName() {
+    stubListedDraft("my-skill");
+    when(decisionStore.find("my-skill", "1")).thenReturn(Optional.empty());
+
+    assertThat(service.list("1")).extracting(SkillReviewDto::skillName)
+        .containsExactly("my-skill");
+  }
+
+  @Test
+  void listIgnoresPathsThatAreNotValidDirectDraftChildren() {
+    when(filesystem.exists(any(RuntimeContext.class), eq("skills/_drafts")))
+        .thenReturn(true);
+    when(filesystem.ls(any(RuntimeContext.class), eq("skills/_drafts")))
+        .thenReturn(
+            LsResult.success(
+                List.of(
+                    FileInfo.ofDir("/skills/other/foreign", "2026-07-08T09:00:00"),
+                    FileInfo.ofDir(
+                        "/skills/_drafts/nested/child", "2026-07-08T09:00:00"),
+                    FileInfo.ofDir("/skills/_drafts/..", "2026-07-08T09:00:00"))));
+
+    assertThat(service.list("1")).isEmpty();
+  }
+
+  @Test
   void listReadsUsageFromTheRequestedUserOnly() {
     stubListedDraft();
     when(decisionStore.find("my-skill", "1")).thenReturn(Optional.empty());
@@ -307,12 +332,16 @@ class SkillReviewServiceTest {
   }
 
   private void stubListedDraft() {
+    stubListedDraft("/skills/_drafts/my-skill");
+  }
+
+  private void stubListedDraft(String entryPath) {
     when(filesystem.exists(any(RuntimeContext.class), eq("skills/_drafts")))
         .thenReturn(true);
     when(filesystem.ls(any(RuntimeContext.class), eq("skills/_drafts")))
         .thenReturn(
             LsResult.success(
-                List.of(FileInfo.ofDir("my-skill", "2026-07-08T09:00:00"))));
+                List.of(FileInfo.ofDir(entryPath, "2026-07-08T09:00:00"))));
 
     String skillMd =
         "---\nname: \"my-skill\"\ndescription: \"My skill description\"\n---\n";
