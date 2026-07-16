@@ -38,6 +38,10 @@ usage 数据也不会落到当前用户空间。
 2. `UserScopedFilesystemFactory.create(userId)`：返回固定命名空间为 `[userId]` 的
    `RemoteFilesystem`。它忽略调用处是否携带上下文，只能访问构造时绑定的用户空间。
 
+工厂还按 `userId` 复用对应的 `RemoteFilesystem` 和 `SkillUsageStore`。这是因为
+`SkillUsageStore` 使用实例级锁保护 `.usage.json` 的“读取—修改—写回”；同一用户的并发会话必须
+共享该实例，避免在单个应用进程内丢失 usage 更新。不同用户使用不同实例和不同命名空间。
+
 两种视图使用同一个 `BaseStore`，所以看到的是同一份 Redis 数据，只是用户命名空间的解析方式不同。
 
 ### AgentScope 请求构建
@@ -47,15 +51,16 @@ usage 数据也不会落到当前用户空间。
 1. 根据认证请求中的 `userId` 创建固定用户文件系统。
 2. 通过 `HarnessAgent.Builder.abstractFilesystem(...)` 注入该实例，不再让 Builder 根据
    `RemoteFilesystemSpec` 创建依赖运行时上下文的文件系统。
-3. 使用同一实例创建该请求的 `SkillUsageStore`，并传给 promotion、visibility 和 curator 组件。
+3. 从工厂取得该用户共享的 `SkillUsageStore`，它与请求文件系统使用同一个固定用户视图，并传给
+   promotion、visibility 和 curator 组件。
 
 这样，AgentScope 内部的 `RuntimeContext.empty()` 会在固定用户文件系统中解析为当前用户，
 不会回退到全局空间，也不能切换到其他用户。
 
 ### Web 审批 usage 查询
 
-移除共享的 `SkillUsageStore` Bean。`SkillReviewService` 按当前认证用户通过
-`UserScopedFilesystemFactory` 创建 `SkillUsageStore`，确保审批列表和审批响应展示该用户自己的
+移除全局的 `SkillUsageStore` Bean。`SkillReviewService` 按当前认证用户通过
+`UserScopedFilesystemFactory` 取得用户级共享的 `SkillUsageStore`，确保审批列表和审批响应展示该用户自己的
 use/view/patch、来源会话及环境信息。
 
 审批决定与草稿指纹仍使用 `workspaceFilesystem`，并继续显式传入用户上下文。
@@ -72,6 +77,7 @@ use/view/patch、来源会话及环境信息。
 - 验证同一 Alice 用户的不同会话读取相同数据。
 - 验证 AgentScope Builder 注入固定用户文件系统，且 promotion 使用与其相同命名空间的
   `SkillUsageStore`。
+- 验证同一用户复用相同的文件系统和 `SkillUsageStore` 实例，不同用户不复用。
 - 验证 `SkillReviewService` 按用户读取 usage 数据，不再读取空/全局命名空间。
 - 运行后端完整测试套件。
 

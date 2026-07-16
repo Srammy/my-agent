@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.example.myagent.config.UserScopedFilesystemFactory;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
 import io.agentscope.harness.agent.filesystem.model.FileData;
@@ -33,7 +34,7 @@ class SkillReviewServiceTest {
 
   private AbstractFilesystem filesystem;
   private SkillReviewDecisionStore decisionStore;
-  private SkillUsageStore usageStore;
+  private UserScopedFilesystemFactory filesystemFactory;
   private SkillDraftFingerprint fingerprint;
   private SkillReviewService service;
 
@@ -41,9 +42,11 @@ class SkillReviewServiceTest {
   void setUp() {
     filesystem = mock(AbstractFilesystem.class);
     decisionStore = mock(SkillReviewDecisionStore.class);
-    usageStore = mock(SkillUsageStore.class);
     fingerprint = mock(SkillDraftFingerprint.class);
-    service = new SkillReviewService(filesystem, decisionStore, usageStore, fingerprint);
+    filesystemFactory =
+        new UserScopedFilesystemFactory(
+            new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore());
+    service = new SkillReviewService(filesystem, decisionStore, filesystemFactory, fingerprint);
   }
 
   @Test
@@ -57,6 +60,25 @@ class SkillReviewServiceTest {
     assertThat(result.get(0).skillName()).isEqualTo("my-skill");
     assertThat(result.get(0).description()).isEqualTo("My skill description");
     assertThat(result.get(0).status()).isEqualTo("PENDING");
+  }
+
+  @Test
+  void listReadsUsageFromTheRequestedUserOnly() {
+    stubListedDraft();
+    when(decisionStore.find("my-skill", "1")).thenReturn(Optional.empty());
+    when(decisionStore.find("my-skill", "2")).thenReturn(Optional.empty());
+    SkillUsageStore aliceUsage =
+        new SkillUsageStore(filesystemFactory.create("1"));
+    SkillUsageStore bobUsage =
+        new SkillUsageStore(filesystemFactory.create("2"));
+    aliceUsage.markAgentDraft("my-skill", "alice-session");
+    bobUsage.markAgentDraft("my-skill", "bob-session");
+    aliceUsage.bumpUse("my-skill");
+    bobUsage.bumpUse("my-skill");
+    bobUsage.bumpUse("my-skill");
+
+    assertThat(service.list("1").getFirst().useCount()).isEqualTo(1);
+    assertThat(service.list("2").getFirst().useCount()).isEqualTo(2);
   }
 
   @Test
@@ -147,8 +169,6 @@ class SkillReviewServiceTest {
         .thenReturn("hash-v1");
     when(decisionStore.approve("my-skill", "admin", List.of("prod"), "hash-v1", "1"))
         .thenReturn(decision);
-    when(usageStore.get("my-skill")).thenReturn(Optional.empty());
-
     SkillReviewDto result =
         service.approve("my-skill", new ApproveSkillReviewRequest("admin", List.of("prod")), "1");
 
@@ -167,8 +187,6 @@ class SkillReviewServiceTest {
         .thenReturn("hash-v1");
     when(decisionStore.reject("my-skill", "admin", "Too risky", "hash-v1", "1"))
         .thenReturn(decision);
-    when(usageStore.get("my-skill")).thenReturn(Optional.empty());
-
     SkillReviewDto result =
         service.reject("my-skill", new RejectSkillReviewRequest("admin", "Too risky"), "1");
 
@@ -313,6 +331,5 @@ class SkillReviewServiceTest {
                     "utf-8",
                     "2026-07-08T09:00:00",
                     "2026-07-08T09:00:00")));
-    when(usageStore.get("my-skill")).thenReturn(Optional.empty());
   }
 }

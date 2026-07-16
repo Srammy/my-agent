@@ -19,7 +19,6 @@ import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.IsolationScope;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
 import io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem;
-import io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec;
 import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
 import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
@@ -76,7 +75,7 @@ public class AgentScopeConfig {
       Model agentScopeModel,
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider,
-      SkillUsageStore skillUsageStore,
+      UserScopedFilesystemFactory filesystemFactory,
       WebApprovalGate webApprovalGate) {
     return new AgentScopeStreamExecutor() {
       @Override
@@ -88,7 +87,7 @@ public class AgentScopeConfig {
                     agentProperties,
                     redisTemplateProvider,
                     requestScope(request),
-                    skillUsageStore,
+                    filesystemFactory,
                     webApprovalGate),
             harnessAgent ->
                 harnessAgent
@@ -107,7 +106,7 @@ public class AgentScopeConfig {
                     agentProperties,
                     redisTemplateProvider,
                     requestScope(request),
-                    skillUsageStore,
+                    filesystemFactory,
                     webApprovalGate),
             harnessAgent ->
                 harnessAgent
@@ -119,17 +118,21 @@ public class AgentScopeConfig {
   }
 
   @Bean
-  AbstractFilesystem workspaceFilesystem(
+  BaseStore workspaceBaseStore(
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
-    return new RemoteFilesystem(
-        buildBaseStore(agentProperties, redisTemplateProvider),
-        IsolationScope.USER.toNamespaceFactory());
+    return buildBaseStore(agentProperties, redisTemplateProvider);
   }
 
   @Bean
-  SkillUsageStore skillUsageStore(AbstractFilesystem workspaceFilesystem) {
-    return new SkillUsageStore(workspaceFilesystem);
+  AbstractFilesystem workspaceFilesystem(BaseStore workspaceBaseStore) {
+    return new RemoteFilesystem(
+        workspaceBaseStore, IsolationScope.USER.toNamespaceFactory());
+  }
+
+  @Bean
+  UserScopedFilesystemFactory userScopedFilesystemFactory(BaseStore workspaceBaseStore) {
+    return new UserScopedFilesystemFactory(workspaceBaseStore);
   }
 
   AgentToolPolicy toolPolicy(AgentProperties agentProperties) {
@@ -195,14 +198,17 @@ public class AgentScopeConfig {
       AgentProperties agentProperties,
       ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider,
       AgentRequestScope requestScope,
-      SkillUsageStore skillUsageStore,
+      UserScopedFilesystemFactory filesystemFactory,
       WebApprovalGate webApprovalGate) {
     HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
+    String userId = requestScope.userId().toString();
+    AbstractFilesystem userFilesystem = filesystemFactory.create(userId);
     configureHarnessAgentBuilder(builder, toolPolicy(agentProperties), agentProperties);
     applyRequestScope(builder, requestScope);
     applyDistributedStore(builder, agentProperties, redisTemplateProvider);
-    applyFilesystem(builder, agentProperties, redisTemplateProvider);
-    applySkillLearning(builder, agentProperties, skillUsageStore, webApprovalGate);
+    applyFilesystem(builder, agentProperties, userFilesystem);
+    applySkillLearning(
+        builder, agentProperties, filesystemFactory.usageStore(userId), webApprovalGate);
     return builder.build();
   }
 
@@ -221,9 +227,9 @@ public class AgentScopeConfig {
   void applyFilesystem(
       HarnessAgent.Builder builder,
       AgentProperties agentProperties,
-      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
+      AbstractFilesystem userFilesystem) {
     builder.workspace(agentProperties.workspace().path());
-    builder.filesystem(new RemoteFilesystemSpec().isolationScope(IsolationScope.USER));
+    builder.abstractFilesystem(userFilesystem);
   }
 
   PermissionContextState permissionContext(ChatAgentRequest request) {
