@@ -16,7 +16,9 @@ import com.example.myagent.chat.ChatAgentGateway;
 import com.example.myagent.chat.StubChatAgentGateway;
 import com.example.myagent.agent.AgentScopeStreamExecutor;
 import com.example.myagent.permission.PermissionMode;
+import com.example.myagent.skillreview.BaseStoreSkillDraftLock;
 import com.example.myagent.skillreview.SkillDraftFingerprint;
+import com.example.myagent.skillreview.SkillPromotionGuard;
 import com.example.myagent.skillreview.SkillReviewDecisionStore;
 import com.example.myagent.skillreview.WebApprovalGate;
 import io.agentscope.harness.agent.skill.curator.SkillUsageStore;
@@ -341,7 +343,14 @@ class AgentScopeConfigTest {
     io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore workspaceStore =
         new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
     UserScopedFilesystemFactory filesystemFactory =
-        new UserScopedFilesystemFactory(workspaceStore);
+        new UserScopedFilesystemFactory(
+            workspaceStore,
+            new BaseStoreSkillDraftLock(workspaceStore),
+            new SkillPromotionGuard(
+                new SkillReviewDecisionStore(
+                    new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(
+                        workspaceStore,
+                        io.agentscope.harness.agent.IsolationScope.USER.toNamespaceFactory()))));
     org.springframework.beans.factory.support.DefaultListableBeanFactory beanFactory =
         new org.springframework.beans.factory.support.DefaultListableBeanFactory();
     beanFactory.registerSingleton("redisTemplate", redisTemplate);
@@ -561,6 +570,7 @@ class AgentScopeConfigTest {
     AgentScopeConfig.class,
     AgentScopeChatAgentGateway.class,
     AgentEventMapper.class,
+    SkillReviewDecisionStore.class,
     StubChatAgentGateway.class
   })
   static class AgentScopeGatewayContextConfiguration {

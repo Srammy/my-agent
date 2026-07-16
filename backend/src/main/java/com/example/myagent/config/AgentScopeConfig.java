@@ -3,6 +3,10 @@ package com.example.myagent.config;
 import com.example.myagent.agent.AgentScopeStreamExecutor;
 import com.example.myagent.chat.ChatAgentRequest;
 import com.example.myagent.chat.ChatToolConfirmationRequest;
+import com.example.myagent.skillreview.BaseStoreSkillDraftLock;
+import com.example.myagent.skillreview.SkillDraftLock;
+import com.example.myagent.skillreview.SkillPromotionGuard;
+import com.example.myagent.skillreview.SkillReviewDecisionStore;
 import com.example.myagent.skillreview.WebApprovalGate;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.ConfirmResult;
@@ -131,8 +135,19 @@ public class AgentScopeConfig {
   }
 
   @Bean
-  UserScopedFilesystemFactory userScopedFilesystemFactory(BaseStore workspaceBaseStore) {
-    return new UserScopedFilesystemFactory(workspaceBaseStore);
+  SkillDraftLock skillDraftLock(BaseStore workspaceBaseStore) {
+    return new BaseStoreSkillDraftLock(workspaceBaseStore);
+  }
+
+  @Bean
+  UserScopedFilesystemFactory userScopedFilesystemFactory(
+      BaseStore workspaceBaseStore,
+      SkillDraftLock skillDraftLock,
+      SkillReviewDecisionStore decisionStore) {
+    return new UserScopedFilesystemFactory(
+        workspaceBaseStore,
+        skillDraftLock,
+        new SkillPromotionGuard(decisionStore));
   }
 
   AgentToolPolicy toolPolicy(AgentProperties agentProperties) {

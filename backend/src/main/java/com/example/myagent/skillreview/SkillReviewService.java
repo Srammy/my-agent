@@ -26,16 +26,19 @@ public class SkillReviewService {
   private final SkillReviewDecisionStore decisionStore;
   private final UserScopedFilesystemFactory filesystemFactory;
   private final SkillDraftFingerprint fingerprint;
+  private final SkillDraftLock draftLock;
 
   public SkillReviewService(
       AbstractFilesystem filesystem,
       SkillReviewDecisionStore decisionStore,
       UserScopedFilesystemFactory filesystemFactory,
-      SkillDraftFingerprint fingerprint) {
+      SkillDraftFingerprint fingerprint,
+      SkillDraftLock draftLock) {
     this.filesystem = filesystem;
     this.decisionStore = decisionStore;
     this.filesystemFactory = filesystemFactory;
     this.fingerprint = fingerprint;
+    this.draftLock = draftLock;
   }
 
   public List<SkillReviewDto> list(String userId) {
@@ -60,22 +63,27 @@ public class SkillReviewService {
 
   public SkillReviewDto approve(String skillName, ApproveSkillReviewRequest request, String userId) {
     validateSkillName(skillName);
-    String draftHash = requireDraftHash(userContext(userId), skillName);
     List<String> environments =
         request.environments() != null ? request.environments() : List.of();
     String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
-    SkillReviewDecision decision =
-        decisionStore.approve(skillName, reviewerId, environments, draftHash, userId);
+    SkillReviewDecision decision;
+    try (SkillDraftLock.Handle ignored = draftLock.acquire(userId)) {
+      String draftHash = requireDraftHash(userContext(userId), skillName);
+      decision =
+          decisionStore.approve(skillName, reviewerId, environments, draftHash, userId);
+    }
     return toDto(skillName, decision, usageStore(userId));
   }
 
   public SkillReviewDto reject(String skillName, RejectSkillReviewRequest request, String userId) {
     validateSkillName(skillName);
-    String draftHash = requireDraftHash(userContext(userId), skillName);
     String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
     String reason = request.reason() != null ? request.reason() : "";
-    SkillReviewDecision decision =
-        decisionStore.reject(skillName, reviewerId, reason, draftHash, userId);
+    SkillReviewDecision decision;
+    try (SkillDraftLock.Handle ignored = draftLock.acquire(userId)) {
+      String draftHash = requireDraftHash(userContext(userId), skillName);
+      decision = decisionStore.reject(skillName, reviewerId, reason, draftHash, userId);
+    }
     return toDto(skillName, decision, usageStore(userId));
   }
 
