@@ -23,14 +23,17 @@ public class SkillReviewService {
   private final AbstractFilesystem filesystem;
   private final SkillReviewDecisionStore decisionStore;
   private final SkillUsageStore usageStore;
+  private final SkillDraftFingerprint fingerprint;
 
   public SkillReviewService(
       AbstractFilesystem filesystem,
       SkillReviewDecisionStore decisionStore,
-      SkillUsageStore usageStore) {
+      SkillUsageStore usageStore,
+      SkillDraftFingerprint fingerprint) {
     this.filesystem = filesystem;
     this.decisionStore = decisionStore;
     this.usageStore = usageStore;
+    this.fingerprint = fingerprint;
   }
 
   public List<SkillReviewDto> list(String userId) {
@@ -52,19 +55,35 @@ public class SkillReviewService {
 
   public SkillReviewDto approve(String skillName, ApproveSkillReviewRequest request, String userId) {
     validateSkillName(skillName);
+    String draftHash = requireDraftHash(userContext(userId), skillName);
     List<String> environments =
         request.environments() != null ? request.environments() : List.of();
     String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
-    SkillReviewDecision decision = decisionStore.approve(skillName, reviewerId, environments, userId);
+    SkillReviewDecision decision =
+        decisionStore.approve(skillName, reviewerId, environments, draftHash, userId);
     return toDto(skillName, decision, userId);
   }
 
   public SkillReviewDto reject(String skillName, RejectSkillReviewRequest request, String userId) {
     validateSkillName(skillName);
+    String draftHash = requireDraftHash(userContext(userId), skillName);
     String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
     String reason = request.reason() != null ? request.reason() : "";
-    SkillReviewDecision decision = decisionStore.reject(skillName, reviewerId, reason, userId);
+    SkillReviewDecision decision =
+        decisionStore.reject(skillName, reviewerId, reason, draftHash, userId);
     return toDto(skillName, decision, userId);
+  }
+
+  private String requireDraftHash(RuntimeContext ctx, String skillName) {
+    try {
+      return fingerprint.computeDraftHash(ctx, skillName);
+    } catch (SkillDraftFingerprintException exception) {
+      HttpStatus status =
+          exception.reason() == SkillDraftFingerprintException.Reason.NOT_FOUND
+              ? HttpStatus.NOT_FOUND
+              : HttpStatus.INTERNAL_SERVER_ERROR;
+      throw new ResponseStatusException(status, exception.getMessage(), exception);
+    }
   }
 
   private SkillReviewDto buildDto(RuntimeContext ctx, String skillName, String userId) {

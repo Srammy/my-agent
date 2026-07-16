@@ -43,7 +43,8 @@ class WebApprovalGateTest {
     SkillCandidate candidate = buildCandidate("my-skill");
     Instant now = Instant.now();
     SkillReviewDecision storedDecision =
-        new SkillReviewDecision("my-skill", "APPROVED", "reviewer1", null, List.of("prod"), now);
+        new SkillReviewDecision(
+            "my-skill", "APPROVED", "reviewer1", null, List.of("prod"), now, "hash-v1");
     when(decisionStore.find("my-skill", "test-user")).thenReturn(Optional.of(storedDecision));
 
     SkillPromotionGate.PromotionDecision decision =
@@ -62,7 +63,8 @@ class WebApprovalGateTest {
     SkillCandidate candidate = buildCandidate("my-skill");
     Instant now = Instant.now();
     SkillReviewDecision storedDecision =
-        new SkillReviewDecision("my-skill", "REJECTED", "reviewer1", "Too risky", List.of(), now);
+        new SkillReviewDecision(
+            "my-skill", "REJECTED", "reviewer1", "Too risky", List.of(), now, "hash-v1");
     when(decisionStore.find("my-skill", "test-user")).thenReturn(Optional.of(storedDecision));
 
     SkillPromotionGate.PromotionDecision decision =

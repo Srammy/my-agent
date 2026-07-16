@@ -29,17 +29,39 @@ public class SkillReviewDecisionStore {
   }
 
   public SkillReviewDecision approve(
-      String skillName, String reviewerId, List<String> environments, String userId) {
+      String skillName,
+      String reviewerId,
+      List<String> environments,
+      String draftHash,
+      String userId) {
     SkillReviewDecision decision =
         new SkillReviewDecision(
-            skillName, "APPROVED", reviewerId, null, environments, Instant.now());
+            skillName,
+            "APPROVED",
+            reviewerId,
+            null,
+            environments,
+            Instant.now(),
+            draftHash);
     persist(decision, userId);
     return decision;
   }
 
-  public SkillReviewDecision reject(String skillName, String reviewerId, String reason, String userId) {
+  public SkillReviewDecision reject(
+      String skillName,
+      String reviewerId,
+      String reason,
+      String draftHash,
+      String userId) {
     SkillReviewDecision decision =
-        new SkillReviewDecision(skillName, "REJECTED", reviewerId, reason, List.of(), Instant.now());
+        new SkillReviewDecision(
+            skillName,
+            "REJECTED",
+            reviewerId,
+            reason,
+            List.of(),
+            Instant.now(),
+            draftHash);
     persist(decision, userId);
     return decision;
   }
