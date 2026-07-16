@@ -20,7 +20,7 @@
 
 ## File Structure
 
-- Create `backend/src/main/java/com/example/myagent/config/UserScopedFilesystemFactory.java`: construct fixed-user `RemoteFilesystem` views over the shared `BaseStore`.
+- Create `backend/src/main/java/com/example/myagent/config/UserScopedFilesystemFactory.java`: construct and reuse fixed-user `RemoteFilesystem` and `SkillUsageStore` views over the shared `BaseStore`.
 - Create `backend/src/test/java/com/example/myagent/config/UserScopedFilesystemFactoryTest.java`: prove empty-context operations stay inside the bound user namespace.
 - Modify `backend/src/main/java/com/example/myagent/config/AgentScopeConfig.java`: expose the shared `BaseStore`, inject the bound filesystem into each HarnessAgent, and construct its `SkillUsageStore` from the same view.
 - Modify `backend/src/test/java/com/example/myagent/config/AgentScopeConfigTest.java`: verify the builder receives a filesystem bound to the request user.
@@ -108,6 +108,15 @@ class UserScopedFilesystemFactoryTest {
         .hasMessageContaining("userId");
   }
 
+  @Test
+  void reusesFilesystemAndUsageStoreWithinTheSameUser() {
+    UserScopedFilesystemFactory factory = new UserScopedFilesystemFactory(new InMemoryStore());
+
+    assertThat(factory.create("101")).isSameAs(factory.create("101"));
+    assertThat(factory.usageStore("101")).isSameAs(factory.usageStore("101"));
+    assertThat(factory.usageStore("101")).isNotSameAs(factory.usageStore("102"));
+  }
+
   private static RuntimeContext context(String userId, String sessionId) {
     return RuntimeContext.builder().userId(userId).sessionId(sessionId).build();
   }
@@ -134,21 +143,36 @@ package com.example.myagent.config;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
 import io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem;
 import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
+import io.agentscope.harness.agent.skill.curator.SkillUsageStore;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 public final class UserScopedFilesystemFactory {
 
   private final BaseStore store;
+  private final ConcurrentMap<String, AbstractFilesystem> filesystems = new ConcurrentHashMap<>();
+  private final ConcurrentMap<String, SkillUsageStore> usageStores = new ConcurrentHashMap<>();
 
   public UserScopedFilesystemFactory(BaseStore store) {
     this.store = store;
   }
 
   public AbstractFilesystem create(String userId) {
+    validateUserId(userId);
+    return filesystems.computeIfAbsent(
+        userId, id -> new RemoteFilesystem(store, List.of(id)));
+  }
+
+  public SkillUsageStore usageStore(String userId) {
+    validateUserId(userId);
+    return usageStores.computeIfAbsent(userId, id -> new SkillUsageStore(create(id)));
+  }
+
+  private static void validateUserId(String userId) {
     if (userId == null || userId.isBlank()) {
       throw new IllegalArgumentException("userId is required");
     }
-    return new RemoteFilesystem(store, List.of(userId));
   }
 }
 ```
@@ -161,7 +185,7 @@ Run:
 mvn -q -f backend/pom.xml -Dtest=UserScopedFilesystemFactoryTest test
 ```
 
-Expected: 2 tests pass.
+Expected: 3 tests pass, including same-user instance reuse and different-user separation.
 
 - [ ] **Step 6: Commit the factory**
 
@@ -325,14 +349,14 @@ Change `buildHarnessAgent` to create and reuse the request view:
       UserScopedFilesystemFactory filesystemFactory,
       WebApprovalGate webApprovalGate) {
     HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
-    AbstractFilesystem userFilesystem =
-        filesystemFactory.create(requestScope.userId().toString());
+    String userId = requestScope.userId().toString();
+    AbstractFilesystem userFilesystem = filesystemFactory.create(userId);
     configureHarnessAgentBuilder(builder, toolPolicy(agentProperties), agentProperties);
     applyRequestScope(builder, requestScope);
     applyDistributedStore(builder, agentProperties, redisTemplateProvider);
     applyFilesystem(builder, agentProperties, userFilesystem);
     applySkillLearning(
-        builder, agentProperties, new SkillUsageStore(userFilesystem), webApprovalGate);
+        builder, agentProperties, filesystemFactory.usageStore(userId), webApprovalGate);
     return builder.build();
   }
 ```
@@ -464,7 +488,7 @@ Import `com.example.myagent.config.UserScopedFilesystemFactory` and add:
 
 ```java
   private SkillUsageStore usageStore(String userId) {
-    return new SkillUsageStore(filesystemFactory.create(userId));
+    return filesystemFactory.usageStore(userId);
   }
 ```
 
@@ -575,6 +599,7 @@ Confirm from the diff and tests that:
 
 - no empty or null `userId` can create a fixed filesystem;
 - HarnessAgent and its `SkillUsageStore` share the same fixed-user filesystem instance;
+- the same user reuses one `SkillUsageStore` instance inside the process so concurrent sessions retain its lock;
 - Web/API decision and fingerprint code still use explicit runtime contexts;
 - no `sessionId` is included in the fixed namespace;
 - no TOCTOU logic was added in this branch;

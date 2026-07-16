@@ -163,7 +163,7 @@ public class SkillReviewService {
   }
 
   private SkillUsageStore usageStore(String userId) {
-    return new SkillUsageStore(filesystemFactory.create(userId));
+    return filesystemFactory.usageStore(userId);
   }
 
   private static void validateSkillName(String skillName) {

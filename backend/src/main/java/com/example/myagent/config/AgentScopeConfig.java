@@ -201,14 +201,14 @@ public class AgentScopeConfig {
       UserScopedFilesystemFactory filesystemFactory,
       WebApprovalGate webApprovalGate) {
     HarnessAgent.Builder builder = HarnessAgent.builder().name("myagent").model(agentScopeModel);
-    AbstractFilesystem userFilesystem =
-        filesystemFactory.create(requestScope.userId().toString());
+    String userId = requestScope.userId().toString();
+    AbstractFilesystem userFilesystem = filesystemFactory.create(userId);
     configureHarnessAgentBuilder(builder, toolPolicy(agentProperties), agentProperties);
     applyRequestScope(builder, requestScope);
     applyDistributedStore(builder, agentProperties, redisTemplateProvider);
     applyFilesystem(builder, agentProperties, userFilesystem);
     applySkillLearning(
-        builder, agentProperties, new SkillUsageStore(userFilesystem), webApprovalGate);
+        builder, agentProperties, filesystemFactory.usageStore(userId), webApprovalGate);
     return builder.build();
   }
 

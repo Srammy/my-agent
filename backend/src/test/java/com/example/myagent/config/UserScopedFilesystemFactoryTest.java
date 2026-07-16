@@ -52,6 +52,15 @@ class UserScopedFilesystemFactoryTest {
         .hasMessageContaining("userId");
   }
 
+  @Test
+  void reusesFilesystemAndUsageStoreWithinTheSameUser() {
+    UserScopedFilesystemFactory factory = new UserScopedFilesystemFactory(new InMemoryStore());
+
+    assertThat(factory.create("101")).isSameAs(factory.create("101"));
+    assertThat(factory.usageStore("101")).isSameAs(factory.usageStore("101"));
+    assertThat(factory.usageStore("101")).isNotSameAs(factory.usageStore("102"));
+  }
+
   private static RuntimeContext context(String userId, String sessionId) {
     return RuntimeContext.builder().userId(userId).sessionId(sessionId).build();
   }
