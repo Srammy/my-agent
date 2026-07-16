@@ -8,11 +8,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.harness.agent.IsolationScope;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
 import io.agentscope.harness.agent.filesystem.model.FileData;
 import io.agentscope.harness.agent.filesystem.model.FileInfo;
 import io.agentscope.harness.agent.filesystem.model.LsResult;
 import io.agentscope.harness.agent.filesystem.model.ReadResult;
+import io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem;
+import io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore;
+import java.nio.charset.StandardCharsets;
+import java.util.AbstractMap;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -96,6 +101,8 @@ class SkillDraftFingerprintTest {
   void missingSkillMarkdownIsReportedAsNotFound() {
     when(filesystem.exists(alice, "skills/_drafts/my-skill")).thenReturn(true);
     when(filesystem.exists(alice, "skills/_drafts/my-skill/SKILL.md")).thenReturn(false);
+    when(filesystem.ls(alice, "skills/_drafts/my-skill"))
+        .thenReturn(LsResult.success(List.of()));
 
     assertThatThrownBy(() -> fingerprint.computeDraftHash(alice, "my-skill"))
         .isInstanceOf(SkillDraftFingerprintException.class)
@@ -133,6 +140,27 @@ class SkillDraftFingerprintTest {
             error ->
                 assertThat(((SkillDraftFingerprintException) error).reason())
                     .isEqualTo(SkillDraftFingerprintException.Reason.READ_FAILURE));
+  }
+
+  @Test
+  void readsFullPathsReturnedByRemoteFilesystem() {
+    InMemoryStore store = new InMemoryStore();
+    AbstractFilesystem fixedUserFilesystem = new RemoteFilesystem(store, List.of("1"));
+    AbstractFilesystem userContextFilesystem =
+        new RemoteFilesystem(store, IsolationScope.USER.toNamespaceFactory());
+    String skillMd = "---\nname: my-skill\ndescription: test\n---\n";
+    fixedUserFilesystem.uploadFiles(
+        RuntimeContext.empty(),
+        List.of(
+            new AbstractMap.SimpleImmutableEntry<>(
+                "skills/_drafts/my-skill/SKILL.md",
+                skillMd.getBytes(StandardCharsets.UTF_8)),
+            new AbstractMap.SimpleImmutableEntry<>(
+                "skills/_drafts/my-skill/scripts/run.sh",
+                "echo one".getBytes(StandardCharsets.UTF_8))));
+
+    assertThat(new SkillDraftFingerprint(userContextFilesystem).computeDraftHash(alice, "my-skill"))
+        .isNotBlank();
   }
 
   private void stubDraft(RuntimeContext ctx, String skillMd, String script) {

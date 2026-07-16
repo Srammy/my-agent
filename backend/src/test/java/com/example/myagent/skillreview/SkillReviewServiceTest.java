@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -36,6 +37,8 @@ class SkillReviewServiceTest {
   private SkillReviewDecisionStore decisionStore;
   private UserScopedFilesystemFactory filesystemFactory;
   private SkillDraftFingerprint fingerprint;
+  private SkillDraftLock draftLock;
+  private SkillDraftLock.Handle lockHandle;
   private SkillReviewService service;
 
   @BeforeEach
@@ -43,10 +46,18 @@ class SkillReviewServiceTest {
     filesystem = mock(AbstractFilesystem.class);
     decisionStore = mock(SkillReviewDecisionStore.class);
     fingerprint = mock(SkillDraftFingerprint.class);
+    draftLock = mock(SkillDraftLock.class);
+    lockHandle = mock(SkillDraftLock.Handle.class);
+    when(draftLock.acquire(anyString())).thenReturn(lockHandle);
+    when(lockHandle.renew()).thenReturn(true);
     filesystemFactory =
         new UserScopedFilesystemFactory(
-            new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore());
-    service = new SkillReviewService(filesystem, decisionStore, filesystemFactory, fingerprint);
+            new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore(),
+            draftLock,
+            mock(SkillPromotionGuard.class));
+    service =
+        new SkillReviewService(
+            filesystem, decisionStore, filesystemFactory, fingerprint, draftLock);
   }
 
   @Test
@@ -308,6 +319,33 @@ class SkillReviewServiceTest {
     assertThat(context.getValue().getSessionId()).isEqualTo("skill-review");
     verify(decisionStore)
         .approve("my-skill", "admin", List.of("prod"), "hash-v1", "1");
+    org.mockito.InOrder order = inOrder(draftLock, fingerprint, decisionStore, lockHandle);
+    order.verify(draftLock).acquire("1");
+    order.verify(fingerprint).computeDraftHash(any(RuntimeContext.class), eq("my-skill"));
+    order.verify(lockHandle).renew();
+    order.verify(decisionStore)
+        .approve("my-skill", "admin", List.of("prod"), "hash-v1", "1");
+    order.verify(lockHandle).close();
+  }
+
+  @Test
+  void approveFailsClosedWhenTheDraftLockCannotBeRenewed() {
+    when(fingerprint.computeDraftHash(any(RuntimeContext.class), eq("my-skill")))
+        .thenReturn("hash-v1");
+    when(lockHandle.renew()).thenReturn(false);
+
+    assertThatThrownBy(
+            () ->
+                service.approve(
+                    "my-skill",
+                    new ApproveSkillReviewRequest("admin", List.of("prod")),
+                    "1"))
+        .isInstanceOf(SkillDraftLockException.class)
+        .hasMessageContaining("expired");
+
+    verify(decisionStore, never())
+        .approve(anyString(), anyString(), any(), anyString(), anyString());
+    verify(lockHandle).close();
   }
 
   @Test
@@ -329,6 +367,12 @@ class SkillReviewServiceTest {
     service.reject("my-skill", new RejectSkillReviewRequest("admin", "risk"), "1");
 
     verify(decisionStore).reject("my-skill", "admin", "risk", "hash-v2", "1");
+    org.mockito.InOrder order = inOrder(draftLock, fingerprint, decisionStore, lockHandle);
+    order.verify(draftLock).acquire("1");
+    order.verify(fingerprint).computeDraftHash(any(RuntimeContext.class), eq("my-skill"));
+    order.verify(lockHandle).renew();
+    order.verify(decisionStore).reject("my-skill", "admin", "risk", "hash-v2", "1");
+    order.verify(lockHandle).close();
   }
 
   private void stubListedDraft() {
