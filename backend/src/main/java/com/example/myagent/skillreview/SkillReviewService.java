@@ -1,6 +1,7 @@
 package com.example.myagent.skillreview;
 
 import com.example.myagent.config.UserScopedFilesystemFactory;
+import com.example.myagent.skill.SkillPathValidator;
 import com.example.myagent.skill.SkillValidator;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
@@ -50,6 +51,8 @@ public class SkillReviewService {
     return result.entries().stream()
         .filter(FileInfo::isDirectory)
         .map(FileInfo::path)
+        .map(SkillReviewService::draftSkillName)
+        .flatMap(Optional::stream)
         .sorted()
         .map(skillName -> buildDto(ctx, skillName, userId, usageStore))
         .toList();
@@ -164,6 +167,38 @@ public class SkillReviewService {
 
   private SkillUsageStore usageStore(String userId) {
     return filesystemFactory.usageStore(userId);
+  }
+
+  private static Optional<String> draftSkillName(String path) {
+    if (path == null || path.isBlank()) {
+      return Optional.empty();
+    }
+    String normalized = path.trim().replace('\\', '/');
+    while (normalized.startsWith("/")) {
+      normalized = normalized.substring(1);
+    }
+    while (normalized.endsWith("/") && !normalized.isEmpty()) {
+      normalized = normalized.substring(0, normalized.length() - 1);
+    }
+
+    String prefix = DRAFTS_DIR + "/";
+    String candidate;
+    if (normalized.startsWith(prefix)) {
+      candidate = normalized.substring(prefix.length());
+      if (candidate.contains("/")) {
+        return Optional.empty();
+      }
+    } else if (!normalized.contains("/")) {
+      candidate = normalized;
+    } else {
+      return Optional.empty();
+    }
+
+    try {
+      return Optional.of(SkillPathValidator.validateSkillName(candidate));
+    } catch (IllegalArgumentException exception) {
+      return Optional.empty();
+    }
   }
 
   private static void validateSkillName(String skillName) {
