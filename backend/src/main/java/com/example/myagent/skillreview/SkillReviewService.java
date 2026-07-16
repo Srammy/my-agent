@@ -1,5 +1,6 @@
 package com.example.myagent.skillreview;
 
+import com.example.myagent.config.UserScopedFilesystemFactory;
 import com.example.myagent.skill.SkillValidator;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
@@ -22,22 +23,23 @@ public class SkillReviewService {
 
   private final AbstractFilesystem filesystem;
   private final SkillReviewDecisionStore decisionStore;
-  private final SkillUsageStore usageStore;
+  private final UserScopedFilesystemFactory filesystemFactory;
   private final SkillDraftFingerprint fingerprint;
 
   public SkillReviewService(
       AbstractFilesystem filesystem,
       SkillReviewDecisionStore decisionStore,
-      SkillUsageStore usageStore,
+      UserScopedFilesystemFactory filesystemFactory,
       SkillDraftFingerprint fingerprint) {
     this.filesystem = filesystem;
     this.decisionStore = decisionStore;
-    this.usageStore = usageStore;
+    this.filesystemFactory = filesystemFactory;
     this.fingerprint = fingerprint;
   }
 
   public List<SkillReviewDto> list(String userId) {
     RuntimeContext ctx = userContext(userId);
+    SkillUsageStore usageStore = usageStore(userId);
     if (!filesystem.exists(ctx, DRAFTS_DIR)) {
       return List.of();
     }
@@ -49,7 +51,7 @@ public class SkillReviewService {
         .filter(FileInfo::isDirectory)
         .map(FileInfo::path)
         .sorted()
-        .map(skillName -> buildDto(ctx, skillName, userId))
+        .map(skillName -> buildDto(ctx, skillName, userId, usageStore))
         .toList();
   }
 
@@ -61,7 +63,7 @@ public class SkillReviewService {
     String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
     SkillReviewDecision decision =
         decisionStore.approve(skillName, reviewerId, environments, draftHash, userId);
-    return toDto(skillName, decision, userId);
+    return toDto(skillName, decision, usageStore(userId));
   }
 
   public SkillReviewDto reject(String skillName, RejectSkillReviewRequest request, String userId) {
@@ -71,7 +73,7 @@ public class SkillReviewService {
     String reason = request.reason() != null ? request.reason() : "";
     SkillReviewDecision decision =
         decisionStore.reject(skillName, reviewerId, reason, draftHash, userId);
-    return toDto(skillName, decision, userId);
+    return toDto(skillName, decision, usageStore(userId));
   }
 
   private String requireDraftHash(RuntimeContext ctx, String skillName) {
@@ -86,7 +88,11 @@ public class SkillReviewService {
     }
   }
 
-  private SkillReviewDto buildDto(RuntimeContext ctx, String skillName, String userId) {
+  private SkillReviewDto buildDto(
+      RuntimeContext ctx,
+      String skillName,
+      String userId,
+      SkillUsageStore usageStore) {
     String skillMdPath = DRAFTS_DIR + "/" + skillName + "/SKILL.md";
     String description = "";
     if (filesystem.exists(ctx, skillMdPath)) {
@@ -138,7 +144,10 @@ public class SkillReviewService {
     }
   }
 
-  private SkillReviewDto toDto(String skillName, SkillReviewDecision decision, String userId) {
+  private SkillReviewDto toDto(
+      String skillName,
+      SkillReviewDecision decision,
+      SkillUsageStore usageStore) {
     Optional<SkillUsageRecord> maybeUsage = usageStore.get(skillName);
     long useCount = maybeUsage.map(SkillUsageRecord::useCount).orElse(0L);
     long viewCount = maybeUsage.map(SkillUsageRecord::viewCount).orElse(0L);
@@ -151,6 +160,10 @@ public class SkillReviewService {
     return new SkillReviewDto(
         skillName, null, decision.status(), createdBy, sourceSessionId, environments,
         useCount, viewCount, patchCount);
+  }
+
+  private SkillUsageStore usageStore(String userId) {
+    return new SkillUsageStore(filesystemFactory.create(userId));
   }
 
   private static void validateSkillName(String skillName) {
