@@ -338,6 +338,10 @@ class AgentScopeConfigTest {
     HarnessAgent.Builder builder = mock(HarnessAgent.Builder.class, Answers.RETURNS_SELF);
     HarnessAgent agent = mock(HarnessAgent.class);
     ReactiveStringRedisTemplate redisTemplate = mock(ReactiveStringRedisTemplate.class);
+    io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore workspaceStore =
+        new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
+    UserScopedFilesystemFactory filesystemFactory =
+        new UserScopedFilesystemFactory(workspaceStore);
     org.springframework.beans.factory.support.DefaultListableBeanFactory beanFactory =
         new org.springframework.beans.factory.support.DefaultListableBeanFactory();
     beanFactory.registerSingleton("redisTemplate", redisTemplate);
@@ -353,7 +357,7 @@ class AgentScopeConfigTest {
               mock(Model.class),
               properties(false, false, false, false),
               beanFactory.getBeanProvider(ReactiveStringRedisTemplate.class),
-              mock(SkillUsageStore.class),
+              filesystemFactory,
               mock(WebApprovalGate.class));
 
       ChatToolConfirmationRequest request = new ChatToolConfirmationRequest(
@@ -390,6 +394,36 @@ class AgentScopeConfigTest {
     verify(builder).build();
     verify(agent).streamEvents(any(UserMessage.class), any(RuntimeContext.class));
     verify(agent).close();
+    ArgumentCaptor<io.agentscope.harness.agent.filesystem.AbstractFilesystem> filesystemCaptor =
+        ArgumentCaptor.forClass(io.agentscope.harness.agent.filesystem.AbstractFilesystem.class);
+    verify(builder).abstractFilesystem(filesystemCaptor.capture());
+    assertThat(
+            filesystemCaptor
+                .getValue()
+                .write(RuntimeContext.empty(), "skills/request-scope.txt", "bound")
+                .isSuccess())
+        .isTrue();
+
+    io.agentscope.harness.agent.filesystem.AbstractFilesystem sharedFilesystem =
+        new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(
+            workspaceStore,
+            io.agentscope.harness.agent.IsolationScope.USER.toNamespaceFactory());
+    RuntimeContext anotherUserSevenSession =
+        RuntimeContext.builder().userId("7").sessionId("another-session").build();
+    assertThat(
+            sharedFilesystem
+                .read(anotherUserSevenSession, "skills/request-scope.txt", 0, 100)
+                .isSuccess())
+        .isTrue();
+    assertThat(
+            sharedFilesystem
+                .read(
+                    RuntimeContext.builder().userId("8").sessionId("s_123").build(),
+                    "skills/request-scope.txt",
+                    0,
+                    100)
+                .isSuccess())
+        .isFalse();
   }
 
   @Test
