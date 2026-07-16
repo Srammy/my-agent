@@ -16,6 +16,7 @@ import com.example.myagent.chat.ChatAgentGateway;
 import com.example.myagent.chat.StubChatAgentGateway;
 import com.example.myagent.agent.AgentScopeStreamExecutor;
 import com.example.myagent.permission.PermissionMode;
+import com.example.myagent.skillreview.SkillDraftFingerprint;
 import com.example.myagent.skillreview.SkillReviewDecisionStore;
 import com.example.myagent.skillreview.WebApprovalGate;
 import io.agentscope.harness.agent.skill.curator.SkillUsageStore;
@@ -436,7 +437,8 @@ class AgentScopeConfigTest {
         new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(store);
     SkillUsageStore usageStore = new SkillUsageStore(fs);
     SkillReviewDecisionStore decisionStore = new SkillReviewDecisionStore(fs);
-    WebApprovalGate webApprovalGate = new WebApprovalGate(decisionStore);
+    WebApprovalGate webApprovalGate =
+        new WebApprovalGate(decisionStore, mock(SkillDraftFingerprint.class));
 
     assertThatNoException().isThrownBy(() ->
         config.applySkillLearning(builder, props, usageStore, webApprovalGate));

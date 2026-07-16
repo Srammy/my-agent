@@ -31,9 +31,12 @@ public class WebApprovalGate implements SkillPromotionGate {
   private static final Duration RETRY_AFTER = Duration.ofMinutes(5);
 
   private final SkillReviewDecisionStore decisionStore;
+  private final SkillDraftFingerprint fingerprint;
 
-  public WebApprovalGate(SkillReviewDecisionStore decisionStore) {
+  public WebApprovalGate(
+      SkillReviewDecisionStore decisionStore, SkillDraftFingerprint fingerprint) {
     this.decisionStore = decisionStore;
+    this.fingerprint = fingerprint;
   }
 
   @Override
@@ -45,6 +48,20 @@ public class WebApprovalGate implements SkillPromotionGate {
                 return new PromotionDecision.Defer(RETRY_AFTER, "Pending web review");
               }
               SkillReviewDecision decision = maybeDecision.get();
+              if (decision.draftHash() == null) {
+                return new PromotionDecision.Defer(
+                    RETRY_AFTER, "Draft version requires review");
+              }
+              try {
+                String currentHash = fingerprint.computeDraftHash(ctx, candidate.name());
+                if (!currentHash.equals(decision.draftHash())) {
+                  return new PromotionDecision.Defer(
+                      RETRY_AFTER, "Draft changed after review");
+                }
+              } catch (SkillDraftFingerprintException exception) {
+                return new PromotionDecision.Defer(
+                    RETRY_AFTER, "Draft is unavailable for review validation");
+              }
               return switch (decision.status()) {
                 case "APPROVED" ->
                     new PromotionDecision.Approve(
