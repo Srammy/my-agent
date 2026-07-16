@@ -67,8 +67,9 @@ public class SkillReviewService {
         request.environments() != null ? request.environments() : List.of();
     String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
     SkillReviewDecision decision;
-    try (SkillDraftLock.Handle ignored = draftLock.acquire(userId)) {
+    try (SkillDraftLock.Handle handle = draftLock.acquire(userId)) {
       String draftHash = requireDraftHash(userContext(userId), skillName);
+      requireRenewed(handle, userId);
       decision =
           decisionStore.approve(skillName, reviewerId, environments, draftHash, userId);
     }
@@ -80,8 +81,9 @@ public class SkillReviewService {
     String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
     String reason = request.reason() != null ? request.reason() : "";
     SkillReviewDecision decision;
-    try (SkillDraftLock.Handle ignored = draftLock.acquire(userId)) {
+    try (SkillDraftLock.Handle handle = draftLock.acquire(userId)) {
       String draftHash = requireDraftHash(userContext(userId), skillName);
+      requireRenewed(handle, userId);
       decision = decisionStore.reject(skillName, reviewerId, reason, draftHash, userId);
     }
     return toDto(skillName, decision, usageStore(userId));
@@ -175,6 +177,13 @@ public class SkillReviewService {
 
   private SkillUsageStore usageStore(String userId) {
     return filesystemFactory.usageStore(userId);
+  }
+
+  private static void requireRenewed(SkillDraftLock.Handle handle, String userId) {
+    if (!handle.renew()) {
+      throw new SkillDraftLockException(
+          "Skill draft lock expired before saving review for user " + userId);
+    }
   }
 
   private static Optional<String> draftSkillName(String path) {
