@@ -103,7 +103,7 @@ public class SkillReviewService {
     }
 
     Optional<SkillReviewDecision> maybeDecision = decisionStore.find(skillName, userId);
-    String status = maybeDecision.map(SkillReviewDecision::status).orElse("PENDING");
+    String status = effectiveStatus(ctx, skillName, maybeDecision);
 
     Optional<SkillUsageRecord> maybeUsage = usageStore.get(skillName);
     long useCount = maybeUsage.map(SkillUsageRecord::useCount).orElse(0L);
@@ -119,6 +119,23 @@ public class SkillReviewService {
     return new SkillReviewDto(
         skillName, description, status, createdBy, sourceSessionId, environments,
         useCount, viewCount, patchCount);
+  }
+
+  private String effectiveStatus(
+      RuntimeContext ctx,
+      String skillName,
+      Optional<SkillReviewDecision> maybeDecision) {
+    if (maybeDecision.isEmpty() || maybeDecision.get().draftHash() == null) {
+      return "PENDING";
+    }
+    try {
+      String currentHash = fingerprint.computeDraftHash(ctx, skillName);
+      return currentHash.equals(maybeDecision.get().draftHash())
+          ? maybeDecision.get().status()
+          : "PENDING";
+    } catch (SkillDraftFingerprintException exception) {
+      return "PENDING";
+    }
   }
 
   private SkillReviewDto toDto(String skillName, SkillReviewDecision decision, String userId) {

@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -46,20 +48,8 @@ class SkillReviewServiceTest {
 
   @Test
   void listReturnsPendingSkillsFromDraftsDirectory() {
-    when(filesystem.exists(any(RuntimeContext.class), eq("skills/_drafts"))).thenReturn(true);
-    when(filesystem.ls(any(RuntimeContext.class), eq("skills/_drafts")))
-        .thenReturn(
-            LsResult.success(
-                List.of(FileInfo.ofDir("my-skill", "2026-07-08T09:00:00"))));
-
-    String skillMd = "---\nname: \"my-skill\"\ndescription: \"My skill description\"\n---\n";
-    when(filesystem.exists(any(RuntimeContext.class), eq("skills/_drafts/my-skill/SKILL.md")))
-        .thenReturn(true);
-    when(filesystem.read(any(RuntimeContext.class), eq("skills/_drafts/my-skill/SKILL.md"), eq(0), anyInt()))
-        .thenReturn(ReadResult.success(new FileData(skillMd, "utf-8", "2026-07-08T09:00:00", "2026-07-08T09:00:00")));
-
+    stubListedDraft();
     when(decisionStore.find("my-skill", "1")).thenReturn(Optional.empty());
-    when(usageStore.get("my-skill")).thenReturn(Optional.empty());
 
     List<SkillReviewDto> result = service.list("1");
 
@@ -67,6 +57,84 @@ class SkillReviewServiceTest {
     assertThat(result.get(0).skillName()).isEqualTo("my-skill");
     assertThat(result.get(0).description()).isEqualTo("My skill description");
     assertThat(result.get(0).status()).isEqualTo("PENDING");
+  }
+
+  @Test
+  void listKeepsApprovedStatusWhenDraftHashMatches() {
+    stubListedDraft();
+    SkillReviewDecision decision =
+        new SkillReviewDecision(
+            "my-skill",
+            "APPROVED",
+            "admin",
+            null,
+            List.of("prod"),
+            Instant.now(),
+            "hash-v1");
+    when(decisionStore.find("my-skill", "1")).thenReturn(Optional.of(decision));
+    when(fingerprint.computeDraftHash(any(RuntimeContext.class), eq("my-skill")))
+        .thenReturn("hash-v1");
+
+    assertThat(service.list("1").get(0).status()).isEqualTo("APPROVED");
+  }
+
+  @Test
+  void listShowsPendingWhenDraftChangedAfterApproval() {
+    stubListedDraft();
+    SkillReviewDecision decision =
+        new SkillReviewDecision(
+            "my-skill",
+            "APPROVED",
+            "admin",
+            null,
+            List.of("prod"),
+            Instant.now(),
+            "hash-v1");
+    when(decisionStore.find("my-skill", "1")).thenReturn(Optional.of(decision));
+    when(fingerprint.computeDraftHash(any(RuntimeContext.class), eq("my-skill")))
+        .thenReturn("hash-v2");
+
+    assertThat(service.list("1").get(0).status()).isEqualTo("PENDING");
+  }
+
+  @Test
+  void listShowsPendingForLegacyDecisionWithoutHash() {
+    stubListedDraft();
+    SkillReviewDecision decision =
+        new SkillReviewDecision(
+            "my-skill",
+            "APPROVED",
+            "admin",
+            null,
+            List.of("prod"),
+            Instant.now(),
+            null);
+    when(decisionStore.find("my-skill", "1")).thenReturn(Optional.of(decision));
+
+    assertThat(service.list("1").get(0).status()).isEqualTo("PENDING");
+    verify(fingerprint, never())
+        .computeDraftHash(any(RuntimeContext.class), anyString());
+  }
+
+  @Test
+  void listShowsPendingWhenCurrentDraftCannotBeRead() {
+    stubListedDraft();
+    SkillReviewDecision decision =
+        new SkillReviewDecision(
+            "my-skill",
+            "APPROVED",
+            "admin",
+            null,
+            List.of("prod"),
+            Instant.now(),
+            "hash-v1");
+    when(decisionStore.find("my-skill", "1")).thenReturn(Optional.of(decision));
+    when(fingerprint.computeDraftHash(any(RuntimeContext.class), eq("my-skill")))
+        .thenThrow(
+            new SkillDraftFingerprintException(
+                SkillDraftFingerprintException.Reason.READ_FAILURE, "unavailable"));
+
+    assertThat(service.list("1").get(0).status()).isEqualTo("PENDING");
   }
 
   @Test
@@ -218,5 +286,33 @@ class SkillReviewServiceTest {
     service.reject("my-skill", new RejectSkillReviewRequest("admin", "risk"), "1");
 
     verify(decisionStore).reject("my-skill", "admin", "risk", "hash-v2", "1");
+  }
+
+  private void stubListedDraft() {
+    when(filesystem.exists(any(RuntimeContext.class), eq("skills/_drafts")))
+        .thenReturn(true);
+    when(filesystem.ls(any(RuntimeContext.class), eq("skills/_drafts")))
+        .thenReturn(
+            LsResult.success(
+                List.of(FileInfo.ofDir("my-skill", "2026-07-08T09:00:00"))));
+
+    String skillMd =
+        "---\nname: \"my-skill\"\ndescription: \"My skill description\"\n---\n";
+    when(filesystem.exists(
+            any(RuntimeContext.class), eq("skills/_drafts/my-skill/SKILL.md")))
+        .thenReturn(true);
+    when(filesystem.read(
+            any(RuntimeContext.class),
+            eq("skills/_drafts/my-skill/SKILL.md"),
+            eq(0),
+            anyInt()))
+        .thenReturn(
+            ReadResult.success(
+                new FileData(
+                    skillMd,
+                    "utf-8",
+                    "2026-07-08T09:00:00",
+                    "2026-07-08T09:00:00")));
+    when(usageStore.get("my-skill")).thenReturn(Optional.empty());
   }
 }
