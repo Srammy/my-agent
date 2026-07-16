@@ -119,7 +119,7 @@ class UserScopedFilesystemFactoryTest {
 Run:
 
 ```powershell
-mvn -q -Dtest=UserScopedFilesystemFactoryTest test
+mvn -q -f backend/pom.xml -Dtest=UserScopedFilesystemFactoryTest test
 ```
 
 Expected: compilation fails because `UserScopedFilesystemFactory` does not exist.
@@ -158,7 +158,7 @@ public final class UserScopedFilesystemFactory {
 Run:
 
 ```powershell
-mvn -q -Dtest=UserScopedFilesystemFactoryTest test
+mvn -q -f backend/pom.xml -Dtest=UserScopedFilesystemFactoryTest test
 ```
 
 Expected: 2 tests pass.
@@ -227,7 +227,7 @@ Pass `filesystemFactory` to `agentScopeStreamExecutor`, then verify:
 Run:
 
 ```powershell
-mvn -q -Dtest=AgentScopeConfigTest test
+mvn -q -f backend/pom.xml -Dtest=AgentScopeConfigTest test
 ```
 
 Expected: compilation fails because `agentScopeStreamExecutor` still accepts a singleton
@@ -356,7 +356,7 @@ Remove the now-unused `RemoteFilesystemSpec` import.
 Run:
 
 ```powershell
-mvn -q "-Dtest=AgentScopeConfigTest,UserScopedFilesystemFactoryTest" test
+mvn -q -f backend/pom.xml "-Dtest=AgentScopeConfigTest,UserScopedFilesystemFactoryTest" test
 ```
 
 Expected: all focused tests pass; captured empty-context writes are visible to user `7` and invisible to user `8`.
@@ -420,6 +420,8 @@ Delete `when(usageStore.get("my-skill")).thenReturn(Optional.empty())` stubs and
         new SkillUsageStore(filesystemFactory.create("1"));
     SkillUsageStore bobUsage =
         new SkillUsageStore(filesystemFactory.create("2"));
+    aliceUsage.markAgentDraft("my-skill", "alice-session");
+    bobUsage.markAgentDraft("my-skill", "bob-session");
     aliceUsage.bumpUse("my-skill");
     bobUsage.bumpUse("my-skill");
     bobUsage.bumpUse("my-skill");
@@ -434,7 +436,7 @@ Delete `when(usageStore.get("my-skill")).thenReturn(Optional.empty())` stubs and
 Run:
 
 ```powershell
-mvn -q -Dtest=SkillReviewServiceTest test
+mvn -q -f backend/pom.xml -Dtest=SkillReviewServiceTest test
 ```
 
 Expected: compilation fails because `SkillReviewService` still expects a singleton `SkillUsageStore`.
@@ -523,7 +525,7 @@ than a singleton field:
 Run:
 
 ```powershell
-mvn -q -Dtest=SkillReviewServiceTest test
+mvn -q -f backend/pom.xml -Dtest=SkillReviewServiceTest test
 ```
 
 Expected: all service tests pass, including distinct counts for users `1` and `2`.
@@ -550,7 +552,7 @@ git commit -m "fix: isolate skill usage by review user"
 Run:
 
 ```powershell
-mvn -q clean test
+mvn -q -f backend/pom.xml clean test
 ```
 
 Expected: all backend tests pass with zero failures and zero errors.
@@ -594,7 +596,7 @@ Expected: merge commit succeeds on `codex/skill-review-draft-fingerprint`.
 Run:
 
 ```powershell
-mvn -q clean test
+mvn -q -f backend/pom.xml clean test
 git status --short --branch
 ```
 
