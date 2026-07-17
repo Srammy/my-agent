@@ -17,8 +17,11 @@ async function handleFiles(event: Event) {
   const input = event.target as HTMLInputElement
   const files = Array.from(input.files ?? [])
   if (!files.length) return
-  await skills.uploadSkill(files)
-  input.value = ''
+  try {
+    await skills.uploadSkill(files)
+  } finally {
+    input.value = ''
+  }
 }
 </script>
 
@@ -27,7 +30,14 @@ async function handleFiles(event: Event) {
     <div class="panel-row">
       <strong>我的 Skill</strong>
       <el-button size="small" @click="triggerUpload">上传</el-button>
-      <input ref="fileInput" type="file" multiple style="display: none" @change="handleFiles" />
+      <input
+        ref="fileInput"
+        type="file"
+        multiple
+        webkitdirectory
+        style="display: none"
+        @change="handleFiles"
+      />
     </div>
 
     <ul class="skill-list">
