@@ -346,7 +346,7 @@ Run from `frontend/`:
 npm run build
 ```
 
-Expected: `vue-tsc -b && vite build` exits with code 0.
+Expected: the repository's existing `vite build` production build runs and exits with code 0.
 
 - [ ] **Step 3: Inspect only the intended branch diff**
 
