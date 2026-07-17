@@ -200,8 +200,6 @@ public class AgentScopeConfig {
     return builder
             // 关掉”每次推理前重新合并”，改成 build 时合并一次。什么时候用 disableDynamicSkills()：单次任务，跑完就退出；或市场后端慢、不想每轮拉。平时不用动这个开关。
 //        .disableDynamicSkills()
-            // 不希望 agent 看到 workspace/skills/
-        .disableDefaultWorkspaceSkills()
             // 禁用 subagent 能力（本项目不需要 agent 派生子 agent）
         .disableSubagents()
             // 禁用运行时动态创建 subagent（与 disableSubagents 配合，彻底关闭子 agent 功能）

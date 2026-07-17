@@ -491,6 +491,27 @@ class AgentScopeConfigTest {
   }
 
   @Test
+  void workspaceSkillsRemainVisibleWhenManagementIsDisabled() throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+    AgentProperties props = properties(false, false, false, false, false);
+    io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore store =
+        new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
+    io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem fs =
+        new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(store);
+    SkillUsageStore usageStore = new SkillUsageStore(fs);
+    SkillReviewDecisionStore decisionStore = new SkillReviewDecisionStore(fs);
+    WebApprovalGate webApprovalGate =
+        new WebApprovalGate(decisionStore, mock(SkillDraftFingerprint.class));
+
+    config.configureHarnessAgentBuilder(builder, config.toolPolicy(props), props);
+    config.applySkillLearning(builder, props, usageStore, webApprovalGate);
+
+    assertThat(booleanField(builder, "disableDefaultWorkspaceSkills")).isFalse();
+    assertThat(booleanField(builder, "skillManageToolEnabled")).isFalse();
+    assertThat(booleanField(builder, "skillCuratorEnabled")).isFalse();
+  }
+
+  @Test
   void workspaceFilesystemIsolatesUsersByNamespace() {
     io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore store =
         new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
@@ -513,13 +534,23 @@ class AgentScopeConfigTest {
       boolean shellEnabled,
       boolean httpFetchEnabled,
       boolean mcpEnabled) {
+    return properties(
+        fileToolsEnabled, shellEnabled, httpFetchEnabled, mcpEnabled, true);
+  }
+
+  private AgentProperties properties(
+      boolean fileToolsEnabled,
+      boolean shellEnabled,
+      boolean httpFetchEnabled,
+      boolean mcpEnabled,
+      boolean manageToolEnabled) {
     return new AgentProperties(
         new AgentProperties.AgentScope(true),
         new AgentProperties.Workspace(tempDir.toString()),
         new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
         new AgentProperties.StateStore(
             "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-        new AgentProperties.Skill("agentscope", "prod", 10, true, true),
+        new AgentProperties.Skill("agentscope", "prod", 10, manageToolEnabled, true),
         new AgentProperties.Permission("DEFAULT"),
         new AgentProperties.Tools(
             fileToolsEnabled, shellEnabled, httpFetchEnabled, mcpEnabled));
