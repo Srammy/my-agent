@@ -143,6 +143,55 @@ class SkillDraftFingerprintTest {
   }
 
   @Test
+  void wrapsExistsExceptionAsReadFailure() {
+    IllegalStateException filesystemFailure = new IllegalStateException("redis unavailable");
+    when(filesystem.exists(alice, "skills/_drafts/my-skill"))
+        .thenThrow(filesystemFailure);
+
+    assertThatThrownBy(() -> fingerprint.computeDraftHash(alice, "my-skill"))
+        .isInstanceOf(SkillDraftFingerprintException.class)
+        .hasCause(filesystemFailure)
+        .satisfies(
+            error ->
+                assertThat(((SkillDraftFingerprintException) error).reason())
+                    .isEqualTo(SkillDraftFingerprintException.Reason.READ_FAILURE));
+  }
+
+  @Test
+  void wrapsListExceptionAsReadFailure() {
+    IllegalStateException filesystemFailure = new IllegalStateException("redis unavailable");
+    when(filesystem.exists(alice, "skills/_drafts/my-skill")).thenReturn(true);
+    when(filesystem.exists(alice, "skills/_drafts/my-skill/SKILL.md")).thenReturn(true);
+    when(filesystem.ls(alice, "/skills/_drafts/my-skill"))
+        .thenThrow(filesystemFailure);
+
+    assertThatThrownBy(() -> fingerprint.computeDraftHash(alice, "my-skill"))
+        .isInstanceOf(SkillDraftFingerprintException.class)
+        .hasCause(filesystemFailure)
+        .satisfies(
+            error ->
+                assertThat(((SkillDraftFingerprintException) error).reason())
+                    .isEqualTo(SkillDraftFingerprintException.Reason.READ_FAILURE));
+  }
+
+  @Test
+  void wrapsReadExceptionAsReadFailure() {
+    IllegalStateException filesystemFailure = new IllegalStateException("redis unavailable");
+    String md = "---\nname: my-skill\ndescription: test\n---\n";
+    stubDraft(alice, md, "echo one");
+    when(filesystem.read(alice, "skills/_drafts/my-skill/SKILL.md", 0, 0))
+        .thenThrow(filesystemFailure);
+
+    assertThatThrownBy(() -> fingerprint.computeDraftHash(alice, "my-skill"))
+        .isInstanceOf(SkillDraftFingerprintException.class)
+        .hasCause(filesystemFailure)
+        .satisfies(
+            error ->
+                assertThat(((SkillDraftFingerprintException) error).reason())
+                    .isEqualTo(SkillDraftFingerprintException.Reason.READ_FAILURE));
+  }
+
+  @Test
   void readsFullPathsReturnedByRemoteFilesystem() {
     InMemoryStore store = new InMemoryStore();
     AbstractFilesystem fixedUserFilesystem = new RemoteFilesystem(store, List.of("1"));

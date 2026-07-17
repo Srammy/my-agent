@@ -27,6 +27,19 @@ public final class SkillDraftFingerprint {
   }
 
   public String computeDraftHash(RuntimeContext context, String skillName) {
+    try {
+      return computeDraftHashUnchecked(context, skillName);
+    } catch (SkillDraftFingerprintException exception) {
+      throw exception;
+    } catch (RuntimeException exception) {
+      throw new SkillDraftFingerprintException(
+          SkillDraftFingerprintException.Reason.READ_FAILURE,
+          "Failed to fingerprint skill draft: " + skillName,
+          exception);
+    }
+  }
+
+  private String computeDraftHashUnchecked(RuntimeContext context, String skillName) {
     String root = DRAFTS_DIR + "/" + skillName;
     if (!filesystem.exists(context, root)) {
       throw new SkillDraftFingerprintException(
