@@ -20,6 +20,8 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
 
   private static final String DRAFTS_DIR = "skills/_drafts";
   private static final String SKILLS_DIR = "skills";
+  private static final String FORMAL_SKILL_WRITE_ERROR =
+      "Agent cannot modify formal skills directly; use the draft approval flow";
 
   private final AbstractFilesystem delegate;
   private final String userId;
@@ -61,6 +63,9 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
 
   @Override
   public WriteResult write(RuntimeContext context, String path, String content) {
+    if (affectsFormalSkills(path)) {
+      return WriteResult.fail(FORMAL_SKILL_WRITE_ERROR);
+    }
     return withDraftLockIfNeeded(path, () -> delegate.write(context, path, content));
   }
 
@@ -71,6 +76,9 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
       String oldText,
       String newText,
       boolean replaceAll) {
+    if (affectsFormalSkills(path)) {
+      return EditResult.fail(FORMAL_SKILL_WRITE_ERROR);
+    }
     return withDraftLockIfNeeded(
         path, () -> delegate.edit(context, path, oldText, newText, replaceAll));
   }
@@ -88,6 +96,11 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
   @Override
   public List<FileUploadResponse> uploadFiles(
       RuntimeContext context, List<Map.Entry<String, byte[]>> files) {
+    if (files != null && files.stream().anyMatch(entry -> affectsFormalSkills(entry.getKey()))) {
+      return files.stream()
+          .map(entry -> FileUploadResponse.fail(entry.getKey(), FORMAL_SKILL_WRITE_ERROR))
+          .toList();
+    }
     boolean affectsDraft =
         files != null && files.stream().anyMatch(entry -> affectsDraft(entry.getKey()));
     if (!affectsDraft) {
@@ -104,28 +117,33 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
 
   @Override
   public WriteResult delete(RuntimeContext context, String path) {
+    if (affectsFormalSkills(path)) {
+      return WriteResult.fail(FORMAL_SKILL_WRITE_ERROR);
+    }
     return withDraftLockIfNeeded(path, () -> delegate.delete(context, path));
   }
 
   @Override
   public WriteResult move(RuntimeContext context, String source, String target) {
+    Optional<String> promotedSkill = promotedSkillName(source, target);
+    if (promotedSkill.isPresent()) {
+      return withDraftLock(
+          handle ->
+              promotionGuard.moveApprovedDraft(
+                  userId,
+                  promotedSkill.get(),
+                  delegate,
+                  context,
+                  handle,
+                  () -> delegate.move(context, source, target)));
+    }
+    if (affectsFormalSkills(source) || affectsFormalSkills(target)) {
+      return WriteResult.fail(FORMAL_SKILL_WRITE_ERROR);
+    }
     if (!affectsDraft(source) && !affectsDraft(target)) {
       return delegate.move(context, source, target);
     }
-    return withDraftLock(
-        handle -> {
-          Optional<String> promotedSkill = promotedSkillName(source, target);
-          if (promotedSkill.isEmpty()) {
-            return delegate.move(context, source, target);
-          }
-          return promotionGuard.moveApprovedDraft(
-              userId,
-              promotedSkill.get(),
-              delegate,
-              context,
-              handle,
-              () -> delegate.move(context, source, target));
-        });
+    return withDraftLock(() -> delegate.move(context, source, target));
   }
 
   @Override
@@ -150,6 +168,12 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
   private static boolean affectsDraft(String path) {
     String normalized = normalize(path);
     return normalized.equals(DRAFTS_DIR) || normalized.startsWith(DRAFTS_DIR + "/");
+  }
+
+  private static boolean affectsFormalSkills(String path) {
+    String normalized = normalize(path);
+    return normalized.equals(SKILLS_DIR)
+        || (normalized.startsWith(SKILLS_DIR + "/") && !affectsDraft(normalized));
   }
 
   private static Optional<String> promotedSkillName(String source, String target) {

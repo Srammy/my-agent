@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.harness.agent.IsolationScope;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
+import io.agentscope.harness.agent.filesystem.model.FileUploadResponse;
 import io.agentscope.harness.agent.filesystem.model.WriteResult;
 import io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem;
 import io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore;
@@ -16,6 +17,7 @@ import io.agentscope.harness.agent.skill.curator.SkillCandidate;
 import io.agentscope.harness.agent.skill.curator.SkillPromotionGate;
 import io.agentscope.harness.agent.skill.curator.SkillUsageRecord;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -83,6 +85,80 @@ class SkillApprovalGuardedFilesystemTest {
     assertThat(result.isSuccess()).isTrue();
     assertThat(sharedFilesystem.exists(aliceContext, DRAFT_PATH + "/SKILL.md")).isFalse();
     assertThat(sharedFilesystem.exists(aliceContext, SKILL_PATH + "/SKILL.md")).isTrue();
+  }
+
+  @Test
+  void refusesDirectWritesToFormalSkills() {
+    WriteResult result =
+        aliceFilesystem.write(
+            RuntimeContext.empty(), SKILL_PATH + "/SKILL.md", ORIGINAL_SKILL_MD);
+
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(sharedFilesystem.exists(aliceContext, SKILL_PATH + "/SKILL.md")).isFalse();
+  }
+
+  @Test
+  void refusesMovingAnIndividualDraftFileToFormalSkills() {
+    writeDraft(aliceFilesystem, ORIGINAL_SKILL_MD);
+
+    WriteResult result =
+        aliceFilesystem.move(
+            RuntimeContext.empty(), DRAFT_PATH + "/SKILL.md", SKILL_PATH + "/SKILL.md");
+
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(aliceFilesystem.exists(RuntimeContext.empty(), SKILL_PATH + "/SKILL.md")).isFalse();
+  }
+
+  @Test
+  void refusesEditingAndDeletingFormalSkills() {
+    writeDraft(aliceFilesystem, ORIGINAL_SKILL_MD);
+    approveCurrentDraft("101");
+    assertThat(aliceFilesystem.move(RuntimeContext.empty(), DRAFT_PATH, SKILL_PATH).isSuccess())
+        .isTrue();
+
+    assertThat(
+            aliceFilesystem
+                .edit(
+                    RuntimeContext.empty(),
+                    SKILL_PATH + "/SKILL.md",
+                    "original",
+                    "changed",
+                    false)
+                .isSuccess())
+        .isFalse();
+    assertThat(
+            aliceFilesystem
+                .delete(RuntimeContext.empty(), SKILL_PATH)
+                .isSuccess())
+        .isFalse();
+    assertThat(aliceFilesystem.exists(RuntimeContext.empty(), SKILL_PATH + "/SKILL.md")).isTrue();
+  }
+
+  @Test
+  void refusesUploadingFilesToFormalSkills() {
+    List<FileUploadResponse> result =
+        aliceFilesystem.uploadFiles(
+            RuntimeContext.empty(),
+            List.of(Map.entry(SKILL_PATH + "/SKILL.md", ORIGINAL_SKILL_MD.getBytes())));
+
+    assertThat(result).allMatch(response -> !response.isSuccess());
+    assertThat(aliceFilesystem.exists(RuntimeContext.empty(), SKILL_PATH + "/SKILL.md")).isFalse();
+  }
+
+  @Test
+  void refusesMovingOrdinaryFilesIntoFormalSkills() {
+    assertThat(
+            aliceFilesystem
+                .write(RuntimeContext.empty(), "notes/SKILL.md", ORIGINAL_SKILL_MD)
+                .isSuccess())
+        .isTrue();
+
+    WriteResult result =
+        aliceFilesystem.move(
+            RuntimeContext.empty(), "notes/SKILL.md", SKILL_PATH + "/SKILL.md");
+
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(aliceFilesystem.exists(RuntimeContext.empty(), SKILL_PATH + "/SKILL.md")).isFalse();
   }
 
   @Test
