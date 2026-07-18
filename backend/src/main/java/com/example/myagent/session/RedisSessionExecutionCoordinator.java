@@ -44,34 +44,54 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       if redis.call('EXISTS', KEYS[1]) == 1 then
         return -1
       end
-      if redis.call('EXISTS', KEYS[3]) == 1 and redis.call('EXISTS', KEYS[2]) == 0 then
+      if redis.call('SCARD', KEYS[3]) > 0 and redis.call('EXISTS', KEYS[2]) == 0 then
         return -2
       end
+      if redis.call('SADD', KEYS[3], ARGV[2]) == 0 then
+        return -3
+      end
       local value = redis.call('INCR', KEYS[2])
-      redis.call('SET', KEYS[3], '1')
       redis.call('PEXPIRE', KEYS[2], ARGV[1])
       return value
       """, Long.class);
   private static final RedisScript<Long> DECREMENT_ACTIVE_COUNT = RedisScript.of("""
+      local removed = redis.call('SREM', KEYS[2], ARGV[2])
       local current = tonumber(redis.call('GET', KEYS[1]) or '0')
-      if current <= 1 then
+      local pending = redis.call('SCARD', KEYS[2])
+      if removed == 0 then
+        if pending == 0 and current == 0 then
+          return 0
+        end
+        if current == 0 then
+          return -pending
+        end
+        return math.max(current, pending)
+      end
+      if current > 0 then
+        current = redis.call('DECR', KEYS[1])
+      end
+      if pending == 0 then
         redis.call('DEL', KEYS[1])
         redis.call('DEL', KEYS[2])
         return 0
       end
-      local value = redis.call('DECR', KEYS[1])
+      if current <= 0 then
+        redis.call('DEL', KEYS[1])
+        return -pending
+      end
       redis.call('PEXPIRE', KEYS[1], ARGV[1])
-      return value
+      return math.max(current, pending)
       """, Long.class);
   private static final RedisScript<Long> READ_ACTIVE_COUNT = RedisScript.of("""
-      if redis.call('EXISTS', KEYS[2]) == 0 then
+      local pending = redis.call('SCARD', KEYS[2])
+      local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+      if pending == 0 and current == 0 then
         return 0
       end
-      local value = redis.call('GET', KEYS[1])
-      if not value then
-        return -1
+      if pending > 0 and current == 0 then
+        return -pending
       end
-      return tonumber(value)
+      return math.max(current, pending)
       """, Long.class);
 
   private final ReactiveStringRedisTemplate redisTemplate;
@@ -189,7 +209,8 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       SessionExecutionKey key = new SessionExecutionKey(userId, sessionId);
       String executionId = UUID.randomUUID().toString();
       long registrationDeadline = System.nanoTime() + registrationTimeoutNanos();
-      return withinRegistrationWindow(incrementActiveCount(key), registrationDeadline)
+      return withinRegistrationWindow(
+              incrementActiveCount(key, executionId), registrationDeadline)
           .flatMapMany(activeCount -> {
             if (activeCount < 0L) {
               return Flux.error(sessionCancelled());
@@ -288,7 +309,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       executions.remove(executionId, execution);
       return executions.isEmpty() ? null : executions;
     });
-    decrementActiveCount(key).subscribe(ignored -> {}, ignored -> {});
+    decrementActiveCount(key, executionId).subscribe(ignored -> {}, ignored -> {});
   }
 
   private void completeIfNotStarted(
@@ -365,21 +386,21 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
         .then();
   }
 
-  private Mono<Long> incrementActiveCount(SessionExecutionKey key) {
+  private Mono<Long> incrementActiveCount(SessionExecutionKey key, String executionId) {
     return redisTemplate.execute(
             INCREMENT_ACTIVE_COUNT,
             List.of(cancellationKey(key), activeCountKey(key), pendingCompletionKey(key)),
-            List.of(Long.toString(activeTtl.toMillis())))
+            List.of(Long.toString(activeTtl.toMillis()), executionId))
         .next()
         .switchIfEmpty(Mono.error(
             new IllegalStateException("Failed to register session execution")));
   }
 
-  private Mono<Long> decrementActiveCount(SessionExecutionKey key) {
+  private Mono<Long> decrementActiveCount(SessionExecutionKey key, String executionId) {
     return redisTemplate.execute(
             DECREMENT_ACTIVE_COUNT,
             List.of(activeCountKey(key), pendingCompletionKey(key)),
-            List.of(Long.toString(activeTtl.toMillis())))
+            List.of(Long.toString(activeTtl.toMillis()), executionId))
         .next()
         .defaultIfEmpty(0L);
   }

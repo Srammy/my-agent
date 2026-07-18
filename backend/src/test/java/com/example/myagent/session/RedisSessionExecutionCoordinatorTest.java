@@ -54,14 +54,14 @@ class RedisSessionExecutionCoordinatorTest {
 
   private Sinks.Many<ReactiveSubscription.Message<String, String>> messages;
   private Map<String, AtomicLong> activeCounts;
-  private Set<String> pendingCompletions;
+  private Map<String, Set<String>> pendingExecutions;
   private RedisSessionExecutionCoordinator coordinator;
 
   @BeforeEach
   void setUp() {
     messages = Sinks.many().multicast().onBackpressureBuffer();
     activeCounts = new ConcurrentHashMap<>();
-    pendingCompletions = ConcurrentHashMap.newKeySet();
+    pendingExecutions = new ConcurrentHashMap<>();
     lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     lenient().when(valueOperations.set(anyString(), anyString(), any(Duration.class)))
         .thenReturn(Mono.just(true));
@@ -165,14 +165,12 @@ class RedisSessionExecutionCoordinatorTest {
   @Test
   void missingActiveCountWithoutCompletionFailsClosed() {
     AtomicLong activeCount = stubActiveCounter();
-    String pendingKey = "myagent:agent-state:session-execution:1:s_1:pending-completion";
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
     when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
     Sinks.Empty<Void> completion = Sinks.empty();
     coordinator.track(1L, "s_1", Flux::<Integer>never, completion::asMono).subscribe();
     assertThat(activeCount).hasValue(1L);
     activeCount.set(0L);
-    pendingCompletions.add(pendingKey);
     AtomicBoolean lateSourceSubscribed = new AtomicBoolean();
 
     StepVerifier.create(coordinator.track(1L, "s_1", () -> {
@@ -191,6 +189,25 @@ class RedisSessionExecutionCoordinatorTest {
 
     completion.tryEmitEmpty();
     StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .verifyComplete();
+  }
+
+  @Test
+  void oneOfTwoCompletionsCannotClearPendingExecutionsAfterCountExpires() {
+    AtomicLong activeCount = stubActiveCounter();
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    Sinks.Empty<Void> firstCompletion = Sinks.empty();
+    Sinks.Empty<Void> secondCompletion = Sinks.empty();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, firstCompletion::asMono).subscribe();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, secondCompletion::asMono).subscribe();
+    assertThat(activeCount).hasValue(2L);
+    activeCount.set(0L);
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .then(() -> firstCompletion.tryEmitEmpty())
+        .expectNoEvent(Duration.ofMillis(20))
+        .then(() -> secondCompletion.tryEmitEmpty())
         .verifyComplete();
   }
 
@@ -623,33 +640,52 @@ class RedisSessionExecutionCoordinatorTest {
   private Flux<Long> executeScript(org.mockito.invocation.InvocationOnMock invocation) {
     RedisScript<Long> script = invocation.getArgument(0);
     List<String> keys = invocation.getArgument(1);
+    List<?> arguments = invocation.getArgument(2);
     String scriptText = script.getScriptAsString();
     String countKey = scriptText.contains("INCR") && keys.size() >= 3
         ? keys.get(1)
         : keys.getFirst();
     AtomicLong count = activeCounts.computeIfAbsent(countKey, ignored -> new AtomicLong());
     if (scriptText.contains("INCR")) {
+      String pendingKey = keys.get(keys.size() - 1);
+      Set<String> pending = pendingExecutions.computeIfAbsent(
+          pendingKey, ignored -> ConcurrentHashMap.newKeySet());
       if (keys.size() >= 3
-          && pendingCompletions.contains(keys.get(2))
+          && !pending.isEmpty()
           && count.get() == 0L
-          && scriptText.contains("EXISTS', KEYS[3]")) {
+          && (scriptText.contains("EXISTS', KEYS[3]")
+              || scriptText.contains("SCARD', KEYS[3]"))) {
         return Flux.just(-2L);
       }
       long updated = count.incrementAndGet();
-      if (keys.size() >= 2) {
-        pendingCompletions.add(keys.get(keys.size() - 1));
-      }
+      String executionId = scriptText.contains("SADD") && arguments.size() >= 2
+          ? arguments.get(1).toString()
+          : "shared-pending";
+      pending.add(executionId);
       return Flux.just(updated);
     }
     if (scriptText.contains("DECR")) {
-      long updated = count.updateAndGet(current -> Math.max(0L, current - 1L));
-      if (updated == 0L && keys.size() >= 2) {
-        pendingCompletions.remove(keys.get(1));
+      Set<String> pending = pendingExecutions.computeIfAbsent(
+          keys.get(1), ignored -> ConcurrentHashMap.newKeySet());
+      if (scriptText.contains("SREM")) {
+        String executionId = arguments.size() >= 2
+            ? arguments.get(1).toString()
+            : "";
+        if (!pending.remove(executionId)) {
+          return Flux.just(count.get());
+        }
       }
-      return Flux.just(updated);
+      long updated = count.updateAndGet(current -> Math.max(0L, current - 1L));
+      if (!scriptText.contains("SREM") && updated == 0L) {
+        pending.clear();
+      }
+      return Flux.just(pending.isEmpty() ? updated : Math.max(1L, updated));
     }
-    if (keys.size() >= 2 && pendingCompletions.contains(keys.get(1)) && count.get() == 0L) {
-      return Flux.just(-1L);
+    if (keys.size() >= 2) {
+      int pending = pendingExecutions.getOrDefault(keys.get(1), Set.of()).size();
+      if (pending > 0 && count.get() == 0L) {
+        return Flux.just(-1L * pending);
+      }
     }
     return Flux.just(count.get());
   }
