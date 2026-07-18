@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import * as chatApi from '../../api/chat'
+import type { StreamEvent } from '../../api/chat'
 import { useChatStore, type ToolEvent } from '../chat'
 
 function toolEvent(): ToolEvent {
@@ -271,7 +272,7 @@ describe('chat confirmation streams', () => {
           { toolCallId: 3, toolName: 'invalid' },
           { toolCallId: 'call-1', toolName: 'read_file', toolInput: { path: 'a.md' } }
         ]
-      })
+      } as unknown as StreamEvent)
       onEvent({ type: 'done' })
     })
     const store = useChatStore()
