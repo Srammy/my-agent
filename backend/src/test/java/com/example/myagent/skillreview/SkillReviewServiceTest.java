@@ -103,10 +103,8 @@ class SkillReviewServiceTest {
     stubListedDraft();
     when(decisionStore.find("my-skill", "1")).thenReturn(Optional.empty());
     when(decisionStore.find("my-skill", "2")).thenReturn(Optional.empty());
-    SkillUsageStore aliceUsage =
-        new SkillUsageStore(filesystemFactory.create("1"));
-    SkillUsageStore bobUsage =
-        new SkillUsageStore(filesystemFactory.create("2"));
+    SkillUsageStore aliceUsage = filesystemFactory.usageStore("1");
+    SkillUsageStore bobUsage = filesystemFactory.usageStore("2");
     aliceUsage.markAgentDraft("my-skill", "alice-session");
     bobUsage.markAgentDraft("my-skill", "bob-session");
     aliceUsage.bumpUse("my-skill");
@@ -197,6 +195,7 @@ class SkillReviewServiceTest {
 
   @Test
   void approveStoresDecisionAndReturnsApprovedStatus() {
+    stubListedDraft();
     Instant now = Instant.now();
     SkillReviewDecision decision =
         new SkillReviewDecision(
@@ -210,11 +209,13 @@ class SkillReviewServiceTest {
 
     assertThat(result.status()).isEqualTo("APPROVED");
     assertThat(result.skillName()).isEqualTo("my-skill");
+    assertThat(result.description()).isEqualTo("My skill description");
     assertThat(result.environments()).containsExactly("prod");
   }
 
   @Test
   void rejectStoresDecisionAndReturnsRejectedStatus() {
+    stubListedDraft();
     Instant now = Instant.now();
     SkillReviewDecision decision =
         new SkillReviewDecision(
@@ -228,6 +229,7 @@ class SkillReviewServiceTest {
 
     assertThat(result.status()).isEqualTo("REJECTED");
     assertThat(result.skillName()).isEqualTo("my-skill");
+    assertThat(result.description()).isEqualTo("My skill description");
   }
 
   @Test
