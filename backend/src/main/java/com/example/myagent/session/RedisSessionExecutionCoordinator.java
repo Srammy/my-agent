@@ -19,6 +19,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.Disposable;
+import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -95,13 +96,16 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
               return Flux.error(new IllegalStateException("Failed to register session execution"));
             }
             LocalExecution execution = register(key, executionId);
-            execution.refreshWith(Flux.interval(refreshInterval)
+            Disposable heartbeat = Flux.interval(refreshInterval)
                 .concatMap(ignored -> heartbeat(key, activeKey, execution))
-                .subscribe(ignored -> {}, ignored -> {}));
+                .subscribe(ignored -> {}, ignored -> {});
+            Disposable watchdog = Flux.interval(refreshInterval)
+                .subscribe(ignored -> execution.cancelIfLeaseUnsafe(activeTtl, refreshInterval));
+            execution.refreshWith(heartbeat, watchdog);
             return rejectIfCancelled(userId, sessionId)
                 .thenMany(Flux.defer(source)
-                    .doOnSubscribe(execution::attach)
-                    .takeUntilOther(execution.cancelled()))
+                    .doOnSubscribe(execution::attach))
+                .takeUntilOther(execution.cancelled())
                 .doFinally(ignored -> cleanup(key, executionId, activeKey, execution));
           });
     });
@@ -191,9 +195,8 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
   private Mono<Void> heartbeat(
       SessionExecutionKey key, String activeKey, LocalExecution execution) {
-    return redisTemplate.opsForValue().get(key.cancellationKey())
+    Mono<Void> operation = redisTemplate.opsForValue().get(key.cancellationKey())
         .hasElement()
-        .onErrorReturn(false)
         .flatMap(cancelled -> {
           if (cancelled) {
             execution.cancel();
@@ -204,15 +207,27 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
                 if (stored) {
                   execution.markRenewed();
                 } else {
-                  execution.cancelIfLeaseUnsafe(activeTtl, refreshInterval);
+                  execution.cancel();
                 }
               })
-              .onErrorResume(error -> {
-                execution.cancelIfLeaseUnsafe(activeTtl, refreshInterval);
-                return Mono.empty();
-              })
+              .switchIfEmpty(Mono.fromSupplier(() -> {
+                execution.cancel();
+                return false;
+              }))
               .then();
         });
+    return operation.timeout(heartbeatTimeout())
+        .onErrorResume(error -> {
+          execution.cancel();
+          return Mono.empty();
+        });
+  }
+
+  private Duration heartbeatTimeout() {
+    long safeWindowNanos = activeTtl.minus(refreshInterval).toNanos();
+    long timeoutNanos = Math.max(
+        1L, Math.min(refreshInterval.toNanos(), Math.max(1L, safeWindowNanos / 2L)));
+    return Duration.ofNanos(timeoutNanos);
   }
 
   private Mono<Void> waitForNoActiveExecutions(SessionExecutionKey key) {
@@ -233,7 +248,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private static final class LocalExecution {
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final AtomicReference<Subscription> subscription = new AtomicReference<>();
-    private final AtomicReference<Disposable> refresh = new AtomicReference<>();
+    private final Disposable.Composite refresh = Disposables.composite();
     private final Sinks.Empty<Void> cancellationSignal = Sinks.empty();
     private volatile long lastRenewedAtNanos = System.nanoTime();
 
@@ -247,8 +262,10 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       }
     }
 
-    void refreshWith(Disposable disposable) {
-      refresh.set(disposable);
+    void refreshWith(Disposable... disposables) {
+      for (Disposable disposable : disposables) {
+        refresh.add(disposable);
+      }
     }
 
     Mono<Void> cancelled() {
@@ -269,17 +286,15 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
     }
 
     void cancelIfLeaseUnsafe(Duration activeTtl, Duration refreshInterval) {
-      long safeWindowNanos = Math.max(0L, activeTtl.minus(refreshInterval).toNanos());
+      long safeWindowNanos = Math.max(
+          0L, activeTtl.minus(refreshInterval.multipliedBy(2L)).toNanos());
       if (System.nanoTime() - lastRenewedAtNanos >= safeWindowNanos) {
         cancel();
       }
     }
 
     void disposeRefresh() {
-      Disposable disposable = refresh.get();
-      if (disposable != null) {
-        disposable.dispose();
-      }
+      refresh.dispose();
     }
   }
 }

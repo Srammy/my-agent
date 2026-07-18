@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -272,6 +273,91 @@ class RedisSessionExecutionCoordinatorTest {
 
     assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
     verify(listenerContainer).destroy();
+  }
+
+  @Test
+  void executionStopsBeforeLeaseExpiresWhenCancellationCheckNeverCompletes() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(200),
+        Duration.ofMillis(20),
+        Duration.ofMillis(1),
+        Duration.ofMillis(300));
+    String cancellationKey = "myagent:session-execution:1:s_1:cancelled";
+    when(valueOperations.get(cancellationKey))
+        .thenReturn(Mono.empty(), Mono.empty(), Mono.never());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    CountDownLatch stopped = new CountDownLatch(1);
+
+    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    verify(redisTemplate, timeout(200)).delete(
+        matches("myagent:session-execution:1:s_1:active:.+"));
+  }
+
+  @Test
+  void executionStopsBeforeLeaseExpiresWhenRenewalNeverCompletes() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(200),
+        Duration.ofMillis(20),
+        Duration.ofMillis(1),
+        Duration.ofMillis(300));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class)))
+        .thenReturn(Mono.just(true), Mono.never());
+    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    CountDownLatch stopped = new CountDownLatch(1);
+
+    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
+  }
+
+  @Test
+  void destroyStopsExecutionWhileSecondCancellationCheckIsPending() throws Exception {
+    String cancellationKey = "myagent:session-execution:1:s_1:cancelled";
+    when(valueOperations.get(cancellationKey)).thenReturn(Mono.empty(), Mono.never());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    AtomicBoolean sourceSubscribed = new AtomicBoolean();
+    CountDownLatch terminated = new CountDownLatch(1);
+    coordinator.track(1L, "s_1", () -> {
+          sourceSubscribed.set(true);
+          return Flux.never();
+        })
+        .doFinally(ignored -> terminated.countDown())
+        .subscribe();
+
+    coordinator.destroy();
+
+    assertThat(terminated.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(sourceSubscribed).isFalse();
+    verify(redisTemplate, timeout(200)).delete(
+        matches("myagent:session-execution:1:s_1:active:.+"));
+  }
+
+  @Test
+  void cancellationMessageDoesNotCancelSameSessionOwnedByDifferentUser() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    Disposable matching = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
+    Disposable differentUser = coordinator.track(2L, "s_1", Flux::<Integer>never).subscribe();
+
+    messages.tryEmitNext(message("{\"userId\":1,\"sessionId\":\"s_1\"}"));
+
+    assertThat(matching.isDisposed()).isTrue();
+    assertThat(differentUser.isDisposed()).isFalse();
+    differentUser.dispose();
   }
 
   private void assertCancellationTimeout(Throwable error) {
