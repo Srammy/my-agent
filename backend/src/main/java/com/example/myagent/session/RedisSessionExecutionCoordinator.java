@@ -287,7 +287,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
     void cancelIfLeaseUnsafe(Duration activeTtl, Duration refreshInterval) {
       long safeWindowNanos = Math.max(
-          0L, activeTtl.minus(refreshInterval.multipliedBy(2L)).toNanos());
+          0L, activeTtl.minus(refreshInterval).toNanos());
       if (System.nanoTime() - lastRenewedAtNanos >= safeWindowNanos) {
         cancel();
       }

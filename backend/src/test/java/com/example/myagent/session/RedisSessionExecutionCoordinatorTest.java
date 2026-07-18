@@ -360,6 +360,34 @@ class RedisSessionExecutionCoordinatorTest {
     differentUser.dispose();
   }
 
+  @Test
+  void firstSuccessfulRenewalKeepsDefaultRatioExecutionRunning() throws Exception {
+    coordinator.destroy();
+    Duration activeTtl = Duration.ofMillis(300);
+    Duration refreshInterval = Duration.ofMillis(100);
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        activeTtl,
+        refreshInterval,
+        Duration.ofMillis(1),
+        Duration.ofMillis(500));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(valueOperations.set(anyString(), anyString(), eq(activeTtl)))
+        .thenReturn(Mono.just(true), Mono.delay(Duration.ofMillis(20)).thenReturn(true));
+    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    CountDownLatch stopped = new CountDownLatch(1);
+
+    Disposable subscription = coordinator.track(
+        1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    verify(valueOperations, timeout(500).atLeast(2)).set(
+        matches("myagent:session-execution:1:s_1:active:.+"), eq("1"), eq(activeTtl));
+    assertThat(stopped.await(150, TimeUnit.MILLISECONDS)).isFalse();
+    subscription.dispose();
+  }
+
   private void assertCancellationTimeout(Throwable error) {
     assertThat(error).isInstanceOfSatisfying(ResponseStatusException.class, status -> {
       assertThat(status.getStatusCode().value()).isEqualTo(409);
