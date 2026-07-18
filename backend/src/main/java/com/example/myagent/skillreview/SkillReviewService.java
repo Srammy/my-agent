@@ -219,8 +219,10 @@ public class SkillReviewService {
   }
 
   private static void validateSkillName(String skillName) {
-    if (skillName == null || skillName.isBlank()) {
-      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Skill name is required");
+    try {
+      SkillPathValidator.validateSkillName(skillName);
+    } catch (IllegalArgumentException exception) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
     }
   }
 
