@@ -336,6 +336,8 @@ class RedisSessionExecutionCoordinatorTest {
     coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
 
     assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    verify(redisTemplate, timeout(200)).delete(
+        matches("myagent:session-execution:1:s_1:active:.+"));
   }
 
   @Test

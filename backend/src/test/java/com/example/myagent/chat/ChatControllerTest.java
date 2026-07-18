@@ -1,5 +1,8 @@
 package com.example.myagent.chat;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -9,6 +12,7 @@ import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.ChatSessionEntity;
+import com.example.myagent.session.SessionExecutionCoordinator;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ConfirmationKind;
 import com.example.myagent.toolconfirmation.ToolCallSnapshot;
@@ -20,6 +24,8 @@ import com.example.myagent.toolconfirmation.ToolConfirmationStatus;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.function.Supplier;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -34,6 +40,7 @@ import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Flux;
 
 @WebFluxTest(ChatController.class)
 @Import({ChatService.class, StubChatAgentGateway.class, ChatControllerTest.TestSecurityConfig.class})
@@ -49,6 +56,15 @@ class ChatControllerTest {
   @MockBean private SessionService sessionService;
   @MockBean private PermissionService permissionService;
   @MockBean private ToolConfirmationService toolConfirmationService;
+  @MockBean private SessionExecutionCoordinator sessionExecutionCoordinator;
+
+  @BeforeEach
+  @SuppressWarnings("unchecked")
+  void passThroughTrackedExecutions() {
+    when(sessionExecutionCoordinator.track(anyLong(), anyString(), any()))
+        .thenAnswer(invocation ->
+            ((Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());
+  }
 
   @Test
   void postStreamRejectsUnknownFields() {
