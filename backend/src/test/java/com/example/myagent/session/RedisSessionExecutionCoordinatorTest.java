@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -115,6 +116,89 @@ class RedisSessionExecutionCoordinatorTest {
     verify(redisTemplate).convertAndSend(
         eq("myagent:agent-state:session-execution:cancel"), anyString());
     verify(redisTemplate, never()).keys(anyString());
+  }
+
+  @Test
+  void defaultTrackCreatesIndependentCompletionForEachSubscription() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    Sinks.Many<Integer> firstSource = Sinks.many().unicast().onBackpressureBuffer();
+    Sinks.Many<Integer> secondSource = Sinks.many().unicast().onBackpressureBuffer();
+    AtomicInteger subscriptions = new AtomicInteger();
+    Flux<Integer> tracked = coordinator.track(
+        1L, "s_1", () -> subscriptions.getAndIncrement() == 0
+            ? firstSource.asFlux()
+            : secondSource.asFlux());
+
+    tracked.subscribe();
+    tracked.subscribe();
+    assertThat(stubActiveCounter()).hasValue(2L);
+
+    firstSource.tryEmitComplete();
+
+    assertThat(stubActiveCounter()).hasValue(1L);
+    assertThat(pendingExecutions.values()).singleElement().satisfies(pending ->
+        assertThat(pending).hasSize(1));
+    secondSource.tryEmitComplete();
+    assertThat(stubActiveCounter()).hasValue(0L);
+  }
+
+  @Test
+  void cancellingDefaultTrackCompletesItsExecution() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    Disposable execution = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
+    assertThat(stubActiveCounter()).hasValue(1L);
+
+    execution.dispose();
+
+    assertThat(stubActiveCounter()).hasValue(0L);
+    assertThat(pendingExecutions.values()).singleElement().satisfies(pending ->
+        assertThat(pending).isEmpty());
+  }
+
+  @Test
+  void failedCompletionCleanupRemainsPendingUntilBackgroundRetrySucceeds() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(100),
+        Duration.ofMillis(5),
+        Duration.ofMillis(1),
+        Duration.ofMillis(100));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    AtomicInteger cleanupAttempts = new AtomicInteger();
+    CountDownLatch boundedRetriesExhausted = new CountDownLatch(1);
+    CountDownLatch cleanupCompleted = new CountDownLatch(1);
+    Sinks.One<Void> allowRecovery = Sinks.one();
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          if (!script.getScriptAsString().contains("DECR")) {
+            return executeScript(invocation);
+          }
+          int attempt = cleanupAttempts.incrementAndGet();
+          if (attempt <= 3) {
+            if (attempt == 3) {
+              boundedRetriesExhausted.countDown();
+            }
+            return Flux.error(new IllegalStateException("redis unavailable"));
+          }
+          return allowRecovery.asMono()
+              .then(Mono.defer(() -> executeScript(invocation).next()))
+              .doOnNext(ignored -> cleanupCompleted.countDown())
+              .flux();
+        });
+
+    coordinator.track(1L, "s_1", () -> Flux.just(1)).blockLast();
+
+    assertThat(boundedRetriesExhausted.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(pendingExecutions.values()).singleElement().satisfies(pending ->
+        assertThat(pending).hasSize(1));
+    allowRecovery.tryEmitEmpty();
+    assertThat(cleanupCompleted.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(pendingExecutions.values()).singleElement().satisfies(pending ->
+        assertThat(pending).isEmpty());
   }
 
   @Test

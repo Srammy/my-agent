@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.reactivestreams.Subscription;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
@@ -31,6 +33,8 @@ import reactor.util.retry.Retry;
 
 @Service
 public class RedisSessionExecutionCoordinator implements SessionExecutionCoordinator, DisposableBean {
+  private static final Logger log =
+      LoggerFactory.getLogger(RedisSessionExecutionCoordinator.class);
   private static final String CANCELLATION_CHANNEL_SUFFIX = "session-execution:cancel";
 
   private static final Duration DEFAULT_ACTIVE_TTL = Duration.ofSeconds(30);
@@ -106,8 +110,10 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private final String cancellationChannel;
   private final ConcurrentMap<SessionExecutionKey, ConcurrentMap<String, LocalExecution>> localExecutions =
       new ConcurrentHashMap<>();
+  private final ConcurrentMap<CleanupKey, CleanupTask> pendingCleanups = new ConcurrentHashMap<>();
   private final AtomicBoolean destroyed = new AtomicBoolean();
   private final Disposable messageSubscription;
+  private final Disposable cleanupRetrySubscription;
 
   public RedisSessionExecutionCoordinator(
       ReactiveStringRedisTemplate redisTemplate,
@@ -185,15 +191,19 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
             () -> listenerContainer.receive(ChannelTopic.of(cancellationChannel)))
         .retryWhen(Retry.fixedDelay(Long.MAX_VALUE, pollInterval))
         .subscribe(message -> handleCancellation(message.getMessage()), ignored -> {});
+    this.cleanupRetrySubscription = Flux.interval(refreshInterval)
+        .subscribe(ignored -> retryPendingCleanups(), error ->
+            log.error("Session execution cleanup retry loop stopped", error));
   }
 
   @Override
   public <T> Flux<T> track(Long userId, String sessionId, Supplier<Flux<T>> source) {
-    Sinks.Empty<Void> completion = Sinks.empty();
-    Supplier<Flux<T>> completionAwareSource = () -> Flux.defer(source)
-        .doOnComplete(() -> completion.tryEmitEmpty())
-        .doOnError(ignored -> completion.tryEmitEmpty());
-    return track(userId, sessionId, completionAwareSource, completion::asMono);
+    return Flux.defer(() -> {
+      Sinks.Empty<Void> completion = Sinks.empty();
+      Supplier<Flux<T>> completionAwareSource = () -> Flux.defer(source)
+          .doFinally(ignored -> completion.tryEmitEmpty());
+      return track(userId, sessionId, completionAwareSource, completion::asMono);
+    });
   }
 
   @Override
@@ -288,6 +298,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       return;
     }
     messageSubscription.dispose();
+    cleanupRetrySubscription.dispose();
     localExecutions.values().forEach(
         executions -> executions.values().forEach(LocalExecution::shutdown));
     listenerContainer.destroy();
@@ -318,7 +329,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       executions.remove(executionId, execution);
       return executions.isEmpty() ? null : executions;
     });
-    decrementActiveCount(key, executionId).subscribe(ignored -> {}, ignored -> {});
+    requestCleanup(key, executionId);
   }
 
   private void completeIfNotStarted(
@@ -411,7 +422,38 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
             List.of(activeCountKey(key), pendingCompletionKey(key)),
             List.of(Long.toString(activeTtl.toMillis()), executionId))
         .next()
-        .defaultIfEmpty(0L);
+        .switchIfEmpty(Mono.error(
+            new IllegalStateException("Failed to unregister session execution")));
+  }
+
+  private void requestCleanup(SessionExecutionKey key, String executionId) {
+    CleanupKey cleanupKey = new CleanupKey(key, executionId);
+    CleanupTask cleanup = pendingCleanups.computeIfAbsent(cleanupKey, ignored -> new CleanupTask());
+    attemptCleanup(cleanupKey, cleanup);
+  }
+
+  private void retryPendingCleanups() {
+    pendingCleanups.forEach(this::attemptCleanup);
+  }
+
+  private void attemptCleanup(CleanupKey cleanupKey, CleanupTask cleanup) {
+    if (!cleanup.start()) {
+      return;
+    }
+    decrementActiveCount(cleanupKey.key(), cleanupKey.executionId())
+        .retryWhen(Retry.fixedDelay(2, pollInterval))
+        .subscribe(
+            ignored -> {
+              pendingCleanups.remove(cleanupKey, cleanup);
+              cleanup.finished();
+            },
+            error -> {
+              cleanup.finished();
+              log.warn(
+                  "Failed to unregister session execution {}; queued for retry: {}",
+                  cleanupKey.executionId(),
+                  error.toString());
+            });
   }
 
   private Mono<Long> activeCount(SessionExecutionKey key) {
@@ -470,6 +512,20 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
   private record CancellationMessage(Long userId, String sessionId) {}
 
+  private record CleanupKey(SessionExecutionKey key, String executionId) {}
+
+  private static final class CleanupTask {
+    private final AtomicBoolean inFlight = new AtomicBoolean();
+
+    boolean start() {
+      return inFlight.compareAndSet(false, true);
+    }
+
+    void finished() {
+      inFlight.set(false);
+    }
+  }
+
   private enum RegistrationState {
     PENDING,
     REGISTERED,
@@ -520,7 +576,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
     private void compensate() {
       if (compensationStarted.compareAndSet(false, true)) {
-        decrementActiveCount(key, executionId).subscribe(ignored -> {}, ignored -> {});
+        requestCleanup(key, executionId);
       }
     }
   }
