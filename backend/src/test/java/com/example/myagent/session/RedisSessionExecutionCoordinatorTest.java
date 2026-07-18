@@ -24,6 +24,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -238,6 +239,62 @@ class RedisSessionExecutionCoordinatorTest {
         .verify(Duration.ofSeconds(1));
 
     assertThat(sourceSubscribed).isFalse();
+  }
+
+  @Test
+  void cancelledRegistrationCleansUpWhenSuccessfulResponseArrivesLate() throws Exception {
+    Sinks.One<Long> registrationResponse = Sinks.one();
+    AtomicReference<String> registeredExecutionId = new AtomicReference<>();
+    CountDownLatch compensationCompleted = new CountDownLatch(1);
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          if (!script.getScriptAsString().contains("INCR")) {
+            return executeScript(invocation)
+                .doOnNext(ignored -> {
+                  if (script.getScriptAsString().contains("DECR")) {
+                    compensationCompleted.countDown();
+                  }
+                });
+          }
+          List<?> arguments = invocation.getArgument(2);
+          registeredExecutionId.set(arguments.get(1).toString());
+          executeScript(invocation).blockFirst();
+          return registrationResponse.asMono().flux();
+        });
+    Disposable subscription = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
+    String pendingKey =
+        "myagent:agent-state:session-execution:1:s_1:pending-completion";
+    String executionId = registeredExecutionId.get();
+    pendingExecutions.get(pendingKey).add("other-execution");
+    stubActiveCounter().incrementAndGet();
+
+    subscription.dispose();
+    registrationResponse.tryEmitValue(1L);
+
+    assertThat(compensationCompleted.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(pendingExecutions.get(pendingKey)).containsExactly("other-execution");
+    assertThat(stubActiveCounter()).hasValue(1L);
+    assertThat(executionId).isNotNull();
+  }
+
+  @Test
+  void cancelAndAwaitFailsClosedWhenActiveCountScriptCompletesEmpty() {
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          return script.getScriptAsString().contains("SCARD")
+                  && !script.getScriptAsString().contains("INCR")
+              ? Flux.empty()
+              : executeScript(invocation);
+        });
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("Failed to read active session executions"))
+        .verify(Duration.ofSeconds(1));
   }
 
   @Test

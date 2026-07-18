@@ -209,11 +209,20 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       SessionExecutionKey key = new SessionExecutionKey(userId, sessionId);
       String executionId = UUID.randomUUID().toString();
       long registrationDeadline = System.nanoTime() + registrationTimeoutNanos();
+      RegistrationAttempt registration = new RegistrationAttempt(key, executionId);
+      Mono<Long> registrationResult = incrementActiveCount(key, executionId)
+          .doOnNext(registration::recordResult)
+          .cache();
       return withinRegistrationWindow(
-              incrementActiveCount(key, executionId), registrationDeadline)
+              registrationResult, registrationDeadline)
+          .doOnCancel(registration::abandon)
+          .doOnError(ignored -> registration.abandon())
           .flatMapMany(activeCount -> {
             if (activeCount < 0L) {
               return Flux.error(sessionCancelled());
+            }
+            if (!registration.claim()) {
+              return Flux.error(registrationTimeout());
             }
             LocalExecution execution = register(key, executionId);
             Disposable completionSubscription = Mono.defer(completion)
@@ -411,7 +420,8 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
             List.of(activeCountKey(key), pendingCompletionKey(key)),
             List.of())
         .next()
-        .defaultIfEmpty(0L);
+        .switchIfEmpty(Mono.error(
+            new IllegalStateException("Failed to read active session executions")));
   }
 
   private String sessionPrefix(SessionExecutionKey key) {
@@ -459,6 +469,61 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   }
 
   private record CancellationMessage(Long userId, String sessionId) {}
+
+  private enum RegistrationState {
+    PENDING,
+    REGISTERED,
+    CLAIMED,
+    ABANDONED
+  }
+
+  private final class RegistrationAttempt {
+    private final SessionExecutionKey key;
+    private final String executionId;
+    private final AtomicReference<RegistrationState> state =
+        new AtomicReference<>(RegistrationState.PENDING);
+    private final AtomicBoolean compensationStarted = new AtomicBoolean();
+
+    private RegistrationAttempt(SessionExecutionKey key, String executionId) {
+      this.key = key;
+      this.executionId = executionId;
+    }
+
+    void recordResult(long activeCount) {
+      if (activeCount < 0L) {
+        return;
+      }
+      if (!state.compareAndSet(RegistrationState.PENDING, RegistrationState.REGISTERED)
+          && state.get() == RegistrationState.ABANDONED) {
+        compensate();
+      }
+    }
+
+    boolean claim() {
+      return state.compareAndSet(RegistrationState.REGISTERED, RegistrationState.CLAIMED);
+    }
+
+    void abandon() {
+      while (true) {
+        RegistrationState current = state.get();
+        if (current == RegistrationState.CLAIMED || current == RegistrationState.ABANDONED) {
+          return;
+        }
+        if (state.compareAndSet(current, RegistrationState.ABANDONED)) {
+          if (current == RegistrationState.REGISTERED) {
+            compensate();
+          }
+          return;
+        }
+      }
+    }
+
+    private void compensate() {
+      if (compensationStarted.compareAndSet(false, true)) {
+        decrementActiveCount(key, executionId).subscribe(ignored -> {}, ignored -> {});
+      }
+    }
+  }
 
   private static final class LocalExecution {
     private final AtomicBoolean cancelled = new AtomicBoolean();
