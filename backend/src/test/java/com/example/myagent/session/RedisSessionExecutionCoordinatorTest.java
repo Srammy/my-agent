@@ -7,12 +7,15 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.matches;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -156,6 +159,126 @@ class RedisSessionExecutionCoordinatorTest {
     assertThatCode(() -> RedisSessionExecutionCoordinator.class.getConstructor(
         ReactiveStringRedisTemplate.class, ObjectMapper.class))
         .doesNotThrowAnyException();
+  }
+
+  @Test
+  void runningExecutionStopsWhenCancellationMessageWasLostButMarkerExists() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(100),
+        Duration.ofMillis(5),
+        Duration.ofMillis(1),
+        Duration.ofMillis(200));
+    String cancellationKey = "myagent:session-execution:1:s_1:cancelled";
+    when(valueOperations.get(cancellationKey))
+        .thenReturn(Mono.empty(), Mono.empty(), Mono.just("1"));
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    CountDownLatch stopped = new CountDownLatch(1);
+
+    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    assertThat(stopped.await(500, TimeUnit.MILLISECONDS)).isTrue();
+  }
+
+  @Test
+  void listenerReconnectsAfterSubscriptionFailure() {
+    coordinator.destroy();
+    reset(listenerContainer);
+    when(listenerContainer.receive(any(ChannelTopic.class)))
+        .thenReturn(Flux.error(new IllegalStateException("disconnected")), messages.asFlux());
+
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        ACTIVE_TTL,
+        Duration.ofSeconds(10),
+        Duration.ofMillis(1),
+        Duration.ofMillis(100));
+
+    verify(listenerContainer, timeout(500).atLeast(2)).receive(any(ChannelTopic.class));
+  }
+
+  @Test
+  void executionStopsWhenLeaseCannotBeRenewedBeforeSafetyDeadline() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(50),
+        Duration.ofMillis(5),
+        Duration.ofMillis(1),
+        Duration.ofMillis(200));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class)))
+        .thenReturn(Mono.just(true), Mono.error(new IllegalStateException("redis unavailable")));
+    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    CountDownLatch stopped = new CountDownLatch(1);
+
+    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    assertThat(stopped.await(500, TimeUnit.MILLISECONDS)).isTrue();
+  }
+
+  @Test
+  void cancelAndAwaitTimesOutWhenCancellationMarkerWriteDoesNotComplete() {
+    when(valueOperations.set("myagent:session-execution:1:s_1:cancelled", "1"))
+        .thenReturn(Mono.never());
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .expectErrorSatisfies(this::assertCancellationTimeout)
+        .verify(Duration.ofSeconds(1));
+  }
+
+  @Test
+  void cancelAndAwaitCancelsLocalExecutionBeforePublishCompletes() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        ACTIVE_TTL,
+        Duration.ofSeconds(10),
+        Duration.ofMillis(1),
+        Duration.ofMillis(500));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(valueOperations.set(anyString(), anyString())).thenReturn(Mono.just(true));
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.never());
+    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    CountDownLatch stopped = new CountDownLatch(1);
+    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    Disposable cancellation = coordinator.cancelAndAwait(1L, "s_1").subscribe(ignored -> {}, ignored -> {});
+
+    assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    cancellation.dispose();
+  }
+
+  @Test
+  void destroyStopsLocalExecutionsAndDestroysListenerContainer() throws Exception {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    CountDownLatch stopped = new CountDownLatch(1);
+    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    coordinator.destroy();
+
+    assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    verify(listenerContainer).destroy();
+  }
+
+  private void assertCancellationTimeout(Throwable error) {
+    assertThat(error).isInstanceOfSatisfying(ResponseStatusException.class, status -> {
+      assertThat(status.getStatusCode().value()).isEqualTo(409);
+      assertThat(status.getReason()).isEqualTo("Session cancellation is still in progress");
+    });
   }
 
   private ReactiveSubscription.Message<String, String> message(String payload) {

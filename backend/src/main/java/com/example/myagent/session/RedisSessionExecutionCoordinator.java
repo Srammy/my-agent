@@ -22,6 +22,7 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.util.retry.Retry;
 
 @Service
 public class RedisSessionExecutionCoordinator implements SessionExecutionCoordinator, DisposableBean {
@@ -33,6 +34,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private static final Duration DEFAULT_WAIT_TIMEOUT = Duration.ofSeconds(5);
 
   private final ReactiveStringRedisTemplate redisTemplate;
+  private final ReactiveRedisMessageListenerContainer listenerContainer;
   private final ObjectMapper objectMapper;
   private final Duration activeTtl;
   private final Duration refreshInterval;
@@ -40,6 +42,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private final Duration waitTimeout;
   private final ConcurrentMap<SessionExecutionKey, ConcurrentMap<String, LocalExecution>> localExecutions =
       new ConcurrentHashMap<>();
+  private final AtomicBoolean destroyed = new AtomicBoolean();
   private final Disposable messageSubscription;
 
   public RedisSessionExecutionCoordinator(
@@ -64,18 +67,24 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       Duration pollInterval,
       Duration waitTimeout) {
     this.redisTemplate = redisTemplate;
+    this.listenerContainer = listenerContainer;
     this.objectMapper = objectMapper;
     this.activeTtl = activeTtl;
     this.refreshInterval = refreshInterval;
     this.pollInterval = pollInterval;
     this.waitTimeout = waitTimeout;
-    this.messageSubscription = listenerContainer.receive(ChannelTopic.of(CANCELLATION_CHANNEL))
-        .subscribe(message -> handleCancellation(message.getMessage()));
+    this.messageSubscription = Flux.defer(
+            () -> listenerContainer.receive(ChannelTopic.of(CANCELLATION_CHANNEL)))
+        .retryWhen(Retry.fixedDelay(Long.MAX_VALUE, pollInterval))
+        .subscribe(message -> handleCancellation(message.getMessage()), ignored -> {});
   }
 
   @Override
   public <T> Flux<T> track(Long userId, String sessionId, Supplier<Flux<T>> source) {
     return Flux.defer(() -> {
+      if (destroyed.get()) {
+        return Flux.error(new IllegalStateException("Session execution coordinator is closed"));
+      }
       SessionExecutionKey key = new SessionExecutionKey(userId, sessionId);
       String executionId = UUID.randomUUID().toString();
       String activeKey = key.activeKey(executionId);
@@ -87,8 +96,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
             }
             LocalExecution execution = register(key, executionId);
             execution.refreshWith(Flux.interval(refreshInterval)
-                .concatMap(ignored -> redisTemplate.opsForValue().set(activeKey, "1", activeTtl)
-                    .onErrorResume(error -> Mono.empty()))
+                .concatMap(ignored -> heartbeat(key, activeKey, execution))
                 .subscribe(ignored -> {}, ignored -> {}));
             return rejectIfCancelled(userId, sessionId)
                 .thenMany(Flux.defer(source)
@@ -102,19 +110,23 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   @Override
   public Mono<Void> cancelAndAwait(Long userId, String sessionId) {
     SessionExecutionKey key = new SessionExecutionKey(userId, sessionId);
-    final String payload;
-    try {
-      payload = objectMapper.writeValueAsString(new CancellationMessage(userId, sessionId));
-    } catch (JsonProcessingException error) {
-      return Mono.error(error);
-    }
-    return redisTemplate.opsForValue().set(key.cancellationKey(), "1")
-        .flatMap(stored -> stored
-            ? redisTemplate.convertAndSend(CANCELLATION_CHANNEL, payload)
-            : Mono.error(new IllegalStateException("Failed to record session cancellation")))
-        .doOnTerminate(() -> cancelLocal(key))
-        .doOnCancel(() -> cancelLocal(key))
-        .then(waitForNoActiveExecutions(key));
+    return Mono.defer(() -> {
+      final String payload;
+      try {
+        payload = objectMapper.writeValueAsString(new CancellationMessage(userId, sessionId));
+      } catch (JsonProcessingException error) {
+        return Mono.error(error);
+      }
+      return redisTemplate.opsForValue().set(key.cancellationKey(), "1")
+          .flatMap(stored -> {
+            if (!stored) {
+              return Mono.error(new IllegalStateException("Failed to record session cancellation"));
+            }
+            cancelLocal(key);
+            return redisTemplate.convertAndSend(CANCELLATION_CHANNEL, payload);
+          })
+          .then(waitForNoActiveExecutions(key));
+    }).timeout(waitTimeout, Mono.error(cancellationTimeout()));
   }
 
   @Override
@@ -128,7 +140,13 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
   @Override
   public void destroy() {
+    if (!destroyed.compareAndSet(false, true)) {
+      return;
+    }
     messageSubscription.dispose();
+    localExecutions.values().forEach(
+        executions -> executions.values().forEach(LocalExecution::cancel));
+    listenerContainer.destroy();
   }
 
   private LocalExecution register(SessionExecutionKey key, String executionId) {
@@ -139,6 +157,9 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       updated.put(executionId, execution);
       return updated;
     });
+    if (destroyed.get()) {
+      execution.cancel();
+    }
     return execution;
   }
 
@@ -168,14 +189,43 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
     }
   }
 
+  private Mono<Void> heartbeat(
+      SessionExecutionKey key, String activeKey, LocalExecution execution) {
+    return redisTemplate.opsForValue().get(key.cancellationKey())
+        .hasElement()
+        .onErrorReturn(false)
+        .flatMap(cancelled -> {
+          if (cancelled) {
+            execution.cancel();
+            return Mono.empty();
+          }
+          return redisTemplate.opsForValue().set(activeKey, "1", activeTtl)
+              .doOnNext(stored -> {
+                if (stored) {
+                  execution.markRenewed();
+                } else {
+                  execution.cancelIfLeaseUnsafe(activeTtl, refreshInterval);
+                }
+              })
+              .onErrorResume(error -> {
+                execution.cancelIfLeaseUnsafe(activeTtl, refreshInterval);
+                return Mono.empty();
+              })
+              .then();
+        });
+  }
+
   private Mono<Void> waitForNoActiveExecutions(SessionExecutionKey key) {
     return Flux.interval(Duration.ZERO, pollInterval)
         .concatMap(ignored -> redisTemplate.keys(key.prefix() + ":active:*").hasElements())
         .filter(hasActive -> !hasActive)
         .next()
-        .timeout(waitTimeout, Mono.error(new ResponseStatusException(
-            HttpStatus.CONFLICT, "Session cancellation is still in progress")))
         .then();
+  }
+
+  private ResponseStatusException cancellationTimeout() {
+    return new ResponseStatusException(
+        HttpStatus.CONFLICT, "Session cancellation is still in progress");
   }
 
   private record CancellationMessage(Long userId, String sessionId) {}
@@ -185,6 +235,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
     private final AtomicReference<Subscription> subscription = new AtomicReference<>();
     private final AtomicReference<Disposable> refresh = new AtomicReference<>();
     private final Sinks.Empty<Void> cancellationSignal = Sinks.empty();
+    private volatile long lastRenewedAtNanos = System.nanoTime();
 
     void attach(Subscription attached) {
       if (!subscription.compareAndSet(null, attached)) {
@@ -211,6 +262,17 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
         attached.cancel();
       }
       cancellationSignal.tryEmitEmpty();
+    }
+
+    void markRenewed() {
+      lastRenewedAtNanos = System.nanoTime();
+    }
+
+    void cancelIfLeaseUnsafe(Duration activeTtl, Duration refreshInterval) {
+      long safeWindowNanos = Math.max(0L, activeTtl.minus(refreshInterval).toNanos());
+      if (System.nanoTime() - lastRenewedAtNanos >= safeWindowNanos) {
+        cancel();
+      }
     }
 
     void disposeRefresh() {
