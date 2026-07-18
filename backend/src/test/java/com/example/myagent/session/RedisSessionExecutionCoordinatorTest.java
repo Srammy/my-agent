@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -230,12 +231,22 @@ class RedisSessionExecutionCoordinatorTest {
     AtomicBoolean cancelled = new AtomicBoolean();
     when(valueOperations.get(cancellationKey))
         .thenAnswer(ignored -> cancelled.get() ? Mono.just("1") : Mono.empty());
-    when(valueOperations.set(cancellationKey, "1", cancellationTtl))
+    Duration safeCancellationTtl = Duration.ofMillis(121);
+    when(valueOperations.set(cancellationKey, "1", safeCancellationTtl))
         .thenAnswer(ignored -> {
           cancelled.set(true);
           return Mono.just(true);
         });
     when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    AtomicInteger heartbeatCalls = new AtomicInteger();
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          if (isLeaseRefresh(script)) {
+            heartbeatCalls.incrementAndGet();
+          }
+          return executeScript(invocation);
+        });
     Sinks.Empty<Void> completion = Sinks.empty();
     coordinator.track(1L, "s_1", Flux::<Integer>never, completion::asMono).subscribe();
 
@@ -243,7 +254,66 @@ class RedisSessionExecutionCoordinatorTest {
         .expectErrorSatisfies(this::assertCancellationTimeout)
         .verify(Duration.ofSeconds(1));
 
-    verify(valueOperations, timeout(200).atLeast(2)).set(cancellationKey, "1", cancellationTtl);
+    verify(valueOperations).set(cancellationKey, "1", safeCancellationTtl);
+    assertThat(heartbeatCalls).hasValueGreaterThanOrEqualTo(2);
+    completion.tryEmitEmpty();
+  }
+
+  @Test
+  void atomicCancellationLeaseRefreshDoesNotExtendActiveCountAndRejectsNewRegistration()
+      throws Exception {
+    coordinator.destroy();
+    Duration activeTtl = Duration.ofMillis(100);
+    Duration cancellationTtl = Duration.ofMillis(80);
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        activeTtl,
+        Duration.ofMillis(5),
+        Duration.ofMillis(1),
+        Duration.ofMillis(500),
+        "myagent:agent-state:",
+        cancellationTtl);
+    String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
+    AtomicBoolean cancelled = new AtomicBoolean();
+    List<String> renewals = new CopyOnWriteArrayList<>();
+    CountDownLatch markerRenewed = new CountDownLatch(1);
+    when(valueOperations.get(cancellationKey))
+        .thenAnswer(ignored -> cancelled.get() ? Mono.just("1") : Mono.empty());
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          if (script.getScriptAsString().contains("INCR") && cancelled.get()) {
+            return Flux.just(-1L);
+          }
+          if (isLeaseRefresh(script)) {
+            List<?> arguments = invocation.getArgument(2);
+            renewals.add("atomic-cancellation:" + arguments.get(1));
+            markerRenewed.countDown();
+            return Flux.just(-1L);
+          }
+          return executeScript(invocation);
+        });
+    Sinks.Empty<Void> completion = Sinks.empty();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, completion::asMono).subscribe();
+
+    cancelled.set(true);
+    assertThat(markerRenewed.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(renewals).startsWith("atomic-cancellation:141");
+    verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
+    AtomicBoolean lateSourceSubscribed = new AtomicBoolean();
+
+    StepVerifier.create(coordinator.track(1L, "s_1", () -> {
+          lateSourceSubscribed.set(true);
+          return Flux.never();
+        }))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOfSatisfying(ResponseStatusException.class,
+                status -> assertThat(status.getStatusCode().value()).isEqualTo(409)))
+        .verify();
+    assertThat(lateSourceSubscribed).isFalse();
+    assertThat(stubActiveCounter()).hasValue(1L);
     completion.tryEmitEmpty();
   }
 
@@ -505,8 +575,8 @@ class RedisSessionExecutionCoordinatorTest {
 
     Disposable subscription = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
 
-    verify(redisTemplate, timeout(500).atLeastOnce()).expire(
-        "myagent:agent-state:session-execution:1:s_1:active-count", ACTIVE_TTL);
+    verify(redisTemplate, timeout(500).atLeast(2))
+        .execute(any(RedisScript.class), anyList(), anyList());
     subscription.dispose();
   }
 
@@ -584,8 +654,10 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(1),
         Duration.ofMillis(200));
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(redisTemplate.expire(anyString(), any(Duration.class)))
-        .thenReturn(Mono.error(new IllegalStateException("redis unavailable")));
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> isLeaseRefresh(invocation.getArgument(0))
+            ? Flux.error(new IllegalStateException("redis unavailable"))
+            : executeScript(invocation));
     CountDownLatch stopped = new CountDownLatch(1);
 
     coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
@@ -656,28 +728,6 @@ class RedisSessionExecutionCoordinatorTest {
   }
 
   @Test
-  void executionStopsBeforeLeaseExpiresWhenCancellationCheckNeverCompletes() throws Exception {
-    coordinator.destroy();
-    coordinator = new RedisSessionExecutionCoordinator(
-        redisTemplate,
-        listenerContainer,
-        new ObjectMapper(),
-        Duration.ofMillis(200),
-        Duration.ofMillis(20),
-        Duration.ofMillis(1),
-        Duration.ofMillis(300));
-    String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
-    when(valueOperations.get(cancellationKey))
-        .thenReturn(Mono.empty(), Mono.never());
-    CountDownLatch stopped = new CountDownLatch(1);
-
-    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
-
-    assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
-    assertThat(stubActiveCounter()).hasValue(1L);
-  }
-
-  @Test
   void executionStopsBeforeLeaseExpiresWhenRenewalNeverCompletes() throws Exception {
     coordinator.destroy();
     coordinator = new RedisSessionExecutionCoordinator(
@@ -689,13 +739,22 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(1),
         Duration.ofMillis(300));
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.never());
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> isLeaseRefresh(invocation.getArgument(0))
+            ? Flux.never()
+            : executeScript(invocation));
     CountDownLatch stopped = new CountDownLatch(1);
+    Sinks.Empty<Void> completion = Sinks.empty();
 
-    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+    coordinator.track(
+        1L,
+        "s_1",
+        () -> Flux.<Integer>never().doOnCancel(stopped::countDown),
+        completion::asMono).subscribe();
 
     assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
     assertThat(stubActiveCounter()).hasValue(1L);
+    completion.tryEmitEmpty();
   }
 
   @Test
@@ -745,15 +804,20 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(1),
         Duration.ofMillis(500));
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(redisTemplate.expire(anyString(), eq(activeTtl)))
-        .thenReturn(Mono.delay(Duration.ofMillis(20)).thenReturn(true));
+    CountDownLatch heartbeatRenewed = new CountDownLatch(1);
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> isLeaseRefresh(invocation.getArgument(0))
+            ? Mono.delay(Duration.ofMillis(20))
+                .thenReturn(1L)
+                .doOnNext(ignored -> heartbeatRenewed.countDown())
+                .flux()
+            : executeScript(invocation));
     CountDownLatch stopped = new CountDownLatch(1);
 
     Disposable subscription = coordinator.track(
         1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
 
-    verify(redisTemplate, timeout(500).atLeastOnce()).expire(
-        "myagent:agent-state:session-execution:1:s_1:active-count", activeTtl);
+    assertThat(heartbeatRenewed.await(500, TimeUnit.MILLISECONDS)).isTrue();
     assertThat(stopped.await(150, TimeUnit.MILLISECONDS)).isFalse();
     subscription.dispose();
   }
@@ -829,6 +893,10 @@ class RedisSessionExecutionCoordinatorTest {
       }
     }
     return Flux.just(count.get());
+  }
+
+  private boolean isLeaseRefresh(RedisScript<Long> script) {
+    return script.getScriptAsString().contains("return redis.call('PEXPIRE', KEYS[2]");
   }
 
   private ReactiveSubscription.Message<String, String> message(String payload) {

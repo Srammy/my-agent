@@ -97,6 +97,13 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       end
       return math.max(current, pending)
       """, Long.class);
+  private static final RedisScript<Long> REFRESH_EXECUTION_LEASE = RedisScript.of("""
+      if redis.call('EXISTS', KEYS[1]) == 1 then
+        redis.call('PEXPIRE', KEYS[1], ARGV[2])
+        return -1
+      end
+      return redis.call('PEXPIRE', KEYS[2], ARGV[1])
+      """, Long.class);
 
   private final ReactiveStringRedisTemplate redisTemplate;
   private final ReactiveRedisMessageListenerContainer listenerContainer;
@@ -269,7 +276,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       } catch (JsonProcessingException error) {
         return Mono.error(error);
       }
-      return redisTemplate.opsForValue().set(cancellationKey(key), "1", cancellationTtl)
+      return redisTemplate.opsForValue().set(cancellationKey(key), "1", cancellationLeaseTtl())
           .switchIfEmpty(Mono.error(
               new IllegalStateException("Failed to record session cancellation")))
           .flatMap(stored -> {
@@ -357,33 +364,22 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
   private Mono<Void> heartbeat(
       SessionExecutionKey key, LocalExecution execution) {
-    Mono<Void> operation = redisTemplate.opsForValue().get(cancellationKey(key))
-        .hasElement()
-        .flatMap(cancelled -> {
-          if (cancelled) {
+    Mono<Void> operation = redisTemplate.execute(
+            REFRESH_EXECUTION_LEASE,
+            List.of(cancellationKey(key), activeCountKey(key)),
+            List.of(
+                Long.toString(activeTtl.toMillis()),
+                Long.toString(cancellationLeaseTtl().toMillis())))
+        .next()
+        .switchIfEmpty(Mono.error(new IllegalStateException("Failed to renew execution lease")))
+        .doOnNext(result -> {
+          if (result > 0L) {
+            execution.markRenewed();
+          } else {
             execution.cancel();
           }
-          Mono<Boolean> cancellationLease = cancelled || execution.isCancelled()
-              ? redisTemplate.opsForValue().set(cancellationKey(key), "1", cancellationTtl)
-              : Mono.just(true);
-          return cancellationLease
-              .filter(Boolean::booleanValue)
-              .switchIfEmpty(Mono.error(
-                  new IllegalStateException("Failed to renew session cancellation")))
-              .then(redisTemplate.expire(activeCountKey(key), activeTtl))
-              .doOnNext(stored -> {
-                if (stored) {
-                  execution.markRenewed();
-                } else {
-                  execution.cancel();
-                }
-              })
-              .switchIfEmpty(Mono.fromSupplier(() -> {
-                execution.cancel();
-                return false;
-              }))
-              .then();
-        });
+        })
+        .then();
     return operation.timeout(heartbeatTimeout())
         .onErrorResume(error -> {
           execution.cancel();
@@ -485,6 +481,11 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private long registrationTimeoutNanos() {
     return Math.max(
         1L, Math.min(waitTimeout.toNanos(), cancellationTtl.toNanos() / 2L));
+  }
+
+  private Duration cancellationLeaseTtl() {
+    Duration minimum = activeTtl.plusNanos(registrationTimeoutNanos()).plusMillis(1L);
+    return cancellationTtl.compareTo(minimum) >= 0 ? cancellationTtl : minimum;
   }
 
   private <T> Mono<T> withinRegistrationWindow(Mono<T> operation, long deadlineNanos) {
