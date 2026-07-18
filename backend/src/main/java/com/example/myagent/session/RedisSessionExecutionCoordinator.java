@@ -122,6 +122,8 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
         return Mono.error(error);
       }
       return redisTemplate.opsForValue().set(key.cancellationKey(), "1")
+          .switchIfEmpty(Mono.error(
+              new IllegalStateException("Failed to record session cancellation")))
           .flatMap(stored -> {
             if (!stored) {
               return Mono.error(new IllegalStateException("Failed to record session cancellation"));

@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.matches;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
@@ -234,6 +235,21 @@ class RedisSessionExecutionCoordinatorTest {
     StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
         .expectErrorSatisfies(this::assertCancellationTimeout)
         .verify(Duration.ofSeconds(1));
+  }
+
+  @Test
+  void cancelAndAwaitFailsWhenCancellationMarkerWriteCompletesEmpty() {
+    when(valueOperations.set("myagent:session-execution:1:s_1:cancelled", "1"))
+        .thenReturn(Mono.empty());
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("Failed to record session cancellation"))
+        .verify(Duration.ofSeconds(1));
+
+    verify(redisTemplate, never()).convertAndSend(anyString(), anyString());
+    verify(redisTemplate, never()).keys(anyString());
   }
 
   @Test
