@@ -2,6 +2,7 @@ package com.example.myagent.chat;
 
 import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.permission.PermissionService;
+import com.example.myagent.session.SessionExecutionCoordinator;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ToolConfirmationClaim;
 import com.example.myagent.toolconfirmation.ToolConfirmationDecision;
@@ -23,16 +24,19 @@ public class ChatService {
   private final ChatAgentGateway chatAgentGateway;
   private final PermissionService permissionService;
   private final ToolConfirmationService toolConfirmationService;
+  private final SessionExecutionCoordinator sessionExecutionCoordinator;
 
   public ChatService(
       SessionService sessionService,
       ChatAgentGateway chatAgentGateway,
       PermissionService permissionService,
-      ToolConfirmationService toolConfirmationService) {
+      ToolConfirmationService toolConfirmationService,
+      SessionExecutionCoordinator sessionExecutionCoordinator) {
     this.sessionService = sessionService;
     this.chatAgentGateway = chatAgentGateway;
     this.permissionService = permissionService;
     this.toolConfirmationService = toolConfirmationService;
+    this.sessionExecutionCoordinator = sessionExecutionCoordinator;
   }
 
   public Flux<StreamEventDto> stream(CurrentUser currentUser, String sessionId, String message) {
@@ -46,7 +50,8 @@ public class ChatService {
                   permissionService.getModeForOwnedSession(sessionId));
             })
         .subscribeOn(Schedulers.boundedElastic())
-        .flatMapMany(chatAgentGateway::stream);
+        .flatMapMany(request -> sessionExecutionCoordinator.track(
+            currentUser.id(), sessionId, () -> chatAgentGateway.stream(request)));
   }
 
   public Flux<StreamEventDto> confirm(
@@ -95,11 +100,13 @@ public class ChatService {
                   .consume(confirmationId, claim.processingToken(), persisted)
                   .thenMany(
                       Flux.defer(
-                          () ->
-                              chatAgentGateway
+                          () -> sessionExecutionCoordinator.track(
+                              currentUser.id(),
+                              sessionId,
+                              () -> chatAgentGateway
                                   .confirm(request)
                                   .onErrorResume(
-                                      error -> Flux.just(StreamEventDto.error(errorMessage(error))))));
+                                      error -> Flux.just(StreamEventDto.error(errorMessage(error)))))));
             });
   }
 

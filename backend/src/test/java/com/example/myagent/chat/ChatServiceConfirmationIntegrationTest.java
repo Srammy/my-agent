@@ -10,6 +10,7 @@ import com.example.myagent.config.AgentProperties;
 import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.ChatSessionEntity;
+import com.example.myagent.session.SessionExecutionCoordinator;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ConfirmationKind;
 import com.example.myagent.toolconfirmation.ToolConfirmationService;
@@ -85,7 +86,8 @@ class ChatServiceConfirmationIntegrationTest {
             .doOnCancel(gatewayCancelled::countDown));
 
     ChatService chatService = new ChatService(
-        sessionService(), gateway, permissionService(), toolConfirmationService);
+        sessionService(), gateway, permissionService(), toolConfirmationService,
+        executionCoordinator());
     Disposable subscription = chatService.confirm(USER, SESSION_ID, confirmationId,
         List.of(new ToolConfirmationDecisionRequest("call", true))).subscribe();
 
@@ -108,5 +110,17 @@ class ChatServiceConfirmationIntegrationTest {
     PermissionService permissionService = mock(PermissionService.class);
     when(permissionService.getModeForOwnedSession(SESSION_ID)).thenReturn(PermissionMode.DEFAULT);
     return permissionService;
+  }
+
+  @SuppressWarnings("unchecked")
+  private SessionExecutionCoordinator executionCoordinator() {
+    SessionExecutionCoordinator coordinator = mock(SessionExecutionCoordinator.class);
+    when(coordinator.track(
+        org.mockito.ArgumentMatchers.anyLong(),
+        org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.any()))
+        .thenAnswer(invocation ->
+            ((java.util.function.Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());
+    return coordinator;
   }
 }

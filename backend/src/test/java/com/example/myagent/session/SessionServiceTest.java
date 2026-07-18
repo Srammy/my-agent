@@ -17,6 +17,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 @ExtendWith(MockitoExtension.class)
 class SessionServiceTest {
@@ -24,12 +26,13 @@ class SessionServiceTest {
   private static final CurrentUser USER_A = new CurrentUser(1L, "alice", "USER");
 
   @Mock private ChatSessionMapper chatSessionMapper;
+  @Mock private SessionExecutionCoordinator sessionExecutionCoordinator;
 
   private SessionService sessionService;
 
   @BeforeEach
   void setUp() {
-    sessionService = new SessionService(chatSessionMapper);
+    sessionService = new SessionService(chatSessionMapper, sessionExecutionCoordinator);
   }
 
   @Test
@@ -83,22 +86,50 @@ class SessionServiceTest {
 
   @Test
   void deleteSessionUsesCurrentUserScope() {
+    when(chatSessionMapper.findOwnedById(USER_A.id(), "s_a"))
+        .thenReturn(new ChatSessionEntity(
+            "s_a", USER_A.id(), "Alice session", LocalDateTime.now(), LocalDateTime.now()));
+    when(sessionExecutionCoordinator.cancelAndAwait(USER_A.id(), "s_a"))
+        .thenReturn(Mono.empty());
     when(chatSessionMapper.deleteOwnedById(USER_A.id(), "s_a")).thenReturn(1);
 
-    sessionService.deleteSession(USER_A, "s_a");
+    sessionService.deleteSession(USER_A, "s_a").block();
 
+    verify(sessionExecutionCoordinator).cancelAndAwait(USER_A.id(), "s_a");
     verify(chatSessionMapper).deleteOwnedById(USER_A.id(), "s_a");
   }
 
   @Test
   void deleteSessionRejectsOtherUsersSession() {
-    when(chatSessionMapper.deleteOwnedById(USER_A.id(), "s_b")).thenReturn(0);
+    when(chatSessionMapper.findOwnedById(USER_A.id(), "s_b")).thenReturn(null);
 
-    assertThatThrownBy(() -> sessionService.deleteSession(USER_A, "s_b"))
+    assertThatThrownBy(() -> sessionService.deleteSession(USER_A, "s_b").block())
         .isInstanceOf(ResponseStatusException.class)
         .satisfies(
             error ->
                 assertThat(((ResponseStatusException) error).getStatusCode())
                     .isEqualTo(HttpStatus.NOT_FOUND));
+    verify(sessionExecutionCoordinator, org.mockito.Mockito.never())
+        .cancelAndAwait(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString());
+    verify(chatSessionMapper, org.mockito.Mockito.never())
+        .deleteOwnedById(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString());
+  }
+
+  @Test
+  void deleteSessionDoesNotDeleteBeforeCancellationCompletes() {
+    when(chatSessionMapper.findOwnedById(USER_A.id(), "s_a"))
+        .thenReturn(new ChatSessionEntity(
+            "s_a", USER_A.id(), "Alice session", LocalDateTime.now(), LocalDateTime.now()));
+    when(sessionExecutionCoordinator.cancelAndAwait(USER_A.id(), "s_a"))
+        .thenReturn(Mono.never());
+
+    StepVerifier.create(sessionService.deleteSession(USER_A, "s_a"))
+        .then(() -> verify(sessionExecutionCoordinator, org.mockito.Mockito.timeout(1000))
+            .cancelAndAwait(USER_A.id(), "s_a"))
+        .thenCancel()
+        .verify();
+
+    verify(chatSessionMapper, org.mockito.Mockito.never())
+        .deleteOwnedById(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString());
   }
 }

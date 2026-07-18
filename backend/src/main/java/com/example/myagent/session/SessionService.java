@@ -8,6 +8,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 @Service
 public class SessionService {
@@ -16,9 +18,13 @@ public class SessionService {
   private static final int TITLE_MAX_LENGTH = 120;
 
   private final ChatSessionMapper chatSessionMapper;
+  private final SessionExecutionCoordinator sessionExecutionCoordinator;
 
-  public SessionService(ChatSessionMapper chatSessionMapper) {
+  public SessionService(
+      ChatSessionMapper chatSessionMapper,
+      SessionExecutionCoordinator sessionExecutionCoordinator) {
     this.chatSessionMapper = chatSessionMapper;
+    this.sessionExecutionCoordinator = sessionExecutionCoordinator;
   }
 
   public ChatSessionEntity createSession(CurrentUser currentUser, String title) {
@@ -45,11 +51,21 @@ public class SessionService {
     return session;
   }
 
-  public void deleteSession(CurrentUser currentUser, String sessionId) {
-    int deleted = chatSessionMapper.deleteOwnedById(currentUser.id(), sessionId);
-    if (deleted == 0) {
-      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found");
-    }
+  public Mono<Void> deleteSession(CurrentUser currentUser, String sessionId) {
+    return Mono.fromCallable(() -> requireOwnedSession(currentUser, sessionId))
+        .subscribeOn(Schedulers.boundedElastic())
+        .then(Mono.defer(
+            () -> sessionExecutionCoordinator.cancelAndAwait(currentUser.id(), sessionId)))
+        .then(Mono.fromCallable(
+                () -> {
+                  int deleted = chatSessionMapper.deleteOwnedById(currentUser.id(), sessionId);
+                  if (deleted == 0) {
+                    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found");
+                  }
+                  return deleted;
+                })
+            .subscribeOn(Schedulers.boundedElastic()))
+        .then();
   }
 
   private String normalizeTitle(String title) {
