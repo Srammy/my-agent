@@ -3,9 +3,9 @@ package com.example.myagent.session;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.matches;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -15,9 +15,13 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +33,7 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.ReactiveValueOperations;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.ReactiveRedisMessageListenerContainer;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -39,19 +44,41 @@ import reactor.test.StepVerifier;
 @ExtendWith(MockitoExtension.class)
 class RedisSessionExecutionCoordinatorTest {
   private static final Duration ACTIVE_TTL = Duration.ofSeconds(30);
+  private static final Duration CANCELLATION_TTL = Duration.ofSeconds(45);
 
   @Mock private ReactiveStringRedisTemplate redisTemplate;
   @Mock private ReactiveValueOperations<String, String> valueOperations;
   @Mock private ReactiveRedisMessageListenerContainer listenerContainer;
 
   private Sinks.Many<ReactiveSubscription.Message<String, String>> messages;
+  private Map<String, AtomicLong> activeCounts;
   private RedisSessionExecutionCoordinator coordinator;
 
   @BeforeEach
   void setUp() {
     messages = Sinks.many().multicast().onBackpressureBuffer();
+    activeCounts = new ConcurrentHashMap<>();
     lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+    lenient().when(valueOperations.set(anyString(), anyString(), any(Duration.class)))
+        .thenReturn(Mono.just(true));
     when(listenerContainer.receive(any(ChannelTopic.class))).thenReturn(messages.asFlux());
+    lenient().when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          List<String> keys = invocation.getArgument(1);
+          AtomicLong count = activeCounts.computeIfAbsent(keys.getFirst(), ignored -> new AtomicLong());
+          long updated;
+          if (script.getScriptAsString().contains("INCR")) {
+            updated = count.incrementAndGet();
+          } else if (script.getScriptAsString().contains("DECR")) {
+            updated = count.updateAndGet(current -> Math.max(0L, current - 1L));
+          } else {
+            updated = count.get();
+          }
+          return Flux.just(updated);
+        });
+    lenient().when(redisTemplate.expire(anyString(), any(Duration.class)))
+        .thenReturn(Mono.just(true));
 
     coordinator = new RedisSessionExecutionCoordinator(
         redisTemplate,
@@ -60,7 +87,9 @@ class RedisSessionExecutionCoordinatorTest {
         ACTIVE_TTL,
         Duration.ofSeconds(10),
         Duration.ofMillis(1),
-        Duration.ofMillis(100));
+        Duration.ofMillis(100),
+        "myagent:agent-state:",
+        CANCELLATION_TTL);
   }
 
   @AfterEach
@@ -69,33 +98,111 @@ class RedisSessionExecutionCoordinatorTest {
   }
 
   @Test
-  void cancelAndAwaitCancelsLocalExecutionAndWaitsForCleanup() {
+  void cancelWaitsForExecutionCompletionInsteadOfSubscriptionCancellation() {
+    AtomicLong activeCount = stubActiveCounter();
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(valueOperations.set(anyString(), anyString())).thenReturn(Mono.just(true));
     when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
     when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
-    when(redisTemplate.keys(anyString())).thenReturn(Flux.empty());
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
     Sinks.Many<Integer> source = Sinks.many().unicast().onBackpressureBuffer();
-    Disposable subscription = coordinator.track(1L, "s_1", () -> source.asFlux()).subscribe();
+    Sinks.Empty<Void> actualCompletion = Sinks.empty();
+    Disposable execution = coordinator
+        .track(1L, "s_1", source::asFlux, actualCompletion::asMono)
+        .subscribe();
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .thenAwait(Duration.ofMillis(20))
+        .expectNoEvent(Duration.ofMillis(20))
+        .then(() -> {
+          assertThat(execution.isDisposed()).isTrue();
+          assertThat(activeCount).hasValue(1L);
+          actualCompletion.tryEmitEmpty();
+        })
+        .verifyComplete();
+
+    assertThat(activeCount).hasValue(0L);
+    verify(redisTemplate).convertAndSend(eq("myagent:session-execution:cancel"), anyString());
+    verify(redisTemplate, never()).keys(anyString());
+  }
+
+  @Test
+  void cancellationMarkerExpiresAfterConfiguredTtl() {
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
 
     coordinator.cancelAndAwait(1L, "s_1").block();
 
-    assertThat(subscription.isDisposed()).isTrue();
     verify(valueOperations).set(
-        matches("myagent:session-execution:1:s_1:active:.+"), eq("1"), eq(ACTIVE_TTL));
-    verify(redisTemplate).delete(matches("myagent:session-execution:1:s_1:active:.+"));
-    verify(redisTemplate).convertAndSend(eq("myagent:session-execution:cancel"), anyString());
+        "myagent:agent-state:session-execution:1:s_1:cancelled", "1", CANCELLATION_TTL);
+  }
+
+  @Test
+  void activeExecutionRenewsCancellationMarkerUntilCompletion() {
+    coordinator.destroy();
+    Duration cancellationTtl = Duration.ofMillis(40);
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(100),
+        Duration.ofMillis(5),
+        Duration.ofMillis(1),
+        Duration.ofMillis(80),
+        "myagent:agent-state:",
+        cancellationTtl);
+    String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
+    AtomicBoolean cancelled = new AtomicBoolean();
+    when(valueOperations.get(cancellationKey))
+        .thenAnswer(ignored -> cancelled.get() ? Mono.just("1") : Mono.empty());
+    when(valueOperations.set(cancellationKey, "1", cancellationTtl))
+        .thenAnswer(ignored -> {
+          cancelled.set(true);
+          return Mono.just(true);
+        });
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    Sinks.Empty<Void> completion = Sinks.empty();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, completion::asMono).subscribe();
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .expectErrorSatisfies(this::assertCancellationTimeout)
+        .verify(Duration.ofSeconds(1));
+
+    verify(valueOperations, timeout(200).atLeast(2)).set(cancellationKey, "1", cancellationTtl);
+    completion.tryEmitEmpty();
+  }
+
+  @Test
+  void differentUsersWithSameSessionIdHaveIndependentCounters() {
+    AtomicLong userOneCount = new AtomicLong();
+    AtomicLong userTwoCount = new AtomicLong();
+    stubActiveCountersByUser(userOneCount, userTwoCount);
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    Sinks.Empty<Void> userOneCompletion = Sinks.empty();
+    Sinks.Empty<Void> userTwoCompletion = Sinks.empty();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, userOneCompletion::asMono).subscribe();
+    Disposable userTwo = coordinator
+        .track(2L, "s_1", Flux::<Integer>never, userTwoCompletion::asMono)
+        .subscribe();
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .then(() -> userOneCompletion.tryEmitEmpty())
+        .verifyComplete();
+
+    assertThat(userOneCount).hasValue(0L);
+    assertThat(userTwoCount).hasValue(1L);
+    assertThat(userTwo.isDisposed()).isFalse();
+    userTwo.dispose();
+    userTwoCompletion.tryEmitEmpty();
   }
 
   @Test
   void trackRejectsExecutionAfterCancellationWasRecorded() {
-    when(valueOperations.set(anyString(), anyString())).thenReturn(Mono.just(true));
     when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
     when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
-    when(redisTemplate.keys(anyString())).thenReturn(Flux.empty());
     coordinator.cancelAndAwait(1L, "s_1").block();
-    when(valueOperations.get("myagent:session-execution:1:s_1:cancelled")).thenReturn(Mono.just("1"));
+    when(valueOperations.get("myagent:agent-state:session-execution:1:s_1:cancelled"))
+        .thenReturn(Mono.just("1"));
 
     StepVerifier.create(coordinator.track(1L, "s_1", () -> Flux.just("unexpected")))
         .expectErrorSatisfies(error -> assertThat(error)
@@ -107,8 +214,6 @@ class RedisSessionExecutionCoordinatorTest {
   @Test
   void cancellationMessageCancelsOnlyExactlyMatchingLocalExecution() {
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
     Disposable matching = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
     Disposable differentSession = coordinator.track(1L, "s_2", Flux::<Integer>never).subscribe();
 
@@ -131,21 +236,19 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(1),
         Duration.ofMillis(100));
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
 
     Disposable subscription = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
 
-    verify(valueOperations, timeout(500).atLeast(2)).set(
-        matches("myagent:session-execution:1:s_1:active:.+"), eq("1"), eq(ACTIVE_TTL));
+    verify(redisTemplate, timeout(500).atLeastOnce()).expire(
+        "myagent:agent-state:session-execution:1:s_1:active-count", ACTIVE_TTL);
     subscription.dispose();
   }
 
   @Test
   void cancelAndAwaitFailsWithConflictWhenActiveExecutionDoesNotDisappear() {
-    when(valueOperations.set(anyString(), anyString())).thenReturn(Mono.just(true));
+    stubActiveCounter().set(1L);
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
     when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
-    when(redisTemplate.keys(anyString())).thenReturn(Flux.just("still-active"));
 
     StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
         .expectErrorSatisfies(error -> assertThat(error)
@@ -174,11 +277,9 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(5),
         Duration.ofMillis(1),
         Duration.ofMillis(200));
-    String cancellationKey = "myagent:session-execution:1:s_1:cancelled";
+    String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
     when(valueOperations.get(cancellationKey))
         .thenReturn(Mono.empty(), Mono.empty(), Mono.just("1"));
-    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
     CountDownLatch stopped = new CountDownLatch(1);
 
     coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
@@ -217,9 +318,8 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(1),
         Duration.ofMillis(200));
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(valueOperations.set(anyString(), anyString(), any(Duration.class)))
-        .thenReturn(Mono.just(true), Mono.error(new IllegalStateException("redis unavailable")));
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    when(redisTemplate.expire(anyString(), any(Duration.class)))
+        .thenReturn(Mono.error(new IllegalStateException("redis unavailable")));
     CountDownLatch stopped = new CountDownLatch(1);
 
     coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
@@ -229,7 +329,8 @@ class RedisSessionExecutionCoordinatorTest {
 
   @Test
   void cancelAndAwaitTimesOutWhenCancellationMarkerWriteDoesNotComplete() {
-    when(valueOperations.set("myagent:session-execution:1:s_1:cancelled", "1"))
+    when(valueOperations.set(
+        "myagent:agent-state:session-execution:1:s_1:cancelled", "1", CANCELLATION_TTL))
         .thenReturn(Mono.never());
 
     StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
@@ -239,7 +340,8 @@ class RedisSessionExecutionCoordinatorTest {
 
   @Test
   void cancelAndAwaitFailsWhenCancellationMarkerWriteCompletesEmpty() {
-    when(valueOperations.set("myagent:session-execution:1:s_1:cancelled", "1"))
+    when(valueOperations.set(
+        "myagent:agent-state:session-execution:1:s_1:cancelled", "1", CANCELLATION_TTL))
         .thenReturn(Mono.empty());
 
     StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
@@ -265,9 +367,7 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(500));
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
     when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
-    when(valueOperations.set(anyString(), anyString())).thenReturn(Mono.just(true));
     when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.never());
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
     CountDownLatch stopped = new CountDownLatch(1);
     coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
 
@@ -280,8 +380,6 @@ class RedisSessionExecutionCoordinatorTest {
   @Test
   void destroyStopsLocalExecutionsAndDestroysListenerContainer() throws Exception {
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
     CountDownLatch stopped = new CountDownLatch(1);
     coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
 
@@ -302,18 +400,15 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(20),
         Duration.ofMillis(1),
         Duration.ofMillis(300));
-    String cancellationKey = "myagent:session-execution:1:s_1:cancelled";
+    String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
     when(valueOperations.get(cancellationKey))
         .thenReturn(Mono.empty(), Mono.empty(), Mono.never());
-    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
     CountDownLatch stopped = new CountDownLatch(1);
 
     coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
 
     assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
-    verify(redisTemplate, timeout(200)).delete(
-        matches("myagent:session-execution:1:s_1:active:.+"));
+    assertThat(stubActiveCounter()).hasValue(1L);
   }
 
   @Test
@@ -328,24 +423,19 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(1),
         Duration.ofMillis(300));
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(valueOperations.set(anyString(), anyString(), any(Duration.class)))
-        .thenReturn(Mono.just(true), Mono.never());
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.never());
     CountDownLatch stopped = new CountDownLatch(1);
 
     coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
 
     assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
-    verify(redisTemplate, timeout(200)).delete(
-        matches("myagent:session-execution:1:s_1:active:.+"));
+    assertThat(stubActiveCounter()).hasValue(1L);
   }
 
   @Test
   void destroyStopsExecutionWhileSecondCancellationCheckIsPending() throws Exception {
-    String cancellationKey = "myagent:session-execution:1:s_1:cancelled";
+    String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
     when(valueOperations.get(cancellationKey)).thenReturn(Mono.empty(), Mono.never());
-    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
     AtomicBoolean sourceSubscribed = new AtomicBoolean();
     CountDownLatch terminated = new CountDownLatch(1);
     coordinator.track(1L, "s_1", () -> {
@@ -359,15 +449,12 @@ class RedisSessionExecutionCoordinatorTest {
 
     assertThat(terminated.await(200, TimeUnit.MILLISECONDS)).isTrue();
     assertThat(sourceSubscribed).isFalse();
-    verify(redisTemplate, timeout(200)).delete(
-        matches("myagent:session-execution:1:s_1:active:.+"));
+    assertThat(stubActiveCounter()).hasValue(0L);
   }
 
   @Test
   void cancellationMessageDoesNotCancelSameSessionOwnedByDifferentUser() {
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
     Disposable matching = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
     Disposable differentUser = coordinator.track(2L, "s_1", Flux::<Integer>never).subscribe();
 
@@ -392,16 +479,15 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(1),
         Duration.ofMillis(500));
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
-    when(valueOperations.set(anyString(), anyString(), eq(activeTtl)))
-        .thenReturn(Mono.just(true), Mono.delay(Duration.ofMillis(20)).thenReturn(true));
-    when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+    when(redisTemplate.expire(anyString(), eq(activeTtl)))
+        .thenReturn(Mono.delay(Duration.ofMillis(20)).thenReturn(true));
     CountDownLatch stopped = new CountDownLatch(1);
 
     Disposable subscription = coordinator.track(
         1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
 
-    verify(valueOperations, timeout(500).atLeast(2)).set(
-        matches("myagent:session-execution:1:s_1:active:.+"), eq("1"), eq(activeTtl));
+    verify(redisTemplate, timeout(500).atLeastOnce()).expire(
+        "myagent:agent-state:session-execution:1:s_1:active-count", activeTtl);
     assertThat(stopped.await(150, TimeUnit.MILLISECONDS)).isFalse();
     subscription.dispose();
   }
@@ -411,6 +497,19 @@ class RedisSessionExecutionCoordinatorTest {
       assertThat(status.getStatusCode().value()).isEqualTo(409);
       assertThat(status.getReason()).isEqualTo("Session cancellation is still in progress");
     });
+  }
+
+  private AtomicLong stubActiveCounter() {
+    return activeCounts.computeIfAbsent(
+        "myagent:agent-state:session-execution:1:s_1:active-count",
+        ignored -> new AtomicLong());
+  }
+
+  private void stubActiveCountersByUser(AtomicLong userOneCount, AtomicLong userTwoCount) {
+    activeCounts.put(
+        "myagent:agent-state:session-execution:1:s_1:active-count", userOneCount);
+    activeCounts.put(
+        "myagent:agent-state:session-execution:2:s_1:active-count", userTwoCount);
   }
 
   private ReactiveSubscription.Message<String, String> message(String payload) {

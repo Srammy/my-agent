@@ -1,8 +1,10 @@
 package com.example.myagent.session;
 
+import com.example.myagent.config.AgentProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -11,8 +13,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.reactivestreams.Subscription;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.ReactiveRedisMessageListenerContainer;
 import org.springframework.http.HttpStatus;
@@ -33,6 +37,26 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private static final Duration DEFAULT_REFRESH_INTERVAL = Duration.ofSeconds(10);
   private static final Duration DEFAULT_POLL_INTERVAL = Duration.ofMillis(100);
   private static final Duration DEFAULT_WAIT_TIMEOUT = Duration.ofSeconds(5);
+  private static final Duration DEFAULT_CANCELLATION_TTL = Duration.ofSeconds(30);
+  private static final String DEFAULT_KEY_PREFIX = "myagent:agent-state:";
+  private static final RedisScript<Long> INCREMENT_ACTIVE_COUNT = RedisScript.of("""
+      local value = redis.call('INCR', KEYS[1])
+      redis.call('PEXPIRE', KEYS[1], ARGV[1])
+      return value
+      """, Long.class);
+  private static final RedisScript<Long> DECREMENT_ACTIVE_COUNT = RedisScript.of("""
+      local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+      if current <= 1 then
+        redis.call('DEL', KEYS[1])
+        return 0
+      end
+      local value = redis.call('DECR', KEYS[1])
+      redis.call('PEXPIRE', KEYS[1], ARGV[1])
+      return value
+      """, Long.class);
+  private static final RedisScript<Long> READ_ACTIVE_COUNT = RedisScript.of("""
+      return tonumber(redis.call('GET', KEYS[1]) or '0')
+      """, Long.class);
 
   private final ReactiveStringRedisTemplate redisTemplate;
   private final ReactiveRedisMessageListenerContainer listenerContainer;
@@ -41,6 +65,8 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private final Duration refreshInterval;
   private final Duration pollInterval;
   private final Duration waitTimeout;
+  private final String keyPrefix;
+  private final Duration cancellationTtl;
   private final ConcurrentMap<SessionExecutionKey, ConcurrentMap<String, LocalExecution>> localExecutions =
       new ConcurrentHashMap<>();
   private final AtomicBoolean destroyed = new AtomicBoolean();
@@ -56,7 +82,26 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
         DEFAULT_ACTIVE_TTL,
         DEFAULT_REFRESH_INTERVAL,
         DEFAULT_POLL_INTERVAL,
-        DEFAULT_WAIT_TIMEOUT);
+        DEFAULT_WAIT_TIMEOUT,
+        DEFAULT_KEY_PREFIX,
+        DEFAULT_CANCELLATION_TTL);
+  }
+
+  @Autowired
+  RedisSessionExecutionCoordinator(
+      ReactiveStringRedisTemplate redisTemplate,
+      ObjectMapper objectMapper,
+      AgentProperties agentProperties) {
+    this(
+        redisTemplate,
+        new ReactiveRedisMessageListenerContainer(redisTemplate.getConnectionFactory()),
+        objectMapper,
+        DEFAULT_ACTIVE_TTL,
+        DEFAULT_REFRESH_INTERVAL,
+        DEFAULT_POLL_INTERVAL,
+        DEFAULT_WAIT_TIMEOUT,
+        agentProperties.stateStore().redis().keyPrefix(),
+        DEFAULT_CANCELLATION_TTL);
   }
 
   RedisSessionExecutionCoordinator(
@@ -67,6 +112,28 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       Duration refreshInterval,
       Duration pollInterval,
       Duration waitTimeout) {
+    this(
+        redisTemplate,
+        listenerContainer,
+        objectMapper,
+        activeTtl,
+        refreshInterval,
+        pollInterval,
+        waitTimeout,
+        DEFAULT_KEY_PREFIX,
+        DEFAULT_CANCELLATION_TTL);
+  }
+
+  RedisSessionExecutionCoordinator(
+      ReactiveStringRedisTemplate redisTemplate,
+      ReactiveRedisMessageListenerContainer listenerContainer,
+      ObjectMapper objectMapper,
+      Duration activeTtl,
+      Duration refreshInterval,
+      Duration pollInterval,
+      Duration waitTimeout,
+      String keyPrefix,
+      Duration cancellationTtl) {
     this.redisTemplate = redisTemplate;
     this.listenerContainer = listenerContainer;
     this.objectMapper = objectMapper;
@@ -74,6 +141,8 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
     this.refreshInterval = refreshInterval;
     this.pollInterval = pollInterval;
     this.waitTimeout = waitTimeout;
+    this.keyPrefix = keyPrefix;
+    this.cancellationTtl = cancellationTtl;
     this.messageSubscription = Flux.defer(
             () -> listenerContainer.receive(ChannelTopic.of(CANCELLATION_CHANNEL)))
         .retryWhen(Retry.fixedDelay(Long.MAX_VALUE, pollInterval))
@@ -82,22 +151,38 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
   @Override
   public <T> Flux<T> track(Long userId, String sessionId, Supplier<Flux<T>> source) {
+    Sinks.Empty<Void> completion = Sinks.empty();
+    Supplier<Flux<T>> completionAwareSource = () -> Flux.defer(source)
+        .doOnComplete(() -> completion.tryEmitEmpty())
+        .doOnError(ignored -> completion.tryEmitEmpty());
+    return track(userId, sessionId, completionAwareSource, completion::asMono);
+  }
+
+  @Override
+  public <T> Flux<T> track(
+      Long userId,
+      String sessionId,
+      Supplier<Flux<T>> source,
+      Supplier<Mono<Void>> completion) {
     return Flux.defer(() -> {
       if (destroyed.get()) {
         return Flux.error(new IllegalStateException("Session execution coordinator is closed"));
       }
       SessionExecutionKey key = new SessionExecutionKey(userId, sessionId);
       String executionId = UUID.randomUUID().toString();
-      String activeKey = key.activeKey(executionId);
       return rejectIfCancelled(userId, sessionId)
-          .then(redisTemplate.opsForValue().set(activeKey, "1", activeTtl))
-          .flatMapMany(stored -> {
-            if (!stored) {
-              return Flux.error(new IllegalStateException("Failed to register session execution"));
-            }
+          .then(incrementActiveCount(key))
+          .flatMapMany(activeCount -> {
             LocalExecution execution = register(key, executionId);
+            Disposable completionSubscription = Mono.defer(completion)
+                .doFinally(signal -> complete(key, executionId, execution))
+                .subscribe(ignoredCompletion -> {}, ignoredError -> {});
+            execution.completionWith(completionSubscription);
+            if (execution.isComplete()) {
+              return Flux.empty();
+            }
             Disposable heartbeat = Flux.interval(refreshInterval)
-                .concatMap(ignored -> heartbeat(key, activeKey, execution))
+                .concatMap(tick -> heartbeat(key, execution))
                 .subscribe(ignored -> {}, ignored -> {});
             Disposable watchdog = Flux.interval(refreshInterval)
                 .subscribe(ignored -> execution.cancelIfLeaseUnsafe(activeTtl, refreshInterval));
@@ -105,8 +190,9 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
             return rejectIfCancelled(userId, sessionId)
                 .thenMany(Flux.defer(source)
                     .doOnSubscribe(execution::attach))
-                .takeUntilOther(execution.cancelled())
-                .doFinally(ignored -> cleanup(key, executionId, activeKey, execution));
+                .doOnError(error -> completeIfNotStarted(key, executionId, execution))
+                .doOnCancel(() -> completeIfNotStarted(key, executionId, execution))
+                .takeUntilOther(execution.cancelled());
           });
     });
   }
@@ -121,7 +207,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       } catch (JsonProcessingException error) {
         return Mono.error(error);
       }
-      return redisTemplate.opsForValue().set(key.cancellationKey(), "1")
+      return redisTemplate.opsForValue().set(cancellationKey(key), "1", cancellationTtl)
           .switchIfEmpty(Mono.error(
               new IllegalStateException("Failed to record session cancellation")))
           .flatMap(stored -> {
@@ -138,7 +224,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   @Override
   public Mono<Void> rejectIfCancelled(Long userId, String sessionId) {
     SessionExecutionKey key = new SessionExecutionKey(userId, sessionId);
-    return redisTemplate.opsForValue().get(key.cancellationKey())
+    return redisTemplate.opsForValue().get(cancellationKey(key))
         .flatMap(ignored -> Mono.error(new ResponseStatusException(
             HttpStatus.CONFLICT, "Session is being cancelled")))
         .then();
@@ -151,7 +237,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
     }
     messageSubscription.dispose();
     localExecutions.values().forEach(
-        executions -> executions.values().forEach(LocalExecution::cancel));
+        executions -> executions.values().forEach(LocalExecution::shutdown));
     listenerContainer.destroy();
   }
 
@@ -169,14 +255,24 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
     return execution;
   }
 
-  private void cleanup(
-      SessionExecutionKey key, String executionId, String activeKey, LocalExecution execution) {
+  private void complete(
+      SessionExecutionKey key, String executionId, LocalExecution execution) {
+    if (!execution.markComplete()) {
+      return;
+    }
     execution.disposeRefresh();
     localExecutions.computeIfPresent(key, (ignored, executions) -> {
       executions.remove(executionId, execution);
       return executions.isEmpty() ? null : executions;
     });
-    redisTemplate.delete(activeKey).subscribe(ignored -> {}, ignored -> {});
+    decrementActiveCount(key).subscribe(ignored -> {}, ignored -> {});
+  }
+
+  private void completeIfNotStarted(
+      SessionExecutionKey key, String executionId, LocalExecution execution) {
+    if (!execution.hasStarted()) {
+      complete(key, executionId, execution);
+    }
   }
 
   private void cancelLocal(SessionExecutionKey key) {
@@ -196,15 +292,21 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   }
 
   private Mono<Void> heartbeat(
-      SessionExecutionKey key, String activeKey, LocalExecution execution) {
-    Mono<Void> operation = redisTemplate.opsForValue().get(key.cancellationKey())
+      SessionExecutionKey key, LocalExecution execution) {
+    Mono<Void> operation = redisTemplate.opsForValue().get(cancellationKey(key))
         .hasElement()
         .flatMap(cancelled -> {
           if (cancelled) {
             execution.cancel();
-            return Mono.empty();
           }
-          return redisTemplate.opsForValue().set(activeKey, "1", activeTtl)
+          Mono<Boolean> cancellationLease = cancelled || execution.isCancelled()
+              ? redisTemplate.opsForValue().set(cancellationKey(key), "1", cancellationTtl)
+              : Mono.just(true);
+          return cancellationLease
+              .filter(Boolean::booleanValue)
+              .switchIfEmpty(Mono.error(
+                  new IllegalStateException("Failed to renew session cancellation")))
+              .then(redisTemplate.expire(activeCountKey(key), activeTtl))
               .doOnNext(stored -> {
                 if (stored) {
                   execution.markRenewed();
@@ -234,10 +336,50 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
   private Mono<Void> waitForNoActiveExecutions(SessionExecutionKey key) {
     return Flux.interval(Duration.ZERO, pollInterval)
-        .concatMap(ignored -> redisTemplate.keys(key.prefix() + ":active:*").hasElements())
-        .filter(hasActive -> !hasActive)
+        .concatMap(ignored -> activeCount(key))
+        .filter(count -> count == 0L)
         .next()
         .then();
+  }
+
+  private Mono<Long> incrementActiveCount(SessionExecutionKey key) {
+    return redisTemplate.execute(
+            INCREMENT_ACTIVE_COUNT,
+            List.of(activeCountKey(key)),
+            List.of(Long.toString(activeTtl.toMillis())))
+        .next()
+        .switchIfEmpty(Mono.error(
+            new IllegalStateException("Failed to register session execution")));
+  }
+
+  private Mono<Long> decrementActiveCount(SessionExecutionKey key) {
+    return redisTemplate.execute(
+            DECREMENT_ACTIVE_COUNT,
+            List.of(activeCountKey(key)),
+            List.of(Long.toString(activeTtl.toMillis())))
+        .next()
+        .defaultIfEmpty(0L);
+  }
+
+  private Mono<Long> activeCount(SessionExecutionKey key) {
+    return redisTemplate.execute(
+            READ_ACTIVE_COUNT,
+            List.of(activeCountKey(key)),
+            List.of())
+        .next()
+        .defaultIfEmpty(0L);
+  }
+
+  private String sessionPrefix(SessionExecutionKey key) {
+    return keyPrefix + "session-execution:" + key.userId() + ":" + key.sessionId();
+  }
+
+  private String cancellationKey(SessionExecutionKey key) {
+    return sessionPrefix(key) + ":cancelled";
+  }
+
+  private String activeCountKey(SessionExecutionKey key) {
+    return sessionPrefix(key) + ":active-count";
   }
 
   private ResponseStatusException cancellationTimeout() {
@@ -249,8 +391,10 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
   private static final class LocalExecution {
     private final AtomicBoolean cancelled = new AtomicBoolean();
+    private final AtomicBoolean complete = new AtomicBoolean();
     private final AtomicReference<Subscription> subscription = new AtomicReference<>();
     private final Disposable.Composite refresh = Disposables.composite();
+    private final AtomicReference<Disposable> completion = new AtomicReference<>();
     private final Sinks.Empty<Void> cancellationSignal = Sinks.empty();
     private volatile long lastRenewedAtNanos = System.nanoTime();
 
@@ -262,12 +406,37 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       if (cancelled.get()) {
         attached.cancel();
       }
+      if (complete.get()) {
+        attached.cancel();
+      }
     }
 
     void refreshWith(Disposable... disposables) {
       for (Disposable disposable : disposables) {
         refresh.add(disposable);
       }
+    }
+
+    void completionWith(Disposable disposable) {
+      if (!completion.compareAndSet(null, disposable)) {
+        disposable.dispose();
+      }
+    }
+
+    boolean markComplete() {
+      return complete.compareAndSet(false, true);
+    }
+
+    boolean isComplete() {
+      return complete.get();
+    }
+
+    boolean hasStarted() {
+      return subscription.get() != null;
+    }
+
+    boolean isCancelled() {
+      return cancelled.get();
     }
 
     Mono<Void> cancelled() {
@@ -297,6 +466,11 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
     void disposeRefresh() {
       refresh.dispose();
+    }
+
+    void shutdown() {
+      cancel();
+      disposeRefresh();
     }
   }
 }
