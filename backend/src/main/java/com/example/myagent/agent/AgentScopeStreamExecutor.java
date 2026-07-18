@@ -12,9 +12,14 @@ public interface AgentScopeStreamExecutor {
    */
   Flux<Object> stream(ChatAgentRequest request, Object runtimeContext);
 
+  AgentExecution<Object> streamExecution(ChatAgentRequest request, Object runtimeContext);
+
   /**
    * Returns the raw AgentScope recovery event stream with the same event contract as
    * {@link #stream(ChatAgentRequest, Object)}.
    */
   Flux<Object> confirm(ChatToolConfirmationRequest request, Object runtimeContext);
+
+  AgentExecution<Object> confirmExecution(
+      ChatToolConfirmationRequest request, Object runtimeContext);
 }

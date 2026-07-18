@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.myagent.agent.AgentExecution;
 import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.permission.PermissionService;
@@ -31,6 +32,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+import reactor.test.StepVerifier;
 
 @ExtendWith(MockitoExtension.class)
 class ChatServiceTest {
@@ -75,6 +78,7 @@ class ChatServiceTest {
     verify(sessionExecutionCoordinator).track(
         org.mockito.ArgumentMatchers.eq(USER.id()),
         org.mockito.ArgumentMatchers.eq("s_123"),
+        org.mockito.ArgumentMatchers.any(),
         org.mockito.ArgumentMatchers.any());
     assertThat(requestCaptor.getValue())
         .isEqualTo(
@@ -109,6 +113,7 @@ class ChatServiceTest {
     verify(sessionExecutionCoordinator).track(
         org.mockito.ArgumentMatchers.eq(USER.id()),
         org.mockito.ArgumentMatchers.eq("s_123"),
+        org.mockito.ArgumentMatchers.any(),
         org.mockito.ArgumentMatchers.any());
     assertThat(requestCaptor.getValue()).isEqualTo(new ChatToolConfirmationRequest(
         USER.id(), "s_123", PermissionMode.ACCEPT_EDITS,
@@ -333,12 +338,60 @@ class ChatServiceTest {
     return List.of(new ToolConfirmationDecision("tool_123", confirmed));
   }
 
+  @Test
+  void streamPassesUnderlyingCompletionToExecutionCoordinator() {
+    Sinks.Empty<Void> completion = Sinks.empty();
+    when(sessionService.requireOwnedSession(USER, "s_123"))
+        .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
+    when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
+    when(chatAgentGateway.streamExecution(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new AgentExecution<>(Flux.just(StreamEventDto.done()), completion.asMono()));
+    when(sessionExecutionCoordinator.track(
+            org.mockito.ArgumentMatchers.eq(USER.id()),
+            org.mockito.ArgumentMatchers.eq("s_123"),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenAnswer(invocation ->
+            ((Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());
+
+    ChatService service = new ChatService(
+        sessionService,
+        chatAgentGateway,
+        permissionService,
+        toolConfirmationService,
+        sessionExecutionCoordinator);
+    assertThat(service.stream(USER, "s_123", "hello").collectList().block())
+        .containsExactly(StreamEventDto.done());
+
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Supplier<Mono<Void>>> completionCaptor =
+        ArgumentCaptor.forClass(Supplier.class);
+    verify(sessionExecutionCoordinator).track(
+        org.mockito.ArgumentMatchers.eq(USER.id()),
+        org.mockito.ArgumentMatchers.eq("s_123"),
+        org.mockito.ArgumentMatchers.any(),
+        completionCaptor.capture());
+    StepVerifier.create(completionCaptor.getValue().get())
+        .expectSubscription()
+        .then(() -> completion.tryEmitEmpty())
+        .verifyComplete();
+  }
+
   @SuppressWarnings("unchecked")
   private ChatService newChatService() {
+    org.mockito.Mockito.lenient()
+        .when(chatAgentGateway.streamExecution(org.mockito.ArgumentMatchers.any()))
+        .thenAnswer(invocation -> new AgentExecution<>(
+            chatAgentGateway.stream(invocation.getArgument(0)), Mono.empty()));
+    org.mockito.Mockito.lenient()
+        .when(chatAgentGateway.confirmExecution(org.mockito.ArgumentMatchers.any()))
+        .thenAnswer(invocation -> new AgentExecution<>(
+            chatAgentGateway.confirm(invocation.getArgument(0)), Mono.empty()));
     org.mockito.Mockito.lenient()
         .when(sessionExecutionCoordinator.track(
             org.mockito.ArgumentMatchers.anyLong(),
             org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any()))
         .thenAnswer(invocation ->
             ((Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());

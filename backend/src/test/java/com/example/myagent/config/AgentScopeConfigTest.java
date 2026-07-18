@@ -14,6 +14,7 @@ import com.example.myagent.chat.ChatAgentRequest;
 import com.example.myagent.chat.ChatToolConfirmationRequest;
 import com.example.myagent.chat.ChatAgentGateway;
 import com.example.myagent.chat.StubChatAgentGateway;
+import com.example.myagent.agent.AgentExecution;
 import com.example.myagent.agent.AgentScopeStreamExecutor;
 import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.skillreview.BaseStoreSkillDraftLock;
@@ -49,6 +50,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Answers;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
 class AgentScopeConfigTest {
 
@@ -60,6 +62,35 @@ class AgentScopeConfigTest {
           .withConfiguration(
               AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class))
           .withUserConfiguration(AgentScopeGatewayContextConfiguration.class);
+
+  @Test
+  void cancellationWaitsForUnderlyingAgentStreamBeforeReportingCompletion() {
+    HarnessAgent agent = mock(HarnessAgent.class);
+    io.agentscope.core.ReActAgent delegate = mock(io.agentscope.core.ReActAgent.class);
+    when(agent.getDelegate()).thenReturn(delegate);
+    RuntimeContext runtimeContext =
+        RuntimeContext.builder().userId("7").sessionId("s_123").build();
+    Sinks.Many<Object> underlying = Sinks.many().unicast().onBackpressureBuffer();
+    AgentExecution<Object> execution = config.agentExecution(
+        () -> agent, ignored -> underlying.asFlux(), runtimeContext);
+    java.util.concurrent.atomic.AtomicBoolean completed =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    reactor.core.Disposable completionSubscription =
+        execution.completion().subscribe(ignored -> {}, ignored -> {}, () -> completed.set(true));
+    reactor.core.Disposable eventSubscription = execution.events().subscribe();
+
+    eventSubscription.dispose();
+
+    verify(delegate).interrupt(runtimeContext);
+    assertThat(completed).isFalse();
+    verify(agent, org.mockito.Mockito.never()).close();
+
+    underlying.tryEmitComplete();
+
+    assertThat(completed).isTrue();
+    verify(agent).close();
+    completionSubscription.dispose();
+  }
 
   @Test
   void createsDashScopeModelByDefault() {

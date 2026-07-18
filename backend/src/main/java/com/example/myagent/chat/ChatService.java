@@ -1,5 +1,6 @@
 package com.example.myagent.chat;
 
+import com.example.myagent.agent.AgentExecution;
 import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.SessionExecutionCoordinator;
@@ -50,8 +51,11 @@ public class ChatService {
                   permissionService.getModeForOwnedSession(sessionId));
             })
         .subscribeOn(Schedulers.boundedElastic())
-        .flatMapMany(request -> sessionExecutionCoordinator.track(
-            currentUser.id(), sessionId, () -> chatAgentGateway.stream(request)));
+        .flatMapMany(request -> Flux.defer(() -> {
+          AgentExecution<StreamEventDto> execution = chatAgentGateway.streamExecution(request);
+          return sessionExecutionCoordinator.track(
+              currentUser.id(), sessionId, execution::events, execution::completion);
+        }));
   }
 
   public Flux<StreamEventDto> confirm(
@@ -99,14 +103,16 @@ public class ChatService {
               return toolConfirmationService
                   .consume(confirmationId, claim.processingToken(), persisted)
                   .thenMany(
-                      Flux.defer(
-                          () -> sessionExecutionCoordinator.track(
-                              currentUser.id(),
-                              sessionId,
-                              () -> chatAgentGateway
-                                  .confirm(request)
-                                  .onErrorResume(
-                                      error -> Flux.just(StreamEventDto.error(errorMessage(error)))))));
+                      Flux.defer(() -> {
+                        AgentExecution<StreamEventDto> execution =
+                            chatAgentGateway.confirmExecution(request);
+                        return sessionExecutionCoordinator.track(
+                            currentUser.id(),
+                            sessionId,
+                            () -> execution.events().onErrorResume(
+                                error -> Flux.just(StreamEventDto.error(errorMessage(error)))),
+                            execution::completion);
+                      }));
             });
   }
 
