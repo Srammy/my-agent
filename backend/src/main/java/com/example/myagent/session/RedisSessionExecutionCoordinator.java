@@ -1,0 +1,223 @@
+package com.example.myagent.session;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
+import org.reactivestreams.Subscription;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.ReactiveRedisMessageListenerContainer;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+
+@Service
+public class RedisSessionExecutionCoordinator implements SessionExecutionCoordinator, DisposableBean {
+  static final String CANCELLATION_CHANNEL = "myagent:session-execution:cancel";
+
+  private static final Duration DEFAULT_ACTIVE_TTL = Duration.ofSeconds(30);
+  private static final Duration DEFAULT_REFRESH_INTERVAL = Duration.ofSeconds(10);
+  private static final Duration DEFAULT_POLL_INTERVAL = Duration.ofMillis(100);
+  private static final Duration DEFAULT_WAIT_TIMEOUT = Duration.ofSeconds(5);
+
+  private final ReactiveStringRedisTemplate redisTemplate;
+  private final ObjectMapper objectMapper;
+  private final Duration activeTtl;
+  private final Duration refreshInterval;
+  private final Duration pollInterval;
+  private final Duration waitTimeout;
+  private final ConcurrentMap<SessionExecutionKey, ConcurrentMap<String, LocalExecution>> localExecutions =
+      new ConcurrentHashMap<>();
+  private final Disposable messageSubscription;
+
+  public RedisSessionExecutionCoordinator(
+      ReactiveStringRedisTemplate redisTemplate,
+      ObjectMapper objectMapper) {
+    this(
+        redisTemplate,
+        new ReactiveRedisMessageListenerContainer(redisTemplate.getConnectionFactory()),
+        objectMapper,
+        DEFAULT_ACTIVE_TTL,
+        DEFAULT_REFRESH_INTERVAL,
+        DEFAULT_POLL_INTERVAL,
+        DEFAULT_WAIT_TIMEOUT);
+  }
+
+  RedisSessionExecutionCoordinator(
+      ReactiveStringRedisTemplate redisTemplate,
+      ReactiveRedisMessageListenerContainer listenerContainer,
+      ObjectMapper objectMapper,
+      Duration activeTtl,
+      Duration refreshInterval,
+      Duration pollInterval,
+      Duration waitTimeout) {
+    this.redisTemplate = redisTemplate;
+    this.objectMapper = objectMapper;
+    this.activeTtl = activeTtl;
+    this.refreshInterval = refreshInterval;
+    this.pollInterval = pollInterval;
+    this.waitTimeout = waitTimeout;
+    this.messageSubscription = listenerContainer.receive(ChannelTopic.of(CANCELLATION_CHANNEL))
+        .subscribe(message -> handleCancellation(message.getMessage()));
+  }
+
+  @Override
+  public <T> Flux<T> track(Long userId, String sessionId, Supplier<Flux<T>> source) {
+    return Flux.defer(() -> {
+      SessionExecutionKey key = new SessionExecutionKey(userId, sessionId);
+      String executionId = UUID.randomUUID().toString();
+      String activeKey = key.activeKey(executionId);
+      return rejectIfCancelled(userId, sessionId)
+          .then(redisTemplate.opsForValue().set(activeKey, "1", activeTtl))
+          .flatMapMany(stored -> {
+            if (!stored) {
+              return Flux.error(new IllegalStateException("Failed to register session execution"));
+            }
+            LocalExecution execution = register(key, executionId);
+            execution.refreshWith(Flux.interval(refreshInterval)
+                .concatMap(ignored -> redisTemplate.opsForValue().set(activeKey, "1", activeTtl)
+                    .onErrorResume(error -> Mono.empty()))
+                .subscribe(ignored -> {}, ignored -> {}));
+            return rejectIfCancelled(userId, sessionId)
+                .thenMany(Flux.defer(source)
+                    .doOnSubscribe(execution::attach)
+                    .takeUntilOther(execution.cancelled()))
+                .doFinally(ignored -> cleanup(key, executionId, activeKey, execution));
+          });
+    });
+  }
+
+  @Override
+  public Mono<Void> cancelAndAwait(Long userId, String sessionId) {
+    SessionExecutionKey key = new SessionExecutionKey(userId, sessionId);
+    final String payload;
+    try {
+      payload = objectMapper.writeValueAsString(new CancellationMessage(userId, sessionId));
+    } catch (JsonProcessingException error) {
+      return Mono.error(error);
+    }
+    return redisTemplate.opsForValue().set(key.cancellationKey(), "1")
+        .flatMap(stored -> stored
+            ? redisTemplate.convertAndSend(CANCELLATION_CHANNEL, payload)
+            : Mono.error(new IllegalStateException("Failed to record session cancellation")))
+        .doOnTerminate(() -> cancelLocal(key))
+        .doOnCancel(() -> cancelLocal(key))
+        .then(waitForNoActiveExecutions(key));
+  }
+
+  @Override
+  public Mono<Void> rejectIfCancelled(Long userId, String sessionId) {
+    SessionExecutionKey key = new SessionExecutionKey(userId, sessionId);
+    return redisTemplate.opsForValue().get(key.cancellationKey())
+        .flatMap(ignored -> Mono.error(new ResponseStatusException(
+            HttpStatus.CONFLICT, "Session is being cancelled")))
+        .then();
+  }
+
+  @Override
+  public void destroy() {
+    messageSubscription.dispose();
+  }
+
+  private LocalExecution register(SessionExecutionKey key, String executionId) {
+    LocalExecution execution = new LocalExecution();
+    localExecutions.compute(key, (ignored, executions) -> {
+      ConcurrentMap<String, LocalExecution> updated =
+          executions == null ? new ConcurrentHashMap<>() : executions;
+      updated.put(executionId, execution);
+      return updated;
+    });
+    return execution;
+  }
+
+  private void cleanup(
+      SessionExecutionKey key, String executionId, String activeKey, LocalExecution execution) {
+    execution.disposeRefresh();
+    localExecutions.computeIfPresent(key, (ignored, executions) -> {
+      executions.remove(executionId, execution);
+      return executions.isEmpty() ? null : executions;
+    });
+    redisTemplate.delete(activeKey).subscribe(ignored -> {}, ignored -> {});
+  }
+
+  private void cancelLocal(SessionExecutionKey key) {
+    Map<String, LocalExecution> executions = localExecutions.get(key);
+    if (executions != null) {
+      executions.values().forEach(LocalExecution::cancel);
+    }
+  }
+
+  private void handleCancellation(String payload) {
+    try {
+      CancellationMessage message = objectMapper.readValue(payload, CancellationMessage.class);
+      cancelLocal(new SessionExecutionKey(message.userId(), message.sessionId()));
+    } catch (JsonProcessingException ignored) {
+      // Ignore malformed messages on the private coordination channel.
+    }
+  }
+
+  private Mono<Void> waitForNoActiveExecutions(SessionExecutionKey key) {
+    return Flux.interval(Duration.ZERO, pollInterval)
+        .concatMap(ignored -> redisTemplate.keys(key.prefix() + ":active:*").hasElements())
+        .filter(hasActive -> !hasActive)
+        .next()
+        .timeout(waitTimeout, Mono.error(new ResponseStatusException(
+            HttpStatus.CONFLICT, "Session cancellation is still in progress")))
+        .then();
+  }
+
+  private record CancellationMessage(Long userId, String sessionId) {}
+
+  private static final class LocalExecution {
+    private final AtomicBoolean cancelled = new AtomicBoolean();
+    private final AtomicReference<Subscription> subscription = new AtomicReference<>();
+    private final AtomicReference<Disposable> refresh = new AtomicReference<>();
+    private final Sinks.Empty<Void> cancellationSignal = Sinks.empty();
+
+    void attach(Subscription attached) {
+      if (!subscription.compareAndSet(null, attached)) {
+        attached.cancel();
+        return;
+      }
+      if (cancelled.get()) {
+        attached.cancel();
+      }
+    }
+
+    void refreshWith(Disposable disposable) {
+      refresh.set(disposable);
+    }
+
+    Mono<Void> cancelled() {
+      return cancellationSignal.asMono();
+    }
+
+    void cancel() {
+      cancelled.set(true);
+      Subscription attached = subscription.get();
+      if (attached != null) {
+        attached.cancel();
+      }
+      cancellationSignal.tryEmitEmpty();
+    }
+
+    void disposeRefresh() {
+      Disposable disposable = refresh.get();
+      if (disposable != null) {
+        disposable.dispose();
+      }
+    }
+  }
+}
