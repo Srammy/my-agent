@@ -61,11 +61,11 @@ public class SkillReviewService {
         .toList();
   }
 
-  public SkillReviewDto approve(String skillName, ApproveSkillReviewRequest request, String userId) {
+  public SkillReviewDto approve(
+      String skillName, ApproveSkillReviewRequest request, String userId, String reviewerId) {
     validateSkillName(skillName);
     List<String> environments =
         request.environments() != null ? request.environments() : List.of();
-    String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
     SkillReviewDecision decision;
     try (SkillDraftLock.Handle handle = draftLock.acquire(userId)) {
       String draftHash = requireDraftHash(userContext(userId), skillName);
@@ -76,9 +76,9 @@ public class SkillReviewService {
     return toDto(skillName, decision, usageStore(userId));
   }
 
-  public SkillReviewDto reject(String skillName, RejectSkillReviewRequest request, String userId) {
+  public SkillReviewDto reject(
+      String skillName, RejectSkillReviewRequest request, String userId, String reviewerId) {
     validateSkillName(skillName);
-    String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
     String reason = request.reason() != null ? request.reason() : "";
     SkillReviewDecision decision;
     try (SkillDraftLock.Handle handle = draftLock.acquire(userId)) {
