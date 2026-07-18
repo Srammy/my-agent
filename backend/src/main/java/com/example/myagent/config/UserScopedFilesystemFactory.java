@@ -42,7 +42,8 @@ public final class UserScopedFilesystemFactory {
 
   public SkillUsageStore usageStore(String userId) {
     validateUserId(userId);
-    return usageStores.computeIfAbsent(userId, id -> new SkillUsageStore(create(id)));
+    return usageStores.computeIfAbsent(
+        userId, id -> new SkillUsageStore(new RemoteFilesystem(store, List.of(id))));
   }
 
   private static void validateUserId(String userId) {

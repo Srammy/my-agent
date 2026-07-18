@@ -64,29 +64,31 @@ public class SkillReviewService {
   public SkillReviewDto approve(
       String skillName, ApproveSkillReviewRequest request, String userId, String reviewerId) {
     validateSkillName(skillName);
+    RuntimeContext ctx = userContext(userId);
     List<String> environments =
         request.environments() != null ? request.environments() : List.of();
     SkillReviewDecision decision;
     try (SkillDraftLock.Handle handle = draftLock.acquire(userId)) {
-      String draftHash = requireDraftHash(userContext(userId), skillName);
+      String draftHash = requireDraftHash(ctx, skillName);
       requireRenewed(handle, userId);
       decision =
           decisionStore.approve(skillName, reviewerId, environments, draftHash, userId);
     }
-    return toDto(skillName, decision, usageStore(userId));
+    return toDto(ctx, skillName, decision, usageStore(userId));
   }
 
   public SkillReviewDto reject(
       String skillName, RejectSkillReviewRequest request, String userId, String reviewerId) {
     validateSkillName(skillName);
+    RuntimeContext ctx = userContext(userId);
     String reason = request.reason() != null ? request.reason() : "";
     SkillReviewDecision decision;
     try (SkillDraftLock.Handle handle = draftLock.acquire(userId)) {
-      String draftHash = requireDraftHash(userContext(userId), skillName);
+      String draftHash = requireDraftHash(ctx, skillName);
       requireRenewed(handle, userId);
       decision = decisionStore.reject(skillName, reviewerId, reason, draftHash, userId);
     }
-    return toDto(skillName, decision, usageStore(userId));
+    return toDto(ctx, skillName, decision, usageStore(userId));
   }
 
   private String requireDraftHash(RuntimeContext ctx, String skillName) {
@@ -106,20 +108,7 @@ public class SkillReviewService {
       String skillName,
       String userId,
       SkillUsageStore usageStore) {
-    String skillMdPath = DRAFTS_DIR + "/" + skillName + "/SKILL.md";
-    String description = "";
-    if (filesystem.exists(ctx, skillMdPath)) {
-      ReadResult readResult = filesystem.read(ctx, skillMdPath, 0, READ_LIMIT);
-      if (readResult.isSuccess()) {
-        try {
-          SkillValidator.SkillMarkdownMetadata meta =
-              SkillValidator.validateSkillMarkdown(readResult.fileData().content());
-          description = meta.description();
-        } catch (Exception ignored) {
-          // non-fatal: use empty description if SKILL.md is malformed
-        }
-      }
-    }
+    String description = draftDescription(ctx, skillName);
 
     Optional<SkillReviewDecision> maybeDecision = decisionStore.find(skillName, userId);
     String status = effectiveStatus(ctx, skillName, maybeDecision);
@@ -140,6 +129,24 @@ public class SkillReviewService {
         useCount, viewCount, patchCount);
   }
 
+  private String draftDescription(RuntimeContext ctx, String skillName) {
+    String skillMdPath = DRAFTS_DIR + "/" + skillName + "/SKILL.md";
+    String description = "";
+    if (filesystem.exists(ctx, skillMdPath)) {
+      ReadResult readResult = filesystem.read(ctx, skillMdPath, 0, READ_LIMIT);
+      if (readResult.isSuccess()) {
+        try {
+          SkillValidator.SkillMarkdownMetadata meta =
+              SkillValidator.validateSkillMarkdown(readResult.fileData().content());
+          description = meta.description();
+        } catch (Exception ignored) {
+          // non-fatal: use empty description if SKILL.md is malformed
+        }
+      }
+    }
+    return description;
+  }
+
   private String effectiveStatus(
       RuntimeContext ctx,
       String skillName,
@@ -158,6 +165,7 @@ public class SkillReviewService {
   }
 
   private SkillReviewDto toDto(
+      RuntimeContext ctx,
       String skillName,
       SkillReviewDecision decision,
       SkillUsageStore usageStore) {
@@ -171,7 +179,12 @@ public class SkillReviewService {
         decision.environments() != null ? decision.environments() : List.of();
 
     return new SkillReviewDto(
-        skillName, null, decision.status(), createdBy, sourceSessionId, environments,
+        skillName,
+        draftDescription(ctx, skillName),
+        decision.status(),
+        createdBy,
+        sourceSessionId,
+        environments,
         useCount, viewCount, patchCount);
   }
 
