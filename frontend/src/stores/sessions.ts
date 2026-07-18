@@ -10,6 +10,7 @@ interface SessionsState {
   sessions: ChatSession[]
   currentSessionId: string
   loading: boolean
+  deletingSessionId: string
   error: string
 }
 
@@ -22,6 +23,7 @@ export const useSessionsStore = defineStore('sessions', {
     sessions: [],
     currentSessionId: '',
     loading: false,
+    deletingSessionId: '',
     error: ''
   }),
   getters: {
@@ -51,18 +53,40 @@ export const useSessionsStore = defineStore('sessions', {
     },
     async createSession(title?: string) {
       this.error = ''
-      const session = await createSessionApi(title)
-      this.sessions = [session, ...this.sessions.filter((item) => item.id !== session.id)]
-      this.currentSessionId = session.id
-      return session
+      try {
+        const session = await createSessionApi(title)
+        this.sessions = [session, ...this.sessions.filter((item) => item.id !== session.id)]
+        this.currentSessionId = session.id
+        return session
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      }
     },
     async deleteSession(sessionId: string) {
-      this.error = ''
-      await deleteSessionApi(sessionId)
-      this.sessions = this.sessions.filter((session) => session.id !== sessionId)
+      if (this.deletingSessionId) {
+        const error = new Error('Session deletion is already in progress')
+        this.error = error.message
+        throw error
+      }
 
-      if (this.currentSessionId === sessionId) {
-        this.currentSessionId = this.sessions[0]?.id ?? ''
+      this.error = ''
+      this.deletingSessionId = sessionId
+
+      try {
+        await deleteSessionApi(sessionId)
+        this.sessions = this.sessions.filter((session) => session.id !== sessionId)
+
+        if (this.currentSessionId === sessionId) {
+          this.currentSessionId = this.sessions[0]?.id ?? ''
+        }
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      } finally {
+        if (this.deletingSessionId === sessionId) {
+          this.deletingSessionId = ''
+        }
       }
     }
   }

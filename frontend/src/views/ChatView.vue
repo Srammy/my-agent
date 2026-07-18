@@ -48,8 +48,16 @@ function selectSession(sessionId: string) {
 }
 
 async function deleteSession(sessionId: string) {
-  await sessions.deleteSession(sessionId)
-  chat.clearSession(sessionId)
+  chat.abortSession(sessionId)
+
+  try {
+    await sessions.deleteSession(sessionId)
+    chat.clearSession(sessionId)
+  } catch {
+    // The sessions store exposes the server error while preserving the session.
+  } finally {
+    chat.finishSessionCancellation(sessionId)
+  }
 }
 
 async function sendMessage(message: string) {
@@ -90,6 +98,7 @@ async function logout() {
         :sessions="sessions.sessions"
         :current-session-id="currentSessionId"
         :loading="sessions.loading"
+        :deleting-session-id="sessions.deletingSessionId"
         @create="createSession"
         @select="selectSession"
         @delete="deleteSession"
@@ -106,7 +115,7 @@ async function logout() {
           :session-id="currentSessionId"
         />
         <Composer
-          :disabled="isSending || sessions.loading"
+          :disabled="isSending || sessions.loading || chat.isCancellingSession(currentSessionId)"
           :has-session="Boolean(currentSessionId)"
           @send="sendMessage"
         />

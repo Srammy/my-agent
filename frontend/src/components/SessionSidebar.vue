@@ -5,6 +5,7 @@ defineProps<{
   sessions: ChatSession[]
   currentSessionId: string
   loading: boolean
+  deletingSessionId: string
 }>()
 
 const emit = defineEmits<{
@@ -62,6 +63,8 @@ function formatDate(value: string) {
           size="small"
           text
           type="danger"
+          :disabled="deletingSessionId === session.id"
+          :loading="deletingSessionId === session.id"
           @click.stop="emit('delete', session.id)"
         >
           删除

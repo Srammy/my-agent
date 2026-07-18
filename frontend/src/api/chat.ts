@@ -126,7 +126,8 @@ async function readError(response: Response) {
 export async function streamNdjson(
   path: string,
   body: unknown,
-  onEvent: (event: StreamEvent) => void
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const headers = new Headers({ 'Content-Type': 'application/json' })
   const token = localStorage.getItem(TOKEN_KEY)
@@ -138,7 +139,8 @@ export async function streamNdjson(
   const response = await fetch(path, {
     method: 'POST',
     headers,
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   })
 
   if (!response.ok) {
@@ -170,20 +172,23 @@ export async function streamNdjson(
 export function streamChat(
   sessionId: string,
   message: string,
-  onEvent: (event: StreamEvent) => void
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal
 ): Promise<void> {
-  return streamNdjson(`/api/chat/sessions/${encodeURIComponent(sessionId)}/stream`, { message }, onEvent)
+  return streamNdjson(`/api/chat/sessions/${encodeURIComponent(sessionId)}/stream`, { message }, onEvent, signal)
 }
 
 export function confirmToolCall(
   sessionId: string,
   confirmationId: string,
   decisions: ToolConfirmationDecision[],
-  onEvent: (event: StreamEvent) => void
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   return streamNdjson(
     `/api/chat/sessions/${encodeURIComponent(sessionId)}/tool-confirmations/${encodeURIComponent(confirmationId)}`,
     { decisions },
-    onEvent
+    onEvent,
+    signal
   )
 }

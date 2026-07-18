@@ -59,6 +59,94 @@ describe('chat confirmation streams', () => {
     ])
   })
 
+  it('passes the supplied abort signal to the streaming fetch', async () => {
+    const controller = new AbortController()
+    const fetchMock = vi.fn((_path: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const request = chatApi.streamNdjson('/api/chat/sessions/s1/stream', { message: 'hello' }, vi.fn(), controller.signal)
+    controller.abort()
+
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal)
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('aborts only the matching session stream without appending a false error', async () => {
+    let streamSignal: AbortSignal | undefined
+    vi.spyOn(chatApi, 'streamChat').mockImplementation((...args: unknown[]) => {
+      const signal = args[3] as AbortSignal
+      streamSignal = signal
+      return new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    const store = useChatStore()
+
+    const sending = store.sendMessage('s1', 'hello')
+    await Promise.resolve()
+    store.abortSession('s2')
+    expect(streamSignal?.aborted).toBe(false)
+
+    store.abortSession('s1')
+    await sending
+
+    expect(streamSignal?.aborted).toBe(true)
+    expect(store.error).toBe('')
+    expect(store.messages('s1')[1].events).toEqual([])
+    expect(store.isCancellingSession('s1')).toBe(true)
+
+    store.finishSessionCancellation('s1')
+    expect(store.isCancellingSession('s1')).toBe(false)
+  })
+
+  it('aborts tool confirmation without appending a false error', async () => {
+    let confirmationSignal: AbortSignal | undefined
+    vi.spyOn(chatApi, 'confirmToolCall').mockImplementation((...args: unknown[]) => {
+      const signal = args[4] as AbortSignal
+      confirmationSignal = signal
+      return new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    const store = useChatStore()
+    const event = toolEvent()
+    store.messagesBySession.s1 = [{ id: 'assistant-1', role: 'assistant', content: '', events: [event] }]
+    selectAll(store, event)
+
+    const confirming = store.confirmTool('s1', 'assistant-1', event)
+    await Promise.resolve()
+    store.abortSession('s1')
+    await confirming
+
+    expect(confirmationSignal?.aborted).toBe(true)
+    expect(store.error).toBe('')
+    expect(store.messages('s1')[0].events).toEqual([event])
+    expect(event).toMatchObject({ consumed: false, confirming: false })
+  })
+
+  it('does not show an abort error when server deletion finishes before the local stream settles', async () => {
+    vi.spyOn(chatApi, 'streamChat').mockImplementation((...args: unknown[]) => {
+      const signal = args[3] as AbortSignal
+      return new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          queueMicrotask(() => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      })
+    })
+    const store = useChatStore()
+
+    const sending = store.sendMessage('s1', 'hello')
+    await Promise.resolve()
+    store.abortSession('s1')
+    store.finishSessionCancellation('s1')
+    await sending
+
+    expect(store.error).toBe('')
+    expect(store.messages('s1')[1].events).toEqual([])
+  })
+
   it('submits decisions in tool-call order and appends resumed output to the original message', async () => {
     const confirmToolCallMock = vi.spyOn(chatApi, 'confirmToolCall').mockImplementation(async (_sessionId, _confirmationId, _decisions, onEvent) => {
       onEvent({ type: 'text_delta', delta: 'Done.' })
@@ -75,7 +163,7 @@ describe('chat confirmation streams', () => {
     expect(confirmToolCallMock).toHaveBeenCalledWith('s1', 'confirm-1', [
       { toolCallId: 'call-1', confirmed: true },
       { toolCallId: 'call-2', confirmed: false }
-    ], expect.any(Function))
+    ], expect.any(Function), expect.any(AbortSignal))
     expect(store.messages('s1')[0]).toMatchObject({ content: 'Before Done.' })
     expect(store.messages('s1')[0].events[1]).toMatchObject({ type: 'tool_result', output: 'ok' })
     expect(event).toMatchObject({ consumed: true, confirming: false })
