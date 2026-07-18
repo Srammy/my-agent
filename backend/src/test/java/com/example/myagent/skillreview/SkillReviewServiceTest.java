@@ -294,6 +294,42 @@ class SkillReviewServiceTest {
   }
 
   @Test
+  void approveRejectsInvalidSkillNameBeforeReadingDraft() {
+    assertThatThrownBy(
+            () ->
+                service.approve(
+                    "../evil",
+                    new ApproveSkillReviewRequest(List.of("prod")),
+                    "1",
+                    "admin"))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(
+            error ->
+                assertThat(((ResponseStatusException) error).getStatusCode())
+                    .isEqualTo(HttpStatus.BAD_REQUEST));
+
+    verifyNoInteractions(fingerprint, decisionStore);
+  }
+
+  @Test
+  void rejectRejectsInvalidSkillNameBeforeReadingDraft() {
+    assertThatThrownBy(
+            () ->
+                service.reject(
+                    "nested/evil",
+                    new RejectSkillReviewRequest("risk"),
+                    "1",
+                    "admin"))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(
+            error ->
+                assertThat(((ResponseStatusException) error).getStatusCode())
+                    .isEqualTo(HttpStatus.BAD_REQUEST));
+
+    verifyNoInteractions(fingerprint, decisionStore);
+  }
+
+  @Test
   void approveStoresTheCurrentDraftHash() {
     when(fingerprint.computeDraftHash(any(RuntimeContext.class), eq("my-skill")))
         .thenReturn("hash-v1");
