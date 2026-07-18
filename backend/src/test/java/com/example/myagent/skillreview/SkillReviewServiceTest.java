@@ -206,7 +206,7 @@ class SkillReviewServiceTest {
     when(decisionStore.approve("my-skill", "admin", List.of("prod"), "hash-v1", "1"))
         .thenReturn(decision);
     SkillReviewDto result =
-        service.approve("my-skill", new ApproveSkillReviewRequest("admin", List.of("prod")), "1");
+        service.approve("my-skill", new ApproveSkillReviewRequest(List.of("prod")), "1", "admin");
 
     assertThat(result.status()).isEqualTo("APPROVED");
     assertThat(result.skillName()).isEqualTo("my-skill");
@@ -224,7 +224,7 @@ class SkillReviewServiceTest {
     when(decisionStore.reject("my-skill", "admin", "Too risky", "hash-v1", "1"))
         .thenReturn(decision);
     SkillReviewDto result =
-        service.reject("my-skill", new RejectSkillReviewRequest("admin", "Too risky"), "1");
+        service.reject("my-skill", new RejectSkillReviewRequest("Too risky"), "1", "admin");
 
     assertThat(result.status()).isEqualTo("REJECTED");
     assertThat(result.skillName()).isEqualTo("my-skill");
@@ -241,8 +241,9 @@ class SkillReviewServiceTest {
             () ->
                 service.approve(
                     "my-skill",
-                    new ApproveSkillReviewRequest("admin", List.of("prod")),
-                    "1"))
+                    new ApproveSkillReviewRequest(List.of("prod")),
+                    "1",
+                    "admin"))
         .isInstanceOf(ResponseStatusException.class)
         .satisfies(
             error ->
@@ -261,7 +262,7 @@ class SkillReviewServiceTest {
     assertThatThrownBy(
             () ->
                 service.reject(
-                    "my-skill", new RejectSkillReviewRequest("admin", "risk"), "1"))
+                    "my-skill", new RejectSkillReviewRequest("risk"), "1", "admin"))
         .isInstanceOf(ResponseStatusException.class)
         .satisfies(
             error ->
@@ -281,8 +282,9 @@ class SkillReviewServiceTest {
             () ->
                 service.approve(
                     "my-skill",
-                    new ApproveSkillReviewRequest("admin", List.of("prod")),
-                    "1"))
+                    new ApproveSkillReviewRequest(List.of("prod")),
+                    "1",
+                    "admin"))
         .isInstanceOf(ResponseStatusException.class)
         .satisfies(
             error ->
@@ -309,7 +311,7 @@ class SkillReviewServiceTest {
 
     SkillReviewDto result =
         service.approve(
-            "my-skill", new ApproveSkillReviewRequest("admin", List.of("prod")), "1");
+            "my-skill", new ApproveSkillReviewRequest(List.of("prod")), "1", "admin");
 
     assertThat(result.status()).isEqualTo("APPROVED");
     ArgumentCaptor<RuntimeContext> context =
@@ -338,8 +340,9 @@ class SkillReviewServiceTest {
             () ->
                 service.approve(
                     "my-skill",
-                    new ApproveSkillReviewRequest("admin", List.of("prod")),
-                    "1"))
+                    new ApproveSkillReviewRequest(List.of("prod")),
+                    "1",
+                    "admin"))
         .isInstanceOf(SkillDraftLockException.class)
         .hasMessageContaining("expired");
 
@@ -364,7 +367,7 @@ class SkillReviewServiceTest {
     when(decisionStore.reject("my-skill", "admin", "risk", "hash-v2", "1"))
         .thenReturn(decision);
 
-    service.reject("my-skill", new RejectSkillReviewRequest("admin", "risk"), "1");
+    service.reject("my-skill", new RejectSkillReviewRequest("risk"), "1", "admin");
 
     verify(decisionStore).reject("my-skill", "admin", "risk", "hash-v2", "1");
     org.mockito.InOrder order = inOrder(draftLock, fingerprint, decisionStore, lockHandle);

@@ -33,7 +33,10 @@ public class SkillReviewController {
       @AuthenticationPrincipal CurrentUser currentUser,
       @PathVariable String skillName,
       @RequestBody ApproveSkillReviewRequest request) {
-    return Mono.fromCallable(() -> reviewService.approve(skillName, request, currentUser.id().toString()))
+    return Mono.fromCallable(
+            () ->
+                reviewService.approve(
+                    skillName, request, currentUser.id().toString(), reviewerId(currentUser)))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -42,7 +45,16 @@ public class SkillReviewController {
       @AuthenticationPrincipal CurrentUser currentUser,
       @PathVariable String skillName,
       @RequestBody RejectSkillReviewRequest request) {
-    return Mono.fromCallable(() -> reviewService.reject(skillName, request, currentUser.id().toString()))
+    return Mono.fromCallable(
+            () ->
+                reviewService.reject(
+                    skillName, request, currentUser.id().toString(), reviewerId(currentUser)))
         .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  private static String reviewerId(CurrentUser currentUser) {
+    return currentUser.username() != null && !currentUser.username().isBlank()
+        ? currentUser.username()
+        : currentUser.id().toString();
   }
 }
