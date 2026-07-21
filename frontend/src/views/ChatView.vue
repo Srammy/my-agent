@@ -48,6 +48,10 @@ function selectSession(sessionId: string) {
 }
 
 async function deleteSession(sessionId: string) {
+  if (sessions.deletingSessionId) {
+    return
+  }
+
   chat.abortSession(sessionId)
 
   try {
@@ -55,8 +59,6 @@ async function deleteSession(sessionId: string) {
     chat.clearSession(sessionId)
   } catch {
     // The sessions store exposes the server error while preserving the session.
-  } finally {
-    chat.finishSessionCancellation(sessionId)
   }
 }
 
@@ -99,6 +101,7 @@ async function logout() {
         :current-session-id="currentSessionId"
         :loading="sessions.loading"
         :deleting-session-id="sessions.deletingSessionId"
+        :cancelling-session-ids="chat.cancellingSessionIds"
         @create="createSession"
         @select="selectSession"
         @delete="deleteSession"

@@ -168,7 +168,13 @@ export const useChatStore = defineStore('chat', {
       event.decisions[toolCallId] = confirmed
     },
     async confirmTool(sessionId: string, messageId: string, event: ToolEvent) {
-      if (this.loadingSessionId || !event.confirmationId || event.confirming || event.consumed) {
+      if (
+        this.loadingSessionId ||
+        this.cancellingSessionIds[sessionId] ||
+        !event.confirmationId ||
+        event.confirming ||
+        event.consumed
+      ) {
         return
       }
 
@@ -243,7 +249,7 @@ export const useChatStore = defineStore('chat', {
     async sendMessage(sessionId: string, content: string) {
       const text = content.trim()
 
-      if (!text || this.loadingSessionId) {
+      if (!text || this.loadingSessionId || this.cancellingSessionIds[sessionId]) {
         return
       }
 

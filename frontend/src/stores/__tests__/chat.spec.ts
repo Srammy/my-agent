@@ -126,6 +126,21 @@ describe('chat confirmation streams', () => {
     expect(event).toMatchObject({ consumed: false, confirming: false })
   })
 
+  it('blocks sending and tool confirmation while the session is cancelling', async () => {
+    const streamChatMock = vi.spyOn(chatApi, 'streamChat')
+    const confirmToolCallMock = vi.spyOn(chatApi, 'confirmToolCall')
+    const store = useChatStore()
+    const event = toolEvent()
+    selectAll(store, event)
+
+    store.abortSession('s1')
+    await store.sendMessage('s1', 'hello')
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(streamChatMock).not.toHaveBeenCalled()
+    expect(confirmToolCallMock).not.toHaveBeenCalled()
+  })
+
   it('does not show an abort error when server deletion finishes before the local stream settles', async () => {
     vi.spyOn(chatApi, 'streamChat').mockImplementation((...args: unknown[]) => {
       const signal = args[3] as AbortSignal

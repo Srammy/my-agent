@@ -6,6 +6,7 @@ defineProps<{
   currentSessionId: string
   loading: boolean
   deletingSessionId: string
+  cancellingSessionIds: Record<string, true>
 }>()
 
 const emit = defineEmits<{
@@ -67,7 +68,7 @@ function formatDate(value: string) {
           :loading="deletingSessionId === session.id"
           @click.stop="emit('delete', session.id)"
         >
-          删除
+          {{ cancellingSessionIds[session.id] ? '重试删除' : '删除' }}
         </el-button>
       </button>
     </nav>

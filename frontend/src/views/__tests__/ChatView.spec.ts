@@ -4,6 +4,7 @@ import { shallowMount } from '@vue/test-utils'
 import * as chatApi from '../../api/chat'
 import { ApiError } from '../../api/client'
 import SessionSidebar from '../../components/SessionSidebar.vue'
+import ToolEventCard from '../../components/ToolEventCard.vue'
 import { useChatStore } from '../../stores/chat'
 import { useSessionsStore } from '../../stores/sessions'
 import ChatView from '../ChatView.vue'
@@ -65,10 +66,11 @@ describe('ChatView session deletion', () => {
     expect(chat.messagesBySession).not.toHaveProperty('s1')
   })
 
-  it('keeps messages and leaves cancellation recoverable when DELETE fails', async () => {
-    vi.spyOn(chatApi, 'deleteSession').mockRejectedValue(
-      new ApiError('Session cancellation is still in progress', 409, null)
-    )
+  it.each([
+    ['HTTP 409', new ApiError('Session cancellation is still in progress', 409, null)],
+    ['a network error', new Error('Network unavailable')]
+  ])('keeps a session cancelling after DELETE fails with %s', async (_label, error) => {
+    vi.spyOn(chatApi, 'deleteSession').mockRejectedValue(error)
     const wrapper = await mountView()
     const sessions = useSessionsStore()
     const chat = useChatStore()
@@ -78,9 +80,69 @@ describe('ChatView session deletion', () => {
 
     wrapper.findComponent(SessionSidebar).vm.$emit('delete', 's1')
 
-    await vi.waitFor(() => expect(sessions.error).toBe('Session cancellation is still in progress'))
+    await vi.waitFor(() => expect(sessions.error).toBe(error.message))
     expect(sessions.sessions).toEqual([session])
     expect(chat.messages('s1')).toHaveLength(1)
-    expect(chat.isCancellingSession('s1')).toBe(false)
+    expect(chat.isCancellingSession('s1')).toBe(true)
+    expect(wrapper.findComponent({ name: 'Composer' }).props('disabled')).toBe(true)
+    expect(wrapper.findComponent(SessionSidebar).props('cancellingSessionIds')).toEqual({ s1: true })
+  })
+
+  it('does not abort session B when its deletion is rejected while deleting A', async () => {
+    let resolveDelete: (() => void) | undefined
+    vi.spyOn(chatApi, 'deleteSession').mockImplementation(
+      () => new Promise<null>((resolve) => { resolveDelete = () => resolve(null) })
+    )
+    const wrapper = await mountView()
+    const sessions = useSessionsStore()
+    const chat = useChatStore()
+    sessions.sessions = [
+      session,
+      { ...session, id: 's2', title: 'Session 2' }
+    ]
+    sessions.currentSessionId = 's1'
+    const abort = vi.spyOn(chat, 'abortSession')
+
+    wrapper.findComponent(SessionSidebar).vm.$emit('delete', 's1')
+    await Promise.resolve()
+    wrapper.findComponent(SessionSidebar).vm.$emit('delete', 's2')
+    await Promise.resolve()
+
+    expect(abort).toHaveBeenCalledTimes(1)
+    expect(abort).toHaveBeenCalledWith('s1')
+    expect(chat.isCancellingSession('s2')).toBe(false)
+
+    resolveDelete?.()
+    await vi.waitFor(() => expect(sessions.sessions.map((item) => item.id)).toEqual(['s2']))
+  })
+
+  it('disables tool confirmation controls while the session is cancelling', async () => {
+    const chat = useChatStore()
+    const event = {
+      id: 'event-1',
+      type: 'permission_required' as const,
+      confirmationId: 'confirmation-1',
+      kind: 'USER_CONFIRM',
+      toolCalls: [{ toolCallId: 'call-1', toolName: 'shell', toolInput: {} }],
+      decisions: { 'call-1': true }
+    }
+    chat.abortSession('s1')
+
+    const wrapper = shallowMount(ToolEventCard, {
+      props: { event, sessionId: 's1', messageId: 'message-1' },
+      global: {
+        stubs: {
+          ElButton: {
+            name: 'ElButton',
+            props: ['disabled'],
+            template: '<button :disabled="disabled"><slot /></button>'
+          }
+        }
+      }
+    })
+
+    const buttons = wrapper.findAllComponents({ name: 'ElButton' })
+    expect(buttons).toHaveLength(3)
+    expect(buttons.every((button) => button.props('disabled') === true)).toBe(true)
   })
 })
