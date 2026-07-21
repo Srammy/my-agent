@@ -40,6 +40,11 @@ import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -126,6 +131,69 @@ class AgentScopeConfigTest {
 
     underlying.tryEmitComplete();
     execution.completion().block();
+    verify(agent).close();
+  }
+
+  @Test
+  void cancellationAndActingStartAreLinearizedByOneExecutionGate() throws Exception {
+    AgentScopeConfig.ExecutionCancellationGate cancelFirst =
+        new AgentScopeConfig.ExecutionCancellationGate();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      CountDownLatch actingReady = new CountDownLatch(1);
+      Future<Boolean> actingStart;
+      synchronized (cancelFirst) {
+        actingStart = executor.submit(() -> {
+          actingReady.countDown();
+          return cancelFirst.tryBeginActing();
+        });
+        assertThat(actingReady.await(1, TimeUnit.SECONDS)).isTrue();
+        cancelFirst.cancel();
+      }
+      assertThat(actingStart.get(1, TimeUnit.SECONDS)).isFalse();
+
+      AgentScopeConfig.ExecutionCancellationGate actingFirst =
+          new AgentScopeConfig.ExecutionCancellationGate();
+      CountDownLatch cancelReady = new CountDownLatch(1);
+      Future<?> cancellation;
+      synchronized (actingFirst) {
+        assertThat(actingFirst.tryBeginActing()).isTrue();
+        cancellation = executor.submit(() -> {
+          cancelReady.countDown();
+          actingFirst.cancel();
+        });
+        assertThat(cancelReady.await(1, TimeUnit.SECONDS)).isTrue();
+      }
+      cancellation.get(1, TimeUnit.SECONDS);
+      assertThat(actingFirst.tryBeginActing()).isFalse();
+    } finally {
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  void interruptFailureDoesNotHideLaterUnderlyingCompletion() {
+    HarnessAgent agent = mock(HarnessAgent.class);
+    io.agentscope.core.ReActAgent delegate = mock(io.agentscope.core.ReActAgent.class);
+    when(agent.getDelegate()).thenReturn(delegate);
+    RuntimeContext runtimeContext =
+        RuntimeContext.builder().userId("7").sessionId("s_123").build();
+    org.mockito.Mockito.doThrow(new IllegalStateException("interrupt failed"))
+        .when(delegate)
+        .interrupt(runtimeContext);
+    Sinks.Many<Object> underlying = Sinks.many().unicast().onBackpressureBuffer();
+    AgentExecution<Object> execution = config.agentExecution(
+        () -> agent, ignored -> underlying.asFlux(), runtimeContext);
+    AtomicBoolean completed = new AtomicBoolean();
+    execution.completion().subscribe(ignored -> {}, ignored -> {}, () -> completed.set(true));
+    reactor.core.Disposable eventSubscription = execution.events().subscribe();
+
+    eventSubscription.dispose();
+    assertThat(completed).isFalse();
+
+    underlying.tryEmitComplete();
+
+    assertThat(completed).isTrue();
     verify(agent).close();
   }
 

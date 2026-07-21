@@ -43,6 +43,7 @@ import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -59,6 +60,27 @@ public class AgentScopeConfig {
 
   static final String CANCELLATION_REQUESTED_CONTEXT_KEY =
       "myagent.sessionExecution.cancellationRequested";
+
+  static final class ExecutionCancellationGate {
+    private boolean cancelled;
+    private int actingBatches;
+
+    synchronized void cancel() {
+      cancelled = true;
+    }
+
+    synchronized boolean tryBeginActing() {
+      if (cancelled) {
+        return false;
+      }
+      actingBatches++;
+      return true;
+    }
+
+    synchronized void finishActing() {
+      actingBatches--;
+    }
+  }
 
   private final Function<String, String> environmentVariableResolver;
 
@@ -153,8 +175,8 @@ public class AgentScopeConfig {
       RuntimeContext runtimeContext) {
     Sinks.Empty<Void> completion = Sinks.empty();
     AtomicBoolean subscribed = new AtomicBoolean();
-    AtomicBoolean cancellationRequested = new AtomicBoolean();
-    runtimeContext.put(CANCELLATION_REQUESTED_CONTEXT_KEY, cancellationRequested);
+    ExecutionCancellationGate cancellationGate = new ExecutionCancellationGate();
+    runtimeContext.put(CANCELLATION_REQUESTED_CONTEXT_KEY, cancellationGate);
     Flux<T> events = Flux.create(sink -> {
       if (!subscribed.compareAndSet(false, true)) {
         sink.error(new IllegalStateException("Agent execution supports only one event subscriber"));
@@ -175,16 +197,15 @@ public class AgentScopeConfig {
       }
 
       AtomicBoolean terminated = new AtomicBoolean();
-      AtomicBoolean interruptionFailed = new AtomicBoolean();
       sink.onCancel(() -> {
-        cancellationRequested.set(true);
+        cancellationGate.cancel();
         if (terminated.get()) {
           return;
         }
         try {
           harnessAgent.getDelegate().interrupt(runtimeContext);
         } catch (Throwable ignored) {
-          interruptionFailed.set(true);
+          // Completion is determined by the underlying stream and resource close, not interrupt().
         }
       });
       if (sink.isCancelled()) {
@@ -212,9 +233,7 @@ public class AgentScopeConfig {
               sink.error(error);
             }
           }
-          if (!interruptionFailed.get()) {
-            completion.tryEmitEmpty();
-          }
+          completion.tryEmitEmpty();
         }
       }
       Termination termination = new Termination();
@@ -241,13 +260,24 @@ public class AgentScopeConfig {
           ActingInput input,
           Function<ActingInput, Flux<AgentEvent>> next) {
         return Flux.defer(() -> {
-          AtomicBoolean cancellationRequested = runtimeContext == null
+          ExecutionCancellationGate cancellationGate = runtimeContext == null
               ? null
-              : runtimeContext.get(CANCELLATION_REQUESTED_CONTEXT_KEY, AtomicBoolean.class);
-          if (cancellationRequested != null && cancellationRequested.get()) {
+              : runtimeContext.get(
+                  CANCELLATION_REQUESTED_CONTEXT_KEY, ExecutionCancellationGate.class);
+          if (cancellationGate != null && !cancellationGate.tryBeginActing()) {
             return Flux.error(new InterruptedException("Agent execution interrupted"));
           }
-          return next.apply(input);
+          if (cancellationGate == null) {
+            return next.apply(input);
+          }
+          final Flux<AgentEvent> acting;
+          try {
+            acting = Objects.requireNonNull(next.apply(input), "acting middleware returned null");
+          } catch (Throwable error) {
+            cancellationGate.finishActing();
+            return Flux.error(error);
+          }
+          return acting.doFinally(ignored -> cancellationGate.finishActing());
         });
       }
     };

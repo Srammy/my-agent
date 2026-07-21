@@ -64,6 +64,24 @@ class AgentScopeChatAgentGatewayTest {
   }
 
   @Test
+  void preservesUnderlyingCompletionWhenMappingConfirmationEvents() {
+    Sinks.Empty<Void> completion = Sinks.empty();
+    when(executor.confirmExecution(any(ChatToolConfirmationRequest.class), any()))
+        .thenReturn(new AgentExecution<>(
+            Flux.just(new AgentEndEvent("reply-1")), completion.asMono()));
+
+    AgentExecution<StreamEventDto> execution =
+        gateway().confirmExecution(confirmationRequest(true));
+
+    assertThat(execution.events().collectList().block())
+        .containsExactly(StreamEventDto.done());
+    StepVerifier.create(execution.completion())
+        .expectSubscription()
+        .then(() -> completion.tryEmitEmpty())
+        .verifyComplete();
+  }
+
+  @Test
   void mapsAgentScopeEventsAndBuildsRuntimeContextFromRequest() {
     when(executor.stream(any(ChatAgentRequest.class), any()))
         .thenReturn(
