@@ -10,9 +10,13 @@ import com.example.myagent.skillreview.SkillPromotionGuard;
 import com.example.myagent.skillreview.SkillReviewDecisionStore;
 import com.example.myagent.skillreview.WebApprovalGate;
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.agent.Agent;
+import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.ConfirmResult;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
+import io.agentscope.core.middleware.ActingInput;
+import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
@@ -52,6 +56,9 @@ import reactor.core.publisher.Sinks;
 
 @Configuration
 public class AgentScopeConfig {
+
+  static final String CANCELLATION_REQUESTED_CONTEXT_KEY =
+      "myagent.sessionExecution.cancellationRequested";
 
   private final Function<String, String> environmentVariableResolver;
 
@@ -146,6 +153,8 @@ public class AgentScopeConfig {
       RuntimeContext runtimeContext) {
     Sinks.Empty<Void> completion = Sinks.empty();
     AtomicBoolean subscribed = new AtomicBoolean();
+    AtomicBoolean cancellationRequested = new AtomicBoolean();
+    runtimeContext.put(CANCELLATION_REQUESTED_CONTEXT_KEY, cancellationRequested);
     Flux<T> events = Flux.create(sink -> {
       if (!subscribed.compareAndSet(false, true)) {
         sink.error(new IllegalStateException("Agent execution supports only one event subscriber"));
@@ -168,6 +177,7 @@ public class AgentScopeConfig {
       AtomicBoolean terminated = new AtomicBoolean();
       AtomicBoolean interruptionFailed = new AtomicBoolean();
       sink.onCancel(() -> {
+        cancellationRequested.set(true);
         if (terminated.get()) {
           return;
         }
@@ -220,6 +230,27 @@ public class AgentScopeConfig {
       }
     });
     return new AgentExecution<>(events, completion.asMono());
+  }
+
+  MiddlewareBase cancellationAwareActingMiddleware() {
+    return new MiddlewareBase() {
+      @Override
+      public Flux<AgentEvent> onActing(
+          Agent agent,
+          RuntimeContext runtimeContext,
+          ActingInput input,
+          Function<ActingInput, Flux<AgentEvent>> next) {
+        return Flux.defer(() -> {
+          AtomicBoolean cancellationRequested = runtimeContext == null
+              ? null
+              : runtimeContext.get(CANCELLATION_REQUESTED_CONTEXT_KEY, AtomicBoolean.class);
+          if (cancellationRequested != null && cancellationRequested.get()) {
+            return Flux.error(new InterruptedException("Agent execution interrupted"));
+          }
+          return next.apply(input);
+        });
+      }
+    };
   }
 
   private void closeWithoutExecution(
@@ -296,6 +327,7 @@ public class AgentScopeConfig {
   HarnessAgent.Builder configureHarnessAgentBuilder(
       HarnessAgent.Builder builder, AgentToolPolicy toolPolicy, AgentProperties agentProperties) {
     applyToolPolicy(builder, toolPolicy);
+    builder.middleware(cancellationAwareActingMiddleware());
     builder.memory(MemoryConfig.defaults());
     builder.enablePendingToolRecovery(true);
     // 自动压缩配置：

@@ -29,13 +29,17 @@ import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.event.ConfirmResult;
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.middleware.ActingInput;
+import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.nio.file.Path;
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -51,6 +55,7 @@ import org.mockito.MockedStatic;
 import org.mockito.Answers;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import reactor.test.StepVerifier;
 
 class AgentScopeConfigTest {
 
@@ -90,6 +95,38 @@ class AgentScopeConfigTest {
     assertThat(completed).isTrue();
     verify(agent).close();
     completionSubscription.dispose();
+  }
+
+  @Test
+  void cancellationPreventsActingFromStartingAfterReasoningHasAlreadyBegun() {
+    HarnessAgent agent = mock(HarnessAgent.class);
+    io.agentscope.core.ReActAgent delegate = mock(io.agentscope.core.ReActAgent.class);
+    when(agent.getDelegate()).thenReturn(delegate);
+    RuntimeContext runtimeContext =
+        RuntimeContext.builder().userId("7").sessionId("s_123").build();
+    Sinks.Many<Object> underlying = Sinks.many().unicast().onBackpressureBuffer();
+    AgentExecution<Object> execution = config.agentExecution(
+        () -> agent, ignored -> underlying.asFlux(), runtimeContext);
+    reactor.core.Disposable eventSubscription = execution.events().subscribe();
+
+    eventSubscription.dispose();
+
+    AtomicBoolean actingInvoked = new AtomicBoolean();
+    StepVerifier.create(config.cancellationAwareActingMiddleware().onActing(
+            delegate,
+            runtimeContext,
+            new ActingInput(List.of()),
+            ignored -> {
+              actingInvoked.set(true);
+              return Flux.empty();
+            }))
+        .expectError(InterruptedException.class)
+        .verify();
+    assertThat(actingInvoked).isFalse();
+
+    underlying.tryEmitComplete();
+    execution.completion().block();
+    verify(agent).close();
   }
 
   @Test
@@ -232,6 +269,8 @@ class AgentScopeConfigTest {
     assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
     assertThat(toolsConfig(builder).getAllow()).containsExactly("http_fetch", "web_fetch");
     assertThat(toolsConfig(builder).getMcpServers()).isNull();
+    assertThat((List<?>) objectField(objectField(builder, "inner"), "middlewares"))
+        .anyMatch(MiddlewareBase.class::isInstance);
   }
 
   @Test

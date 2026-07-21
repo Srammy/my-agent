@@ -61,7 +61,7 @@ class ChatControllerTest {
   @BeforeEach
   @SuppressWarnings("unchecked")
   void passThroughTrackedExecutions() {
-    when(sessionExecutionCoordinator.track(anyLong(), anyString(), any()))
+    when(sessionExecutionCoordinator.track(anyLong(), anyString(), any(), any()))
         .thenAnswer(invocation ->
             ((Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());
   }
