@@ -228,6 +228,9 @@ export const useChatStore = defineStore('chat', {
 
         const message = errorMessage(error)
         this.error = message
+        if (error instanceof StreamRequestError && error.status === 409) {
+          this.cancellingSessionIds[sessionId] = true
+        }
         if (error instanceof StreamRequestError && (error.status === 404 || error.status === 409)) {
           event.consumed = true
         } else {
@@ -310,6 +313,9 @@ export const useChatStore = defineStore('chat', {
 
         const message = errorMessage(error)
         this.error = message
+        if (error instanceof StreamRequestError && error.status === 409) {
+          this.cancellingSessionIds[sessionId] = true
+        }
         this.appendEvent(sessionId, assistant.id, {
           id: makeId('event'),
           type: 'error',

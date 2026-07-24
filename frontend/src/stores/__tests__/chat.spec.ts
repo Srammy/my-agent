@@ -453,4 +453,57 @@ describe('chat confirmation streams', () => {
       { role: 'assistant', content: 'reply', loading: false }
     ])
   })
+
+  it('marks only an HTTP 409 message stream as cancelling and blocks another send', async () => {
+    const streamChatMock = vi.spyOn(chatApi, 'streamChat')
+      .mockRejectedValueOnce(new chatApi.StreamRequestError('cancelling', 409))
+      .mockResolvedValueOnce()
+    const store = useChatStore()
+
+    await store.sendMessage('s1', 'first')
+    await store.sendMessage('s1', 'second')
+
+    expect(store.isCancellingSession('s1')).toBe(true)
+    expect(streamChatMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not mark a message session as cancelling for a non-409 error', async () => {
+    vi.spyOn(chatApi, 'streamChat')
+      .mockRejectedValue(new chatApi.StreamRequestError('failed', 500))
+    const store = useChatStore()
+
+    await store.sendMessage('s1', 'hello')
+
+    expect(store.isCancellingSession('s1')).toBe(false)
+  })
+
+  it('marks only an HTTP 409 confirmation as cancelling', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall')
+      .mockRejectedValue(new chatApi.StreamRequestError('cancelling', 409))
+    const store = useChatStore()
+    const event = toolEvent()
+    store.messagesBySession.s1 = [
+      { id: 'assistant-1', role: 'assistant', content: '', events: [event] }
+    ]
+    selectAll(store, event)
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(store.isCancellingSession('s1')).toBe(true)
+  })
+
+  it('does not mark a confirmation session as cancelling for a non-409 error', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall')
+      .mockRejectedValue(new chatApi.StreamRequestError('failed', 500))
+    const store = useChatStore()
+    const event = toolEvent()
+    store.messagesBySession.s1 = [
+      { id: 'assistant-1', role: 'assistant', content: '', events: [event] }
+    ]
+    selectAll(store, event)
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(store.isCancellingSession('s1')).toBe(false)
+  })
 })

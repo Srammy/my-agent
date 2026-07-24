@@ -14,6 +14,12 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.myagent.agent.AgentExecution;
+import com.example.myagent.chat.ChatAgentRequest;
+import com.example.myagent.chat.ChatToolConfirmationRequest;
+import com.example.myagent.chat.StreamEventDto;
+import com.example.myagent.chat.StubChatAgentGateway;
+import com.example.myagent.permission.PermissionMode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.List;
@@ -117,6 +123,55 @@ class RedisSessionExecutionCoordinatorTest {
     verify(redisTemplate).convertAndSend(
         eq("myagent:agent-state:session-execution:cancel"), anyString());
     verify(redisTemplate, never()).keys(anyString());
+  }
+
+  @Test
+  void stubStreamDeliversAllEventsWhenTrackedByRealCoordinator() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    AtomicInteger sourceSubscriptions = new AtomicInteger();
+    StubChatAgentGateway gateway = new StubChatAgentGateway() {
+      @Override
+      public Flux<StreamEventDto> stream(ChatAgentRequest request) {
+        return super.stream(request).doOnSubscribe(ignored -> sourceSubscriptions.incrementAndGet());
+      }
+    };
+    AgentExecution<StreamEventDto> execution = gateway.streamExecution(
+        new ChatAgentRequest(1L, "s_1", "hello", PermissionMode.DEFAULT));
+
+    StepVerifier.create(coordinator.track(
+            1L, "s_1", execution::events, execution::completion))
+        .assertNext(event -> assertThat(event.type()).isEqualTo("reply_start"))
+        .assertNext(event -> {
+          assertThat(event.type()).isEqualTo("text_delta");
+          assertThat(event.payload()).containsEntry("delta", "hello");
+        })
+        .assertNext(event -> assertThat(event.type()).isEqualTo("done"))
+        .verifyComplete();
+
+    assertThat(sourceSubscriptions).hasValue(1);
+  }
+
+  @Test
+  void stubConfirmationDeliversAllEventsWhenTrackedByRealCoordinator() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    AtomicInteger sourceSubscriptions = new AtomicInteger();
+    StubChatAgentGateway gateway = new StubChatAgentGateway() {
+      @Override
+      public Flux<StreamEventDto> confirm(ChatToolConfirmationRequest request) {
+        return super.confirm(request)
+            .doOnSubscribe(ignored -> sourceSubscriptions.incrementAndGet());
+      }
+    };
+    AgentExecution<StreamEventDto> execution = gateway.confirmExecution(
+        new ChatToolConfirmationRequest(1L, "s_1", PermissionMode.DEFAULT, List.of()));
+
+    StepVerifier.create(coordinator.track(
+            1L, "s_1", execution::events, execution::completion))
+        .assertNext(event -> assertThat(event.type()).isEqualTo("reply_start"))
+        .assertNext(event -> assertThat(event.type()).isEqualTo("done"))
+        .verifyComplete();
+
+    assertThat(sourceSubscriptions).hasValue(1);
   }
 
   @Test
