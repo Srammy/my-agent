@@ -35,6 +35,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
@@ -330,6 +331,33 @@ class ChatServiceTest {
   }
 
   @Test
+  void cancellationAfterConsumptionPreservesCancellationAndConsumedMetadata() {
+    ToolConfirmationClaim claim = stubValidClaim();
+    when(toolConfirmationService.consume(
+        "confirm_123", claim.processingToken(), persisted(true))).thenReturn(Mono.empty());
+    ResponseStatusException cancellation = sessionCancelling();
+    org.mockito.Mockito.doAnswer(invocation -> {
+          Supplier<Mono<Void>> preflight = invocation.getArgument(2);
+          return Mono.defer(preflight)
+              .thenMany(Flux.<StreamEventDto>error(cancellation));
+        })
+        .when(sessionExecutionCoordinator).track(
+            anyLong(), anyString(), any(), any(), any());
+
+    StepVerifier.create(newChatService().confirm(
+            USER, "s_123", "confirm_123", requested(true)))
+        .expectErrorSatisfies(error -> {
+          assertErrorCode(error, HttpStatus.CONFLICT, "SESSION_CANCELLING");
+          assertThat(((ResponseStatusException) error).getHeaders()
+              .getFirst("X-Tool-Confirmation-Consumed")).isEqualTo("true");
+        })
+        .verify();
+
+    verify(toolConfirmationService, never()).rollbackIfProcessing(any(), any());
+    verify(chatAgentGateway, never()).confirm(any());
+  }
+
+  @Test
   void eventFailureAfterConsumptionStaysConsumedAndReturnsAnErrorEvent() {
     ToolConfirmationClaim claim = stubValidClaim();
     when(toolConfirmationService.consume(
@@ -442,6 +470,23 @@ class ChatServiceTest {
     assertThat(responseError.getStatusCode()).isEqualTo(status);
     assertThat(responseError.getHeaders().getFirst("X-Error-Code"))
         .isEqualTo(expectedCode);
+  }
+
+  private ResponseStatusException sessionCancelling() {
+    return new ResponseStatusException(HttpStatus.CONFLICT, "Session is being cancelled") {
+      private final HttpHeaders headers = cancellationHeaders();
+
+      @Override
+      public HttpHeaders getHeaders() {
+        return headers;
+      }
+    };
+  }
+
+  private HttpHeaders cancellationHeaders() {
+    HttpHeaders headers = new HttpHeaders();
+    headers.set("X-Error-Code", "SESSION_CANCELLING");
+    return headers;
   }
 
   private List<ToolConfirmationDecisionRequest> requested(boolean confirmed) {

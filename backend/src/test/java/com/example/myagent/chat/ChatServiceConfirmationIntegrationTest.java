@@ -46,6 +46,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+import org.reactivestreams.Publisher;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -299,6 +300,78 @@ class ChatServiceConfirmationIntegrationTest {
           pausedConsumeService.claim(USER.id(), SESSION_ID, confirmationId).block();
       assertThat(retry).isNotNull();
       pausedConsumeService.release(confirmationId, retry.processingToken()).block();
+    } finally {
+      if (execution != null) {
+        execution.dispose();
+      }
+      executionCoordinator.destroy();
+      cancellingCoordinator.destroy();
+    }
+  }
+
+  @Test
+  void remoteCancellationAfterConsumeBeforeSourceAttachPreservesBothSafetyFacts()
+      throws Exception {
+    String confirmationId = toolConfirmationService.create(
+        USER.id(), SESSION_ID, "reply",
+        List.of(new ToolUseBlock("call", "shell", Map.of("command", "pwd"))),
+        ConfirmationKind.USER_CONFIRM).block().confirmationId();
+    CountDownLatch sourceAwaitingAttach = new CountDownLatch(1);
+    AtomicBoolean sourceAttached = new AtomicBoolean();
+    Publisher<StreamEventDto> delayedSource =
+        subscriber -> sourceAwaitingAttach.countDown();
+    CountDownLatch completionDisposed = new CountDownLatch(1);
+    ChatAgentGateway gateway = mock(ChatAgentGateway.class);
+    when(gateway.confirmExecution(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new AgentExecution<>(
+            Flux.from(delayedSource)
+                .doOnSubscribe(ignored -> sourceAttached.set(true)),
+            Mono.<Void>never().doOnCancel(completionDisposed::countDown)));
+    RedisSessionExecutionCoordinator cancellingCoordinator = coordinator();
+    RedisSessionExecutionCoordinator executionCoordinator = coordinator();
+    Disposable execution = null;
+    try {
+      awaitCoordinatorSubscribers(2);
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      CountDownLatch terminated = new CountDownLatch(1);
+      ChatService chatService = new ChatService(
+          sessionService(),
+          gateway,
+          permissionService(),
+          toolConfirmationService,
+          executionCoordinator);
+
+      execution = chatService.confirm(
+              USER,
+              SESSION_ID,
+              confirmationId,
+              List.of(new ToolConfirmationDecisionRequest("call", true)))
+          .doOnError(failure::set)
+          .doFinally(ignored -> terminated.countDown())
+          .subscribe(ignored -> {}, ignored -> {});
+      assertThat(sourceAwaitingAttach.await(5, TimeUnit.SECONDS)).isTrue();
+
+      cancellingCoordinator.cancelAndAwait(USER.id(), SESSION_ID)
+          .block(Duration.ofSeconds(10));
+
+      assertThat(terminated.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(completionDisposed.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(sourceAttached).isFalse();
+      assertThat(failure.get()).isInstanceOfSatisfying(
+          ResponseStatusException.class,
+          error -> {
+            assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+            assertThat(error.getHeaders().getFirst("X-Error-Code"))
+                .isEqualTo("SESSION_CANCELLING");
+            assertThat(error.getHeaders().getFirst(
+                "X-Tool-Confirmation-Consumed")).isEqualTo("true");
+          });
+      awaitNoExecutionRegistration(SESSION_ID);
+      assertThatThrownBy(() -> toolConfirmationService.claim(
+          USER.id(), SESSION_ID, confirmationId).block())
+          .isInstanceOfSatisfying(
+              ResponseStatusException.class,
+              error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
     } finally {
       if (execution != null) {
         execution.dispose();

@@ -32,7 +32,8 @@ export class StreamRequestError extends Error {
   constructor(
     message: string,
     readonly status: number,
-    readonly code?: string
+    readonly code?: string,
+    readonly confirmationConsumed?: boolean
   ) {
     super(message)
     this.name = 'StreamRequestError'
@@ -148,10 +149,14 @@ export async function streamNdjson(
   })
 
   if (!response.ok) {
+    const confirmationConsumed = response.headers.get('X-Tool-Confirmation-Consumed')
     throw new StreamRequestError(
       await readError(response),
       response.status,
-      response.headers.get('X-Error-Code') ?? undefined
+      response.headers.get('X-Error-Code') ?? undefined,
+      confirmationConsumed === null
+        ? undefined
+        : confirmationConsumed.trim().toLowerCase() === 'true'
     )
   }
 

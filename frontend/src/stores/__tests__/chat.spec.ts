@@ -73,7 +73,28 @@ describe('chat confirmation streams', () => {
     await expect(request).rejects.toMatchObject({ name: 'AbortError' })
   })
 
-  it('reads the stable error code from a failed streaming response', async () => {
+  it('reads stable error metadata from a failed streaming response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('conflict', {
+        status: 409,
+        headers: {
+          'X-Error-Code': 'SESSION_CANCELLING',
+          'X-Tool-Confirmation-Consumed': 'true'
+        }
+      })
+    ))
+
+    await expect(
+      chatApi.streamNdjson('/api/chat/sessions/s1/stream', { message: 'hello' }, vi.fn())
+    ).rejects.toMatchObject({
+      name: 'StreamRequestError',
+      status: 409,
+      code: 'SESSION_CANCELLING',
+      confirmationConsumed: true
+    })
+  })
+
+  it('leaves confirmation consumption unknown when the response marker is missing', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       new Response('conflict', {
         status: 409,
@@ -86,7 +107,8 @@ describe('chat confirmation streams', () => {
     ).rejects.toMatchObject({
       name: 'StreamRequestError',
       status: 409,
-      code: 'SESSION_CANCELLING'
+      code: 'SESSION_CANCELLING',
+      confirmationConsumed: undefined
     })
   })
 
@@ -611,6 +633,24 @@ describe('chat confirmation streams', () => {
 
     expect(store.isCancellingSession('s1')).toBe(true)
     expect(event.consumed).toBe(false)
+  })
+
+  it('keeps a consumed confirmation locked during session cancellation', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockRejectedValue(Object.assign(
+      new chatApi.StreamRequestError('cancelling', 409, 'SESSION_CANCELLING'),
+      { confirmationConsumed: true }
+    ))
+    const store = useChatStore()
+    const event = toolEvent()
+    store.messagesBySession.s1 = [
+      { id: 'assistant-1', role: 'assistant', content: '', events: [event] }
+    ]
+    selectAll(store, event)
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(store.isCancellingSession('s1')).toBe(true)
+    expect(event.consumed).toBe(true)
   })
 
   it.each([

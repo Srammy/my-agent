@@ -239,7 +239,9 @@ export const useChatStore = defineStore('chat', {
           error.code === 'TOOL_CONFIRMATION_RETRYABLE' ||
           (error.status === 400 && !error.code)
         )
-        event.consumed = receivedStreamEvent || !safelyRetryable
+        event.consumed = receivedStreamEvent ||
+          (error instanceof StreamRequestError && error.confirmationConsumed === true) ||
+          !safelyRetryable
         this.appendEvent(sessionId, messageId, {
           id: makeId('event'),
           type: 'error',

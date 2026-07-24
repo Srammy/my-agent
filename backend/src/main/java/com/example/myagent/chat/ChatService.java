@@ -139,7 +139,9 @@ public class ChatService {
       boolean consumed,
       Throwable original) {
     if (consumed) {
-      return Flux.error(consumedFailure(original));
+      return Flux.error(isSessionCancelling(original)
+          ? consumedSessionCancellation((ResponseStatusException) original)
+          : consumedFailure(original));
     }
     return toolConfirmationService.rollbackIfProcessing(confirmationId, processingToken)
         .onErrorReturn(false)
@@ -159,6 +161,11 @@ public class ChatService {
 
   private static ResponseStatusException consumedFailure(Throwable cause) {
     return new ToolConfirmationConsumedException(cause);
+  }
+
+  private static ResponseStatusException consumedSessionCancellation(
+      ResponseStatusException cause) {
+    return new ConsumedSessionCancellingException(cause);
   }
 
   private static boolean isSessionCancelling(Throwable error) {
@@ -193,6 +200,22 @@ public class ChatService {
     private ToolConfirmationConsumedException(Throwable cause) {
       super(HttpStatus.CONFLICT, errorMessage(cause), cause);
       headers.set("X-Error-Code", "TOOL_CONFIRMATION_CONSUMED");
+    }
+
+    @Override
+    public HttpHeaders getHeaders() {
+      return headers;
+    }
+  }
+
+  private static final class ConsumedSessionCancellingException
+      extends ResponseStatusException {
+    private final HttpHeaders headers = new HttpHeaders();
+
+    private ConsumedSessionCancellingException(ResponseStatusException cause) {
+      super(cause.getStatusCode(), cause.getReason(), cause);
+      headers.putAll(cause.getHeaders());
+      headers.set("X-Tool-Confirmation-Consumed", "true");
     }
 
     @Override
