@@ -54,4 +54,18 @@ describe('sessions store deletion', () => {
     expect(store.sessions).toEqual([])
     expect(store.deletingSessionId).toBe('')
   })
+
+  it('does not swallow a 404 for a session that is not locally known', async () => {
+    vi.spyOn(chatApi, 'deleteSession').mockRejectedValue(
+      new ApiError('Session not found', 404, null)
+    )
+    const store = useSessionsStore()
+    store.sessions = [session('s1')]
+
+    await expect(store.deleteSession('s2')).rejects.toThrow('Session not found')
+
+    expect(store.sessions).toEqual([session('s1')])
+    expect(store.error).toBe('Session not found')
+    expect(store.deletingSessionId).toBe('')
+  })
 })

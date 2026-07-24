@@ -64,7 +64,7 @@ function formatDate(value: string) {
           size="small"
           text
           type="danger"
-          :disabled="deletingSessionId === session.id"
+          :disabled="Boolean(deletingSessionId)"
           :loading="deletingSessionId === session.id"
           @click.stop="emit('delete', session.id)"
         >

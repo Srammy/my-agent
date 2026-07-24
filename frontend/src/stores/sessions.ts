@@ -5,6 +5,7 @@ import {
   listSessions,
   type ChatSession
 } from '../api/chat'
+import { ApiError } from '../api/client'
 
 interface SessionsState {
   sessions: ChatSession[]
@@ -72,17 +73,23 @@ export const useSessionsStore = defineStore('sessions', {
 
       this.error = ''
       this.deletingSessionId = sessionId
+      const locallyKnown = this.sessions.some((session) => session.id === sessionId)
 
       try {
-        await deleteSessionApi(sessionId)
+        try {
+          await deleteSessionApi(sessionId)
+        } catch (error) {
+          if (!(locallyKnown && error instanceof ApiError && error.status === 404)) {
+            this.error = errorMessage(error)
+            throw error
+          }
+        }
+
         this.sessions = this.sessions.filter((session) => session.id !== sessionId)
 
         if (this.currentSessionId === sessionId) {
           this.currentSessionId = this.sessions[0]?.id ?? ''
         }
-      } catch (error) {
-        this.error = errorMessage(error)
-        throw error
       } finally {
         if (this.deletingSessionId === sessionId) {
           this.deletingSessionId = ''

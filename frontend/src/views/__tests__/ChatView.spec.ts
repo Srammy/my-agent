@@ -88,6 +88,32 @@ describe('ChatView session deletion', () => {
     expect(wrapper.findComponent(SessionSidebar).props('cancellingSessionIds')).toEqual({ s1: true })
   })
 
+  it('clears a locally known cancelling session when retrying DELETE returns 404', async () => {
+    vi.spyOn(chatApi, 'deleteSession')
+      .mockRejectedValueOnce(new Error('Network unavailable'))
+      .mockRejectedValueOnce(new ApiError('Session not found', 404, null))
+    const wrapper = await mountView()
+    const sessions = useSessionsStore()
+    const chat = useChatStore()
+    sessions.sessions = [session]
+    sessions.currentSessionId = 's1'
+    chat.messagesBySession.s1 = [{ id: 'm1', role: 'user', content: 'hello', events: [] }]
+
+    wrapper.findComponent(SessionSidebar).vm.$emit('delete', 's1')
+    await vi.waitFor(() => expect(sessions.error).toBe('Network unavailable'))
+
+    expect(chat.isCancellingSession('s1')).toBe(true)
+    expect(chat.messages('s1')).toHaveLength(1)
+
+    wrapper.findComponent(SessionSidebar).vm.$emit('delete', 's1')
+    await vi.waitFor(() => expect(sessions.sessions).toEqual([]))
+
+    expect(sessions.currentSessionId).toBe('')
+    expect(sessions.error).toBe('')
+    expect(chat.messagesBySession).not.toHaveProperty('s1')
+    expect(chat.isCancellingSession('s1')).toBe(false)
+  })
+
   it('does not abort session B when its deletion is rejected while deleting A', async () => {
     let resolveDelete: (() => void) | undefined
     vi.spyOn(chatApi, 'deleteSession').mockImplementation(
@@ -144,5 +170,35 @@ describe('ChatView session deletion', () => {
     const buttons = wrapper.findAllComponents({ name: 'ElButton' })
     expect(buttons).toHaveLength(3)
     expect(buttons.every((button) => button.props('disabled') === true)).toBe(true)
+  })
+})
+
+describe('SessionSidebar deletion controls', () => {
+  it('disables every delete button while one session is being deleted', () => {
+    const wrapper = shallowMount(SessionSidebar, {
+      props: {
+        sessions: [
+          session,
+          { ...session, id: 's2', title: 'Session 2' }
+        ],
+        currentSessionId: 's1',
+        loading: false,
+        deletingSessionId: 's1',
+        cancellingSessionIds: {}
+      },
+      global: {
+        stubs: {
+          ElButton: {
+            name: 'ElButton',
+            props: ['disabled', 'loading'],
+            template: '<button :disabled="disabled"><slot /></button>'
+          }
+        }
+      }
+    })
+
+    const deleteButtons = wrapper.findAllComponents({ name: 'ElButton' })
+    expect(deleteButtons).toHaveLength(3)
+    expect(deleteButtons.slice(1).every((button) => button.props('disabled') === true)).toBe(true)
   })
 })
