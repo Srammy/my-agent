@@ -73,7 +73,28 @@ describe('chat confirmation streams', () => {
     await expect(request).rejects.toMatchObject({ name: 'AbortError' })
   })
 
-  it('reads the stable error code from a failed streaming response', async () => {
+  it('reads stable error metadata from a failed streaming response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('conflict', {
+        status: 409,
+        headers: {
+          'X-Error-Code': 'SESSION_CANCELLING',
+          'X-Tool-Confirmation-Consumed': 'true'
+        }
+      })
+    ))
+
+    await expect(
+      chatApi.streamNdjson('/api/chat/sessions/s1/stream', { message: 'hello' }, vi.fn())
+    ).rejects.toMatchObject({
+      name: 'StreamRequestError',
+      status: 409,
+      code: 'SESSION_CANCELLING',
+      confirmationConsumed: true
+    })
+  })
+
+  it('leaves confirmation consumption unknown when the response marker is missing', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       new Response('conflict', {
         status: 409,
@@ -86,7 +107,8 @@ describe('chat confirmation streams', () => {
     ).rejects.toMatchObject({
       name: 'StreamRequestError',
       status: 409,
-      code: 'SESSION_CANCELLING'
+      code: 'SESSION_CANCELLING',
+      confirmationConsumed: undefined
     })
   })
 
@@ -141,6 +163,35 @@ describe('chat confirmation streams', () => {
     expect(store.error).toBe('')
     expect(store.messages('s1')[0].events).toEqual([event])
     expect(event).toMatchObject({ consumed: false, confirming: false })
+  })
+
+  it('keeps a confirmation consumed when aborted after receiving a stream event', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockImplementation(
+      async (_sessionId, _confirmationId, _decisions, onEvent, signal) => {
+        onEvent({ type: 'text_delta', delta: 'partial' })
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('Aborted', 'AbortError'))
+          )
+        })
+      }
+    )
+    const store = useChatStore()
+    const event = toolEvent()
+    store.messagesBySession.s1 = [
+      { id: 'assistant-1', role: 'assistant', content: '', events: [event] }
+    ]
+    selectAll(store, event)
+
+    const confirming = store.confirmTool('s1', 'assistant-1', event)
+    await Promise.resolve()
+    store.abortSession('s1')
+    await confirming
+
+    expect(store.error).toBe('')
+    expect(store.messages('s1')[0].content).toBe('partial')
+    expect(event).toMatchObject({ consumed: true, confirming: false })
   })
 
   it('blocks sending and tool confirmation while the session is cancelling', async () => {
@@ -350,6 +401,43 @@ describe('chat confirmation streams', () => {
     expect(event).toMatchObject({ consumed: true, confirming: false })
   })
 
+  it('keeps a confirmation consumed when a partial stream later fails', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockImplementation(
+      async (_sessionId, _confirmationId, _decisions, onEvent) => {
+        onEvent({ type: 'text_delta', delta: 'partial' })
+        throw new Error('connection lost')
+      }
+    )
+    const store = useChatStore()
+    const event = toolEvent()
+    store.messagesBySession.s1 = [
+      { id: 'assistant-1', role: 'assistant', content: '', events: [event] }
+    ]
+    selectAll(store, event)
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(store.messages('s1')[0].content).toBe('partial')
+    expect(event).toMatchObject({ consumed: true, confirming: false })
+  })
+
+  it.each([
+    [
+      'an unclassified 5xx',
+      new chatApi.StreamRequestError('server failed', 500)
+    ],
+    ['a network error', new Error('network failed')]
+  ])('fails closed after %s', async (_label, failure) => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockRejectedValue(failure)
+    const store = useChatStore()
+    const event = toolEvent()
+    selectAll(store, event)
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(event).toMatchObject({ consumed: true, confirming: false })
+  })
+
   it('keeps decisions after HTTP 400 and allows retry', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response('{"message":"invalid decisions"}', { status: 400 }))
@@ -369,6 +457,41 @@ describe('chat confirmation streams', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(event.consumed).toBe(true)
   })
+
+  it('keeps a safely rolled-back confirmation retryable', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockRejectedValue(
+      new chatApi.StreamRequestError('registration failed', 503, 'TOOL_CONFIRMATION_RETRYABLE')
+    )
+    const store = useChatStore()
+    const event = toolEvent()
+    selectAll(store, event)
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(event).toMatchObject({ consumed: false, confirming: false })
+    expect(store.cancellingSessionIds.s1).toBeUndefined()
+  })
+
+  it.each([409, 400])(
+    'keeps a fail-closed confirmation consumed with HTTP %s',
+    async (status) => {
+      vi.spyOn(chatApi, 'confirmToolCall').mockRejectedValue(
+        new chatApi.StreamRequestError(
+          'consume result was uncertain',
+          status,
+          'TOOL_CONFIRMATION_CONSUMED'
+        )
+      )
+      const store = useChatStore()
+      const event = toolEvent()
+      selectAll(store, event)
+
+      await store.confirmTool('s1', 'assistant-1', event)
+
+      expect(event).toMatchObject({ consumed: true, confirming: false })
+      expect(store.cancellingSessionIds.s1).toBeUndefined()
+    }
+  )
 
   it.each([404, 409])('consumes a stale confirmation after HTTP %s', async (status) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })))
@@ -509,6 +632,25 @@ describe('chat confirmation streams', () => {
     await store.confirmTool('s1', 'assistant-1', event)
 
     expect(store.isCancellingSession('s1')).toBe(true)
+    expect(event.consumed).toBe(false)
+  })
+
+  it('keeps a consumed confirmation locked during session cancellation', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockRejectedValue(Object.assign(
+      new chatApi.StreamRequestError('cancelling', 409, 'SESSION_CANCELLING'),
+      { confirmationConsumed: true }
+    ))
+    const store = useChatStore()
+    const event = toolEvent()
+    store.messagesBySession.s1 = [
+      { id: 'assistant-1', role: 'assistant', content: '', events: [event] }
+    ]
+    selectAll(store, event)
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(store.isCancellingSession('s1')).toBe(true)
+    expect(event.consumed).toBe(true)
   })
 
   it.each([

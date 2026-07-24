@@ -17,6 +17,13 @@ public interface SessionExecutionCoordinator {
       Supplier<Flux<T>> source,
       Supplier<Mono<Void>> completion);
 
+  <T> Flux<T> track(
+      Long userId,
+      String sessionId,
+      Supplier<Mono<Void>> preflight,
+      Supplier<Flux<T>> source,
+      Supplier<Mono<Void>> completion);
+
   Mono<Void> cancelAndAwait(Long userId, String sessionId);
 
   Mono<Void> rejectIfCancelled(Long userId, String sessionId);

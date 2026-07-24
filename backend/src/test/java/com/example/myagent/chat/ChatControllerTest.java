@@ -43,6 +43,7 @@ import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 @WebFluxTest(ChatController.class)
 @Import({ChatService.class, StubChatAgentGateway.class, ChatControllerTest.TestSecurityConfig.class})
@@ -66,6 +67,13 @@ class ChatControllerTest {
     when(sessionExecutionCoordinator.track(anyLong(), anyString(), any(), any()))
         .thenAnswer(invocation ->
             ((Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());
+    when(sessionExecutionCoordinator.track(
+        anyLong(), anyString(), any(), any(), any()))
+        .thenAnswer(invocation -> {
+          Supplier<Mono<Void>> preflight = invocation.getArgument(2);
+          Supplier<Flux<StreamEventDto>> source = invocation.getArgument(3);
+          return Mono.defer(preflight).thenMany(Flux.defer(source));
+        });
   }
 
   @Test

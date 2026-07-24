@@ -193,9 +193,12 @@ export const useChatStore = defineStore('chat', {
       event.confirming = true
       this.error = ''
       const controller = this.startSessionExecution(sessionId)
+      let receivedStreamEvent = false
 
       try {
         await confirmToolCall(sessionId, event.confirmationId, decisions, (streamEvent) => {
+          receivedStreamEvent = true
+
           if (streamEvent.type === 'text_delta') {
             const message = this.messagesBySession[sessionId]?.find((item) => item.id === messageId)
 
@@ -222,7 +225,7 @@ export const useChatStore = defineStore('chat', {
         event.consumed = true
       } catch (error) {
         if (isAbortError(error) && controller.signal.aborted) {
-          event.consumed = false
+          event.consumed = receivedStreamEvent
           return
         }
 
@@ -231,11 +234,14 @@ export const useChatStore = defineStore('chat', {
         if (error instanceof StreamRequestError && error.code === 'SESSION_CANCELLING') {
           this.cancellingSessionIds[sessionId] = true
         }
-        if (error instanceof StreamRequestError && (error.status === 404 || error.status === 409)) {
-          event.consumed = true
-        } else {
-          event.consumed = false
-        }
+        const safelyRetryable = error instanceof StreamRequestError && (
+          error.code === 'SESSION_CANCELLING' ||
+          error.code === 'TOOL_CONFIRMATION_RETRYABLE' ||
+          (error.status === 400 && !error.code)
+        )
+        event.consumed = receivedStreamEvent ||
+          (error instanceof StreamRequestError && error.confirmationConsumed === true) ||
+          !safelyRetryable
         this.appendEvent(sessionId, messageId, {
           id: makeId('event'),
           type: 'error',

@@ -20,6 +20,8 @@ import com.example.myagent.session.SessionController;
 import com.example.myagent.session.SessionExecutionCoordinator;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ConfirmationKind;
+import com.example.myagent.toolconfirmation.ToolConfirmationClaim;
+import com.example.myagent.toolconfirmation.ToolConfirmationDecision;
 import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import io.agentscope.core.message.ToolUseBlock;
 import java.time.Duration;
@@ -30,6 +32,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +46,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+import org.reactivestreams.Publisher;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -61,6 +65,7 @@ class ChatServiceConfirmationIntegrationTest {
 
   private static LettuceConnectionFactory connectionFactory;
   private static ReactiveStringRedisTemplate redisTemplate;
+  private AgentProperties properties;
   private ToolConfirmationService toolConfirmationService;
 
   @BeforeAll
@@ -78,7 +83,7 @@ class ChatServiceConfirmationIntegrationTest {
   @BeforeEach
   void setUp() {
     redisTemplate.getConnectionFactory().getReactiveConnection().serverCommands().flushAll().block();
-    AgentProperties properties = new AgentProperties(null, null, null,
+    properties = new AgentProperties(null, null, null,
         new AgentProperties.StateStore("redis", new AgentProperties.StateStore.Redis("unused", PREFIX)),
         null, null, null);
     toolConfirmationService = new ToolConfirmationService(
@@ -112,6 +117,308 @@ class ChatServiceConfirmationIntegrationTest {
     assertThatThrownBy(() -> toolConfirmationService.claim(USER.id(), SESSION_ID, confirmationId).block())
         .isInstanceOfSatisfying(ResponseStatusException.class,
             error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+  }
+
+  @Test
+  void registrationFailureMakesConfirmationRetryable() {
+    String confirmationId = toolConfirmationService.create(
+        USER.id(), SESSION_ID, "reply",
+        List.of(new ToolUseBlock("call", "shell", Map.of("command", "pwd"))),
+        ConfirmationKind.USER_CONFIRM).block().confirmationId();
+    ChatAgentGateway gateway = mock(ChatAgentGateway.class);
+    when(gateway.confirmExecution(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new AgentExecution<>(Flux.never(), Mono.empty()));
+    SessionExecutionCoordinator rejectingCoordinator = mock(SessionExecutionCoordinator.class);
+    when(rejectingCoordinator.track(
+        org.mockito.ArgumentMatchers.anyLong(),
+        org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any()))
+        .thenReturn(Flux.error(new IllegalStateException("registration failed")));
+
+    StepVerifier.create(new ChatService(
+            sessionService(),
+            gateway,
+            permissionService(),
+            toolConfirmationService,
+            rejectingCoordinator).confirm(
+            USER,
+            SESSION_ID,
+            confirmationId,
+            List.of(new ToolConfirmationDecisionRequest("call", true))))
+        .expectErrorSatisfies(error -> assertThat(
+            ((ResponseStatusException) error).getHeaders().getFirst("X-Error-Code"))
+            .isEqualTo("TOOL_CONFIRMATION_RETRYABLE"))
+        .verify();
+
+    ToolConfirmationClaim retry =
+        toolConfirmationService.claim(USER.id(), SESSION_ID, confirmationId).block();
+    assertThat(retry).isNotNull();
+    toolConfirmationService.release(confirmationId, retry.processingToken()).block();
+  }
+
+  @Test
+  void consumePreflightFailureWithRealCoordinatorDoesNotPoisonTheSession()
+      throws Exception {
+    ToolConfirmationService failingConsumeService = new ToolConfirmationService(
+        redisTemplate, Jackson2ObjectMapperBuilder.json().build(), properties) {
+      @Override
+      public Mono<Void> consume(
+          String confirmationId,
+          String processingToken,
+          List<ToolConfirmationDecision> decisions) {
+        return Mono.error(new IllegalStateException("consume failed"));
+      }
+    };
+    String confirmationId = failingConsumeService.create(
+        USER.id(), SESSION_ID, "reply",
+        List.of(new ToolUseBlock("call", "shell", Map.of("command", "pwd"))),
+        ConfirmationKind.USER_CONFIRM).block().confirmationId();
+    AtomicBoolean sourceSubscribed = new AtomicBoolean();
+    CountDownLatch completionDisposed = new CountDownLatch(1);
+    ChatAgentGateway gateway = mock(ChatAgentGateway.class);
+    when(gateway.confirmExecution(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new AgentExecution<>(
+            Flux.defer(() -> {
+              sourceSubscribed.set(true);
+              return Flux.just(StreamEventDto.done());
+            }),
+            Mono.<Void>never().doOnCancel(completionDisposed::countDown)));
+    RedisSessionExecutionCoordinator realCoordinator = coordinator();
+    try {
+      ChatService chatService = new ChatService(
+          sessionService(),
+          gateway,
+          permissionService(),
+          failingConsumeService,
+          realCoordinator);
+
+      StepVerifier.create(chatService.confirm(
+              USER,
+              SESSION_ID,
+              confirmationId,
+              List.of(new ToolConfirmationDecisionRequest("call", true))))
+          .expectErrorSatisfies(error -> {
+            assertThat(error).isInstanceOf(ResponseStatusException.class);
+            assertThat(((ResponseStatusException) error).getHeaders()
+                .getFirst("X-Error-Code")).isEqualTo("TOOL_CONFIRMATION_RETRYABLE");
+          })
+          .verify();
+
+      assertThat(sourceSubscribed).isFalse();
+      assertThat(completionDisposed.await(5, TimeUnit.SECONDS)).isTrue();
+      awaitNoExecutionRegistration(SESSION_ID);
+
+      ToolConfirmationClaim retry =
+          failingConsumeService.claim(USER.id(), SESSION_ID, confirmationId).block();
+      assertThat(retry).isNotNull();
+      failingConsumeService.release(confirmationId, retry.processingToken()).block();
+
+      StepVerifier.create(realCoordinator.track(
+              USER.id(), SESSION_ID, () -> Flux.just("started")))
+          .expectNext("started")
+          .verifyComplete();
+      awaitNoExecutionRegistration(SESSION_ID);
+    } finally {
+      realCoordinator.destroy();
+    }
+  }
+
+  @Test
+  void remoteCancellationDuringConfirmationPreflightPreservesCancellationAndRollsBack()
+      throws Exception {
+    CountDownLatch consumeSubscribed = new CountDownLatch(1);
+    CountDownLatch consumeCancelled = new CountDownLatch(1);
+    ToolConfirmationService pausedConsumeService = new ToolConfirmationService(
+        redisTemplate, Jackson2ObjectMapperBuilder.json().build(), properties) {
+      @Override
+      public Mono<Void> consume(
+          String confirmationId,
+          String processingToken,
+          List<ToolConfirmationDecision> decisions) {
+        return Mono.<Void>never()
+            .doOnSubscribe(ignored -> consumeSubscribed.countDown())
+            .doOnCancel(consumeCancelled::countDown);
+      }
+    };
+    String confirmationId = pausedConsumeService.create(
+        USER.id(), SESSION_ID, "reply",
+        List.of(new ToolUseBlock("call", "shell", Map.of("command", "pwd"))),
+        ConfirmationKind.USER_CONFIRM).block().confirmationId();
+    AtomicBoolean sourceSubscribed = new AtomicBoolean();
+    CountDownLatch completionDisposed = new CountDownLatch(1);
+    ChatAgentGateway gateway = mock(ChatAgentGateway.class);
+    when(gateway.confirmExecution(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new AgentExecution<>(
+            Flux.defer(() -> {
+              sourceSubscribed.set(true);
+              return Flux.never();
+            }),
+            Mono.<Void>never().doOnCancel(completionDisposed::countDown)));
+    RedisSessionExecutionCoordinator cancellingCoordinator = coordinator();
+    RedisSessionExecutionCoordinator executionCoordinator = coordinator();
+    Disposable execution = null;
+    try {
+      awaitCoordinatorSubscribers(2);
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      CountDownLatch terminated = new CountDownLatch(1);
+      ChatService chatService = new ChatService(
+          sessionService(),
+          gateway,
+          permissionService(),
+          pausedConsumeService,
+          executionCoordinator);
+
+      execution = chatService.confirm(
+              USER,
+              SESSION_ID,
+              confirmationId,
+              List.of(new ToolConfirmationDecisionRequest("call", true)))
+          .doOnError(failure::set)
+          .doFinally(ignored -> terminated.countDown())
+          .subscribe(ignored -> {}, ignored -> {});
+      assertThat(consumeSubscribed.await(5, TimeUnit.SECONDS)).isTrue();
+
+      cancellingCoordinator.cancelAndAwait(USER.id(), SESSION_ID)
+          .block(Duration.ofSeconds(10));
+
+      assertThat(terminated.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(consumeCancelled.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(completionDisposed.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(sourceSubscribed).isFalse();
+      assertThat(failure.get()).isInstanceOfSatisfying(
+          ResponseStatusException.class,
+          error -> {
+            assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+            assertThat(error.getHeaders().getFirst("X-Error-Code"))
+                .isEqualTo("SESSION_CANCELLING");
+          });
+      awaitNoExecutionRegistration(SESSION_ID);
+
+      ToolConfirmationClaim retry =
+          pausedConsumeService.claim(USER.id(), SESSION_ID, confirmationId).block();
+      assertThat(retry).isNotNull();
+      pausedConsumeService.release(confirmationId, retry.processingToken()).block();
+    } finally {
+      if (execution != null) {
+        execution.dispose();
+      }
+      executionCoordinator.destroy();
+      cancellingCoordinator.destroy();
+    }
+  }
+
+  @Test
+  void remoteCancellationAfterConsumeBeforeSourceAttachPreservesBothSafetyFacts()
+      throws Exception {
+    String confirmationId = toolConfirmationService.create(
+        USER.id(), SESSION_ID, "reply",
+        List.of(new ToolUseBlock("call", "shell", Map.of("command", "pwd"))),
+        ConfirmationKind.USER_CONFIRM).block().confirmationId();
+    CountDownLatch sourceAwaitingAttach = new CountDownLatch(1);
+    AtomicBoolean sourceAttached = new AtomicBoolean();
+    Publisher<StreamEventDto> delayedSource =
+        subscriber -> sourceAwaitingAttach.countDown();
+    CountDownLatch completionDisposed = new CountDownLatch(1);
+    ChatAgentGateway gateway = mock(ChatAgentGateway.class);
+    when(gateway.confirmExecution(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new AgentExecution<>(
+            Flux.from(delayedSource)
+                .doOnSubscribe(ignored -> sourceAttached.set(true)),
+            Mono.<Void>never().doOnCancel(completionDisposed::countDown)));
+    RedisSessionExecutionCoordinator cancellingCoordinator = coordinator();
+    RedisSessionExecutionCoordinator executionCoordinator = coordinator();
+    Disposable execution = null;
+    try {
+      awaitCoordinatorSubscribers(2);
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      CountDownLatch terminated = new CountDownLatch(1);
+      ChatService chatService = new ChatService(
+          sessionService(),
+          gateway,
+          permissionService(),
+          toolConfirmationService,
+          executionCoordinator);
+
+      execution = chatService.confirm(
+              USER,
+              SESSION_ID,
+              confirmationId,
+              List.of(new ToolConfirmationDecisionRequest("call", true)))
+          .doOnError(failure::set)
+          .doFinally(ignored -> terminated.countDown())
+          .subscribe(ignored -> {}, ignored -> {});
+      assertThat(sourceAwaitingAttach.await(5, TimeUnit.SECONDS)).isTrue();
+
+      cancellingCoordinator.cancelAndAwait(USER.id(), SESSION_ID)
+          .block(Duration.ofSeconds(10));
+
+      assertThat(terminated.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(completionDisposed.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(sourceAttached).isFalse();
+      assertThat(failure.get()).isInstanceOfSatisfying(
+          ResponseStatusException.class,
+          error -> {
+            assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+            assertThat(error.getHeaders().getFirst("X-Error-Code"))
+                .isEqualTo("SESSION_CANCELLING");
+            assertThat(error.getHeaders().getFirst(
+                "X-Tool-Confirmation-Consumed")).isEqualTo("true");
+          });
+      awaitNoExecutionRegistration(SESSION_ID);
+      assertThatThrownBy(() -> toolConfirmationService.claim(
+          USER.id(), SESSION_ID, confirmationId).block())
+          .isInstanceOfSatisfying(
+              ResponseStatusException.class,
+              error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+    } finally {
+      if (execution != null) {
+        execution.dispose();
+      }
+      executionCoordinator.destroy();
+      cancellingCoordinator.destroy();
+    }
+  }
+
+  @Test
+  void eventSourceFailureKeepsConfirmationConsumed() {
+    String confirmationId = toolConfirmationService.create(
+        USER.id(), SESSION_ID, "reply",
+        List.of(new ToolUseBlock("call", "shell", Map.of("command", "pwd"))),
+        ConfirmationKind.USER_CONFIRM).block().confirmationId();
+    ChatAgentGateway gateway = mock(ChatAgentGateway.class);
+    Sinks.Empty<Void> completion = Sinks.empty();
+    when(gateway.confirmExecution(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new AgentExecution<>(
+            Flux.<StreamEventDto>error(new IllegalStateException("started failure"))
+                .doFinally(ignored -> completion.tryEmitEmpty()),
+            completion.asMono()));
+    RedisSessionExecutionCoordinator realCoordinator = coordinator();
+    try {
+      ChatService chatService = new ChatService(
+          sessionService(),
+          gateway,
+          permissionService(),
+          toolConfirmationService,
+          realCoordinator);
+
+      StepVerifier.create(chatService.confirm(
+              USER,
+              SESSION_ID,
+              confirmationId,
+              List.of(new ToolConfirmationDecisionRequest("call", true))))
+          .expectNext(StreamEventDto.error("started failure"))
+          .verifyComplete();
+
+      assertThatThrownBy(() -> toolConfirmationService.claim(
+          USER.id(), SESSION_ID, confirmationId).block())
+          .isInstanceOfSatisfying(
+              ResponseStatusException.class,
+              error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+    } finally {
+      realCoordinator.destroy();
+    }
   }
 
   @Test
@@ -262,6 +569,21 @@ class ChatServiceConfirmationIntegrationTest {
     assertThat(subscribers).isNotNull().isGreaterThanOrEqualTo(expected);
   }
 
+  private void awaitNoExecutionRegistration(String sessionId) {
+    String sessionPrefix =
+        "myagent:agent-state:session-execution:" + USER.id() + ":" + sessionId;
+    Boolean cleared = Flux.interval(Duration.ZERO, Duration.ofMillis(25))
+        .concatMap(ignored -> Mono.zip(
+            redisTemplate.opsForValue().get(sessionPrefix + ":active-count")
+                .defaultIfEmpty(""),
+            redisTemplate.opsForSet().size(sessionPrefix + ":pending-completion")))
+        .filter(state -> state.getT1().isEmpty() && state.getT2() == 0L)
+        .next()
+        .thenReturn(true)
+        .block(Duration.ofSeconds(5));
+    assertThat(cleared).isTrue();
+  }
+
   @SuppressWarnings("unchecked")
   private SessionExecutionCoordinator executionCoordinator() {
     SessionExecutionCoordinator coordinator = mock(SessionExecutionCoordinator.class);
@@ -275,9 +597,12 @@ class ChatServiceConfirmationIntegrationTest {
         org.mockito.ArgumentMatchers.anyLong(),
         org.mockito.ArgumentMatchers.anyString(),
         org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any(),
         org.mockito.ArgumentMatchers.any()))
-        .thenAnswer(invocation ->
-            ((java.util.function.Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());
+        .thenAnswer(invocation -> Mono.defer(
+                (java.util.function.Supplier<Mono<Void>>) invocation.getArgument(2))
+            .thenMany(Flux.defer(
+                (java.util.function.Supplier<Flux<StreamEventDto>>) invocation.getArgument(3))));
     return coordinator;
   }
 }

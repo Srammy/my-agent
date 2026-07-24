@@ -220,6 +220,16 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       String sessionId,
       Supplier<Flux<T>> source,
       Supplier<Mono<Void>> completion) {
+    return track(userId, sessionId, Mono::empty, source, completion);
+  }
+
+  @Override
+  public <T> Flux<T> track(
+      Long userId,
+      String sessionId,
+      Supplier<Mono<Void>> preflight,
+      Supplier<Flux<T>> source,
+      Supplier<Mono<Void>> completion) {
     return Flux.defer(() -> {
       if (destroyed.get()) {
         return Flux.error(new IllegalStateException("Session execution coordinator is closed"));
@@ -256,13 +266,19 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
             Disposable watchdog = Flux.interval(refreshInterval)
                 .subscribe(ignored -> execution.cancelIfLeaseUnsafe(activeTtl, refreshInterval));
             execution.refreshWith(heartbeat, watchdog);
-            return withinRegistrationWindow(
+            Flux<T> executionEvents = withinRegistrationWindow(
                     rejectIfCancelled(userId, sessionId), registrationDeadline)
-                .thenMany(Flux.defer(source)
-                    .doOnSubscribe(execution::attach))
+                .thenMany(Mono.defer(preflight)
+                    .thenMany(Flux.defer(source)
+                        .doOnSubscribe(execution::attach)))
                 .doOnError(error -> completeIfNotStarted(key, executionId, execution))
-                .doOnCancel(() -> completeIfNotStarted(key, executionId, execution))
-                .takeUntilOther(execution.cancelled());
+                .doOnCancel(() -> completeIfNotStarted(key, executionId, execution));
+            return executionEvents
+                .takeUntilOther(execution.cancelled())
+                .concatWith(Flux.defer(() ->
+                    execution.isSessionCancelling() && !execution.hasStarted()
+                        ? Flux.error(sessionCancelled())
+                        : Flux.empty()));
           });
     });
   }
@@ -349,7 +365,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private void cancelLocal(SessionExecutionKey key) {
     Map<String, LocalExecution> executions = localExecutions.get(key);
     if (executions != null) {
-      executions.values().forEach(LocalExecution::cancel);
+      executions.values().forEach(LocalExecution::cancelForSession);
     }
   }
 
@@ -375,6 +391,8 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
         .doOnNext(result -> {
           if (result > 0L) {
             execution.markRenewed();
+          } else if (result == -1L) {
+            execution.cancelForSession();
           } else {
             execution.cancel();
           }
@@ -598,6 +616,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
   private static final class LocalExecution {
     private final AtomicBoolean cancelled = new AtomicBoolean();
+    private final AtomicBoolean sessionCancelling = new AtomicBoolean();
     private final AtomicBoolean complete = new AtomicBoolean();
     private final AtomicReference<Subscription> subscription = new AtomicReference<>();
     private final Disposable.Composite refresh = Disposables.composite();
@@ -646,8 +665,17 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
       return cancelled.get();
     }
 
+    boolean isSessionCancelling() {
+      return sessionCancelling.get();
+    }
+
     Mono<Void> cancelled() {
       return cancellationSignal.asMono();
+    }
+
+    void cancelForSession() {
+      sessionCancelling.set(true);
+      cancel();
     }
 
     void cancel() {

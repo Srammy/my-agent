@@ -161,6 +161,27 @@ class ToolConfirmationServiceTest {
     assertStatus(() -> service.release("id", "token").block(), 409);
   }
 
+  @Test
+  void rollbackIfProcessingReturnsWhetherTheSameTokenWasReleased() {
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenReturn(Flux.just(1L), Flux.just(0L), Flux.just(0L));
+
+    StepVerifier.create(service.rollbackIfProcessing("id", "token"))
+        .expectNext(true)
+        .verifyComplete();
+    StepVerifier.create(service.rollbackIfProcessing("id", "wrong-token"))
+        .expectNext(false)
+        .verifyComplete();
+    StepVerifier.create(service.rollbackIfProcessing("missing", "token"))
+        .expectNext(false)
+        .verifyComplete();
+
+    verify(redisTemplate).execute(
+        any(RedisScript.class),
+        eq(List.of("prefix:tool-confirmations:id")),
+        eq(List.of("token")));
+  }
+
   private void assertClaimStatus(String result, int status) {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList())).thenReturn(Flux.just(result));
     assertStatus(() -> service.claim(7L, "session", "id").block(), status);
