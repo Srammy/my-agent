@@ -370,6 +370,34 @@ describe('chat confirmation streams', () => {
     expect(event.consumed).toBe(true)
   })
 
+  it('keeps a safely rolled-back confirmation retryable', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockRejectedValue(
+      new chatApi.StreamRequestError('registration failed', 503, 'TOOL_CONFIRMATION_RETRYABLE')
+    )
+    const store = useChatStore()
+    const event = toolEvent()
+    selectAll(store, event)
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(event).toMatchObject({ consumed: false, confirming: false })
+    expect(store.cancellingSessionIds.s1).toBeUndefined()
+  })
+
+  it('keeps a fail-closed confirmation consumed', async () => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockRejectedValue(
+      new chatApi.StreamRequestError('consume result was uncertain', 409, 'TOOL_CONFIRMATION_CONSUMED')
+    )
+    const store = useChatStore()
+    const event = toolEvent()
+    selectAll(store, event)
+
+    await store.confirmTool('s1', 'assistant-1', event)
+
+    expect(event).toMatchObject({ consumed: true, confirming: false })
+    expect(store.cancellingSessionIds.s1).toBeUndefined()
+  })
+
   it.each([404, 409])('consumes a stale confirmation after HTTP %s', async (status) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })))
     const store = useChatStore()
