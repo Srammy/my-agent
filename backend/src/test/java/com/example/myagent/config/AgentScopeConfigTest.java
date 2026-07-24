@@ -14,6 +14,7 @@ import com.example.myagent.chat.ChatAgentRequest;
 import com.example.myagent.chat.ChatToolConfirmationRequest;
 import com.example.myagent.chat.ChatAgentGateway;
 import com.example.myagent.chat.StubChatAgentGateway;
+import com.example.myagent.agent.AgentExecution;
 import com.example.myagent.agent.AgentScopeStreamExecutor;
 import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.skillreview.BaseStoreSkillDraftLock;
@@ -28,13 +29,22 @@ import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.event.ConfirmResult;
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.middleware.ActingInput;
+import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.nio.file.Path;
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -49,6 +59,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Answers;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
+import reactor.test.StepVerifier;
 
 class AgentScopeConfigTest {
 
@@ -60,6 +72,130 @@ class AgentScopeConfigTest {
           .withConfiguration(
               AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class))
           .withUserConfiguration(AgentScopeGatewayContextConfiguration.class);
+
+  @Test
+  void cancellationWaitsForUnderlyingAgentStreamBeforeReportingCompletion() {
+    HarnessAgent agent = mock(HarnessAgent.class);
+    io.agentscope.core.ReActAgent delegate = mock(io.agentscope.core.ReActAgent.class);
+    when(agent.getDelegate()).thenReturn(delegate);
+    RuntimeContext runtimeContext =
+        RuntimeContext.builder().userId("7").sessionId("s_123").build();
+    Sinks.Many<Object> underlying = Sinks.many().unicast().onBackpressureBuffer();
+    AgentExecution<Object> execution = config.agentExecution(
+        () -> agent, ignored -> underlying.asFlux(), runtimeContext);
+    java.util.concurrent.atomic.AtomicBoolean completed =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    reactor.core.Disposable completionSubscription =
+        execution.completion().subscribe(ignored -> {}, ignored -> {}, () -> completed.set(true));
+    reactor.core.Disposable eventSubscription = execution.events().subscribe();
+
+    eventSubscription.dispose();
+
+    verify(delegate).interrupt(runtimeContext);
+    assertThat(completed).isFalse();
+    verify(agent, org.mockito.Mockito.never()).close();
+
+    underlying.tryEmitComplete();
+
+    assertThat(completed).isTrue();
+    verify(agent).close();
+    completionSubscription.dispose();
+  }
+
+  @Test
+  void cancellationPreventsActingFromStartingAfterReasoningHasAlreadyBegun() {
+    HarnessAgent agent = mock(HarnessAgent.class);
+    io.agentscope.core.ReActAgent delegate = mock(io.agentscope.core.ReActAgent.class);
+    when(agent.getDelegate()).thenReturn(delegate);
+    RuntimeContext runtimeContext =
+        RuntimeContext.builder().userId("7").sessionId("s_123").build();
+    Sinks.Many<Object> underlying = Sinks.many().unicast().onBackpressureBuffer();
+    AgentExecution<Object> execution = config.agentExecution(
+        () -> agent, ignored -> underlying.asFlux(), runtimeContext);
+    reactor.core.Disposable eventSubscription = execution.events().subscribe();
+
+    eventSubscription.dispose();
+
+    AtomicBoolean actingInvoked = new AtomicBoolean();
+    StepVerifier.create(config.cancellationAwareActingMiddleware().onActing(
+            delegate,
+            runtimeContext,
+            new ActingInput(List.of()),
+            ignored -> {
+              actingInvoked.set(true);
+              return Flux.empty();
+            }))
+        .expectError(InterruptedException.class)
+        .verify();
+    assertThat(actingInvoked).isFalse();
+
+    underlying.tryEmitComplete();
+    execution.completion().block();
+    verify(agent).close();
+  }
+
+  @Test
+  void cancellationAndActingStartAreLinearizedByOneExecutionGate() throws Exception {
+    AgentScopeConfig.ExecutionCancellationGate cancelFirst =
+        new AgentScopeConfig.ExecutionCancellationGate();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      CountDownLatch actingReady = new CountDownLatch(1);
+      Future<Boolean> actingStart;
+      synchronized (cancelFirst) {
+        actingStart = executor.submit(() -> {
+          actingReady.countDown();
+          return cancelFirst.tryBeginActing();
+        });
+        assertThat(actingReady.await(1, TimeUnit.SECONDS)).isTrue();
+        cancelFirst.cancel();
+      }
+      assertThat(actingStart.get(1, TimeUnit.SECONDS)).isFalse();
+
+      AgentScopeConfig.ExecutionCancellationGate actingFirst =
+          new AgentScopeConfig.ExecutionCancellationGate();
+      CountDownLatch cancelReady = new CountDownLatch(1);
+      Future<?> cancellation;
+      synchronized (actingFirst) {
+        assertThat(actingFirst.tryBeginActing()).isTrue();
+        cancellation = executor.submit(() -> {
+          cancelReady.countDown();
+          actingFirst.cancel();
+        });
+        assertThat(cancelReady.await(1, TimeUnit.SECONDS)).isTrue();
+      }
+      cancellation.get(1, TimeUnit.SECONDS);
+      assertThat(actingFirst.tryBeginActing()).isFalse();
+    } finally {
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  void interruptFailureDoesNotHideLaterUnderlyingCompletion() {
+    HarnessAgent agent = mock(HarnessAgent.class);
+    io.agentscope.core.ReActAgent delegate = mock(io.agentscope.core.ReActAgent.class);
+    when(agent.getDelegate()).thenReturn(delegate);
+    RuntimeContext runtimeContext =
+        RuntimeContext.builder().userId("7").sessionId("s_123").build();
+    org.mockito.Mockito.doThrow(new IllegalStateException("interrupt failed"))
+        .when(delegate)
+        .interrupt(runtimeContext);
+    Sinks.Many<Object> underlying = Sinks.many().unicast().onBackpressureBuffer();
+    AgentExecution<Object> execution = config.agentExecution(
+        () -> agent, ignored -> underlying.asFlux(), runtimeContext);
+    AtomicBoolean completed = new AtomicBoolean();
+    execution.completion().subscribe(ignored -> {}, ignored -> {}, () -> completed.set(true));
+    reactor.core.Disposable eventSubscription = execution.events().subscribe();
+
+    eventSubscription.dispose();
+    assertThat(completed).isFalse();
+
+    underlying.tryEmitComplete();
+
+    assertThat(completed).isTrue();
+    verify(agent).close();
+  }
 
   @Test
   void createsDashScopeModelByDefault() {
@@ -201,6 +337,8 @@ class AgentScopeConfigTest {
     assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
     assertThat(toolsConfig(builder).getAllow()).containsExactly("http_fetch", "web_fetch");
     assertThat(toolsConfig(builder).getMcpServers()).isNull();
+    assertThat((List<?>) objectField(objectField(builder, "inner"), "middlewares"))
+        .anyMatch(MiddlewareBase.class::isInstance);
   }
 
   @Test

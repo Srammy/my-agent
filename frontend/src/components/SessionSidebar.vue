@@ -5,6 +5,8 @@ defineProps<{
   sessions: ChatSession[]
   currentSessionId: string
   loading: boolean
+  deletingSessionId: string
+  cancellingSessionIds: Record<string, true>
 }>()
 
 const emit = defineEmits<{
@@ -62,9 +64,11 @@ function formatDate(value: string) {
           size="small"
           text
           type="danger"
+          :disabled="Boolean(deletingSessionId)"
+          :loading="deletingSessionId === session.id"
           @click.stop="emit('delete', session.id)"
         >
-          删除
+          {{ cancellingSessionIds[session.id] ? '重试删除' : '删除' }}
         </el-button>
       </button>
     </nav>

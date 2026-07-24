@@ -1,6 +1,7 @@
 package com.example.myagent.config;
 
 import com.example.myagent.agent.AgentScopeStreamExecutor;
+import com.example.myagent.agent.AgentExecution;
 import com.example.myagent.chat.ChatAgentRequest;
 import com.example.myagent.chat.ChatToolConfirmationRequest;
 import com.example.myagent.skillreview.BaseStoreSkillDraftLock;
@@ -9,9 +10,13 @@ import com.example.myagent.skillreview.SkillPromotionGuard;
 import com.example.myagent.skillreview.SkillReviewDecisionStore;
 import com.example.myagent.skillreview.WebApprovalGate;
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.agent.Agent;
+import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.ConfirmResult;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
+import io.agentscope.core.middleware.ActingInput;
+import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
@@ -38,15 +43,44 @@ import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
 @Configuration
 public class AgentScopeConfig {
+
+  static final String CANCELLATION_REQUESTED_CONTEXT_KEY =
+      "myagent.sessionExecution.cancellationRequested";
+
+  static final class ExecutionCancellationGate {
+    private boolean cancelled;
+    private int actingBatches;
+
+    synchronized void cancel() {
+      cancelled = true;
+    }
+
+    synchronized boolean tryBeginActing() {
+      if (cancelled) {
+        return false;
+      }
+      actingBatches++;
+      return true;
+    }
+
+    synchronized void finishActing() {
+      actingBatches--;
+    }
+  }
 
   private final Function<String, String> environmentVariableResolver;
 
@@ -84,7 +118,14 @@ public class AgentScopeConfig {
     return new AgentScopeStreamExecutor() {
       @Override
       public reactor.core.publisher.Flux<Object> stream(ChatAgentRequest request, Object runtimeContext) {
-        return reactor.core.publisher.Flux.using(
+        return streamExecution(request, runtimeContext).events();
+      }
+
+      @Override
+      public AgentExecution<Object> streamExecution(
+          ChatAgentRequest request, Object runtimeContext) {
+        RuntimeContext context = (RuntimeContext) runtimeContext;
+        return agentExecution(
             () ->
                 buildHarnessAgent(
                     agentScopeModel,
@@ -95,15 +136,22 @@ public class AgentScopeConfig {
                     webApprovalGate),
             harnessAgent ->
                 harnessAgent
-                    .streamEvents(request.message(), (RuntimeContext) runtimeContext)
+                    .streamEvents(request.message(), context)
                     .cast(Object.class),
-            HarnessAgent::close);
+            context);
       }
 
       @Override
       public reactor.core.publisher.Flux<Object> confirm(
           ChatToolConfirmationRequest request, Object runtimeContext) {
-        return reactor.core.publisher.Flux.using(
+        return confirmExecution(request, runtimeContext).events();
+      }
+
+      @Override
+      public AgentExecution<Object> confirmExecution(
+          ChatToolConfirmationRequest request, Object runtimeContext) {
+        RuntimeContext context = (RuntimeContext) runtimeContext;
+        return agentExecution(
             () ->
                 buildHarnessAgent(
                     agentScopeModel,
@@ -114,11 +162,135 @@ public class AgentScopeConfig {
                     webApprovalGate),
             harnessAgent ->
                 harnessAgent
-                    .streamEvents(confirmationMessage(request), (RuntimeContext) runtimeContext)
+                    .streamEvents(confirmationMessage(request), context)
                     .cast(Object.class),
-            HarnessAgent::close);
+            context);
       }
     };
+  }
+
+  <T> AgentExecution<T> agentExecution(
+      Supplier<HarnessAgent> agentSupplier,
+      Function<HarnessAgent, Flux<T>> sourceFactory,
+      RuntimeContext runtimeContext) {
+    Sinks.Empty<Void> completion = Sinks.empty();
+    AtomicBoolean subscribed = new AtomicBoolean();
+    ExecutionCancellationGate cancellationGate = new ExecutionCancellationGate();
+    runtimeContext.put(CANCELLATION_REQUESTED_CONTEXT_KEY, cancellationGate);
+    Flux<T> events = Flux.create(sink -> {
+      if (!subscribed.compareAndSet(false, true)) {
+        sink.error(new IllegalStateException("Agent execution supports only one event subscriber"));
+        return;
+      }
+      if (sink.isCancelled()) {
+        completion.tryEmitEmpty();
+        return;
+      }
+
+      final HarnessAgent harnessAgent;
+      try {
+        harnessAgent = agentSupplier.get();
+      } catch (Throwable error) {
+        sink.error(error);
+        completion.tryEmitEmpty();
+        return;
+      }
+
+      AtomicBoolean terminated = new AtomicBoolean();
+      sink.onCancel(() -> {
+        cancellationGate.cancel();
+        if (terminated.get()) {
+          return;
+        }
+        try {
+          harnessAgent.getDelegate().interrupt(runtimeContext);
+        } catch (Throwable ignored) {
+          // Completion is determined by the underlying stream and resource close, not interrupt().
+        }
+      });
+      if (sink.isCancelled()) {
+        closeWithoutExecution(harnessAgent, completion);
+        return;
+      }
+
+      class Termination {
+        void finish(Throwable error) {
+          if (!terminated.compareAndSet(false, true)) {
+            return;
+          }
+          try {
+            harnessAgent.close();
+          } catch (Throwable closeError) {
+            if (!sink.isCancelled()) {
+              sink.error(closeError);
+            }
+            return;
+          }
+          if (!sink.isCancelled()) {
+            if (error == null) {
+              sink.complete();
+            } else {
+              sink.error(error);
+            }
+          }
+          completion.tryEmitEmpty();
+        }
+      }
+      Termination termination = new Termination();
+      try {
+        sourceFactory.apply(harnessAgent)
+            .contextWrite(sink.contextView())
+            .subscribe(
+                sink::next,
+                termination::finish,
+                () -> termination.finish(null));
+      } catch (Throwable error) {
+        termination.finish(error);
+      }
+    });
+    return new AgentExecution<>(events, completion.asMono());
+  }
+
+  MiddlewareBase cancellationAwareActingMiddleware() {
+    return new MiddlewareBase() {
+      @Override
+      public Flux<AgentEvent> onActing(
+          Agent agent,
+          RuntimeContext runtimeContext,
+          ActingInput input,
+          Function<ActingInput, Flux<AgentEvent>> next) {
+        return Flux.defer(() -> {
+          ExecutionCancellationGate cancellationGate = runtimeContext == null
+              ? null
+              : runtimeContext.get(
+                  CANCELLATION_REQUESTED_CONTEXT_KEY, ExecutionCancellationGate.class);
+          if (cancellationGate != null && !cancellationGate.tryBeginActing()) {
+            return Flux.error(new InterruptedException("Agent execution interrupted"));
+          }
+          if (cancellationGate == null) {
+            return next.apply(input);
+          }
+          final Flux<AgentEvent> acting;
+          try {
+            acting = Objects.requireNonNull(next.apply(input), "acting middleware returned null");
+          } catch (Throwable error) {
+            cancellationGate.finishActing();
+            return Flux.error(error);
+          }
+          return acting.doFinally(ignored -> cancellationGate.finishActing());
+        });
+      }
+    };
+  }
+
+  private void closeWithoutExecution(
+      HarnessAgent harnessAgent, Sinks.Empty<Void> completion) {
+    try {
+      harnessAgent.close();
+      completion.tryEmitEmpty();
+    } catch (Throwable ignored) {
+      // Fail closed: an uncertain resource shutdown must not be reported as completed.
+    }
   }
 
   @Bean
@@ -185,6 +357,7 @@ public class AgentScopeConfig {
   HarnessAgent.Builder configureHarnessAgentBuilder(
       HarnessAgent.Builder builder, AgentToolPolicy toolPolicy, AgentProperties agentProperties) {
     applyToolPolicy(builder, toolPolicy);
+    builder.middleware(cancellationAwareActingMiddleware());
     builder.memory(MemoryConfig.defaults());
     builder.enablePendingToolRecovery(true);
     // 自动压缩配置：

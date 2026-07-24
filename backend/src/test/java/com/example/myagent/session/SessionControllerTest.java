@@ -1,7 +1,6 @@
 package com.example.myagent.session;
 
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
@@ -23,6 +22,7 @@ import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Mono;
 
 @WebFluxTest(SessionController.class)
 @Import(SessionControllerTest.TestSecurityConfig.class)
@@ -145,9 +145,8 @@ class SessionControllerTest {
 
   @Test
   void deleteSessionMapsMissingTo404() {
-    doThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"))
-        .when(sessionService)
-        .deleteSession(USER, "missing");
+    when(sessionService.deleteSession(USER, "missing"))
+        .thenReturn(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found")));
 
     authenticatedClient()
         .delete()
@@ -161,9 +160,8 @@ class SessionControllerTest {
 
   @Test
   void deleteSessionMapsCrossUserInvisibleTo404() {
-    doThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"))
-        .when(sessionService)
-        .deleteSession(USER, "other-users-session");
+    when(sessionService.deleteSession(USER, "other-users-session"))
+        .thenReturn(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found")));
 
     authenticatedClient()
         .delete()
@@ -177,6 +175,8 @@ class SessionControllerTest {
 
   @Test
   void deleteSessionReturnsNoContentForCurrentContract() {
+    when(sessionService.deleteSession(USER, "s_123")).thenReturn(Mono.empty());
+
     authenticatedClient()
         .delete()
         .uri("/api/chat/sessions/s_123")

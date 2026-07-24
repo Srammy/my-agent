@@ -59,8 +59,6 @@ public class SessionController {
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public Mono<Void> deleteSession(
       @AuthenticationPrincipal CurrentUser currentUser, @PathVariable String sessionId) {
-    return Mono.fromRunnable(() -> sessionService.deleteSession(currentUser, sessionId))
-        .subscribeOn(Schedulers.boundedElastic())
-        .then();
+    return sessionService.deleteSession(currentUser, sessionId);
   }
 }

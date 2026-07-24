@@ -20,6 +20,7 @@ const isUserConfirmation = computed(
 const confirmationLocked = computed(
   () =>
     chat.isLoading ||
+    chat.isCancellingSession(props.sessionId) ||
     props.event.confirming ||
     props.event.consumed ||
     !props.sessionId ||
