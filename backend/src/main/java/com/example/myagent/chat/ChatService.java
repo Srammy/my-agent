@@ -111,9 +111,9 @@ public class ChatService {
                     sessionId,
                     () -> toolConfirmationService
                         .consume(confirmationId, claim.processingToken(), persisted)
-                        .doOnSuccess(ignored -> consumed.set(true))
-                        .thenMany(execution.events().onErrorResume(
-                            error -> Flux.just(StreamEventDto.error(errorMessage(error))))),
+                        .doOnSuccess(ignored -> consumed.set(true)),
+                    () -> execution.events().onErrorResume(
+                        error -> Flux.just(StreamEventDto.error(errorMessage(error)))),
                     execution::completion)
                     .concatWith(Flux.defer(() -> consumed.get()
                         ? Flux.empty()

@@ -74,6 +74,18 @@ class ChatServiceTest {
             org.mockito.ArgumentMatchers.any()))
         .thenAnswer(invocation ->
             ((Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());
+    org.mockito.Mockito.lenient()
+        .when(sessionExecutionCoordinator.track(
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenAnswer(invocation -> {
+          Supplier<Mono<Void>> preflight = invocation.getArgument(2);
+          Supplier<Flux<StreamEventDto>> source = invocation.getArgument(3);
+          return Mono.defer(preflight).thenMany(Flux.defer(source));
+        });
   }
 
   @Test
@@ -142,6 +154,7 @@ class ChatServiceTest {
     verify(sessionExecutionCoordinator).track(
         org.mockito.ArgumentMatchers.eq(USER.id()),
         org.mockito.ArgumentMatchers.eq("s_123"),
+        org.mockito.ArgumentMatchers.any(),
         org.mockito.ArgumentMatchers.any(),
         org.mockito.ArgumentMatchers.any());
     assertThat(requestCaptor.getValue()).isEqualTo(new ChatToolConfirmationRequest(
@@ -287,7 +300,8 @@ class ChatServiceTest {
   void confirmCoordinatorRegistrationFailureRollsBackBeforeSourceSubscription() {
     ToolConfirmationClaim claim = stubValidClaim();
     org.mockito.Mockito.doReturn(Flux.error(new IllegalStateException("registration failed")))
-        .when(sessionExecutionCoordinator).track(anyLong(), anyString(), any(), any());
+        .when(sessionExecutionCoordinator).track(
+            anyLong(), anyString(), any(), any(), any());
     when(toolConfirmationService.rollbackIfProcessing(
         "confirm_123", claim.processingToken())).thenReturn(Mono.just(true));
 

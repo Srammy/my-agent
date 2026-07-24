@@ -228,6 +228,80 @@ class RedisSessionExecutionCoordinatorTest {
   }
 
   @Test
+  void preflightErrorCleansRegistrationWithoutSubscribingSourceAndAllowsRetry()
+      throws Exception {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    AtomicBoolean sourceSubscribed = new AtomicBoolean();
+    CountDownLatch completionDisposed = new CountDownLatch(1);
+
+    StepVerifier.create(coordinator.track(
+            1L,
+            "s_1",
+            () -> Mono.error(new IllegalStateException("preflight failed")),
+            () -> Flux.defer(() -> {
+              sourceSubscribed.set(true);
+              return Flux.just(1);
+            }),
+            () -> Mono.<Void>never().doOnCancel(completionDisposed::countDown)))
+        .expectErrorMessage("preflight failed")
+        .verify();
+
+    assertThat(sourceSubscribed).isFalse();
+    assertThat(completionDisposed.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(stubActiveCounter()).hasValue(0L);
+    assertThat(pendingExecutions.values()).singleElement().satisfies(
+        pending -> assertThat(pending).isEmpty());
+
+    StepVerifier.create(coordinator.track(1L, "s_1", () -> Flux.just(2)))
+        .expectNext(2)
+        .verifyComplete();
+  }
+
+  @Test
+  void cancellationDuringPreflightPreservesStableErrorAndCleansRegistration()
+      throws Exception {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    CountDownLatch preflightSubscribed = new CountDownLatch(1);
+    CountDownLatch preflightCancelled = new CountDownLatch(1);
+    CountDownLatch terminated = new CountDownLatch(1);
+    AtomicBoolean sourceSubscribed = new AtomicBoolean();
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+
+    Disposable execution = coordinator.track(
+            1L,
+            "s_1",
+            () -> Mono.<Void>never()
+                .doOnSubscribe(ignored -> preflightSubscribed.countDown())
+                .doOnCancel(preflightCancelled::countDown),
+            () -> Flux.defer(() -> {
+              sourceSubscribed.set(true);
+              return Flux.never();
+            }),
+            Mono::<Void>never)
+        .doOnError(failure::set)
+        .doFinally(ignored -> terminated.countDown())
+        .subscribe(ignored -> {}, ignored -> {});
+
+    assertThat(preflightSubscribed.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    messages.tryEmitNext(message("{\"userId\":1,\"sessionId\":\"s_1\"}"));
+
+    assertThat(terminated.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(preflightCancelled.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(failure.get()).isInstanceOfSatisfying(
+        ResponseStatusException.class,
+        error -> {
+          assertThat(error.getStatusCode().value()).isEqualTo(409);
+          assertThat(error.getHeaders().getFirst("X-Error-Code"))
+              .isEqualTo("SESSION_CANCELLING");
+        });
+    assertThat(sourceSubscribed).isFalse();
+    assertThat(execution.isDisposed()).isTrue();
+    assertThat(stubActiveCounter()).hasValue(0L);
+    assertThat(pendingExecutions.values()).singleElement().satisfies(
+        pending -> assertThat(pending).isEmpty());
+  }
+
+  @Test
   void failedCompletionCleanupRemainsPendingUntilBackgroundRetrySucceeds() throws Exception {
     coordinator.destroy();
     coordinator = new RedisSessionExecutionCoordinator(
