@@ -20,6 +20,7 @@ import com.example.myagent.session.SessionController;
 import com.example.myagent.session.SessionExecutionCoordinator;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ConfirmationKind;
+import com.example.myagent.toolconfirmation.ToolConfirmationClaim;
 import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import io.agentscope.core.message.ToolUseBlock;
 import java.time.Duration;
@@ -112,6 +113,84 @@ class ChatServiceConfirmationIntegrationTest {
     assertThatThrownBy(() -> toolConfirmationService.claim(USER.id(), SESSION_ID, confirmationId).block())
         .isInstanceOfSatisfying(ResponseStatusException.class,
             error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+  }
+
+  @Test
+  void registrationFailureMakesConfirmationRetryable() {
+    String confirmationId = toolConfirmationService.create(
+        USER.id(), SESSION_ID, "reply",
+        List.of(new ToolUseBlock("call", "shell", Map.of("command", "pwd"))),
+        ConfirmationKind.USER_CONFIRM).block().confirmationId();
+    ChatAgentGateway gateway = mock(ChatAgentGateway.class);
+    when(gateway.confirmExecution(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new AgentExecution<>(Flux.never(), Mono.empty()));
+    SessionExecutionCoordinator rejectingCoordinator = mock(SessionExecutionCoordinator.class);
+    when(rejectingCoordinator.track(
+        org.mockito.ArgumentMatchers.anyLong(),
+        org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any()))
+        .thenReturn(Flux.error(new IllegalStateException("registration failed")));
+
+    StepVerifier.create(new ChatService(
+            sessionService(),
+            gateway,
+            permissionService(),
+            toolConfirmationService,
+            rejectingCoordinator).confirm(
+            USER,
+            SESSION_ID,
+            confirmationId,
+            List.of(new ToolConfirmationDecisionRequest("call", true))))
+        .expectErrorSatisfies(error -> assertThat(
+            ((ResponseStatusException) error).getHeaders().getFirst("X-Error-Code"))
+            .isEqualTo("TOOL_CONFIRMATION_RETRYABLE"))
+        .verify();
+
+    ToolConfirmationClaim retry =
+        toolConfirmationService.claim(USER.id(), SESSION_ID, confirmationId).block();
+    assertThat(retry).isNotNull();
+    toolConfirmationService.release(confirmationId, retry.processingToken()).block();
+  }
+
+  @Test
+  void eventSourceFailureKeepsConfirmationConsumed() {
+    String confirmationId = toolConfirmationService.create(
+        USER.id(), SESSION_ID, "reply",
+        List.of(new ToolUseBlock("call", "shell", Map.of("command", "pwd"))),
+        ConfirmationKind.USER_CONFIRM).block().confirmationId();
+    ChatAgentGateway gateway = mock(ChatAgentGateway.class);
+    Sinks.Empty<Void> completion = Sinks.empty();
+    when(gateway.confirmExecution(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new AgentExecution<>(
+            Flux.<StreamEventDto>error(new IllegalStateException("started failure"))
+                .doFinally(ignored -> completion.tryEmitEmpty()),
+            completion.asMono()));
+    RedisSessionExecutionCoordinator realCoordinator = coordinator();
+    try {
+      ChatService chatService = new ChatService(
+          sessionService(),
+          gateway,
+          permissionService(),
+          toolConfirmationService,
+          realCoordinator);
+
+      StepVerifier.create(chatService.confirm(
+              USER,
+              SESSION_ID,
+              confirmationId,
+              List.of(new ToolConfirmationDecisionRequest("call", true))))
+          .expectNext(StreamEventDto.error("started failure"))
+          .verifyComplete();
+
+      assertThatThrownBy(() -> toolConfirmationService.claim(
+          USER.id(), SESSION_ID, confirmationId).block())
+          .isInstanceOfSatisfying(
+              ResponseStatusException.class,
+              error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+    } finally {
+      realCoordinator.destroy();
+    }
   }
 
   @Test
