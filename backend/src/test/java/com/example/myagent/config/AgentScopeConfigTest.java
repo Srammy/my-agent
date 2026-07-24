@@ -547,7 +547,7 @@ class AgentScopeConfigTest {
     assertThat(
             filesystemCaptor
                 .getValue()
-                .write(RuntimeContext.empty(), "skills/request-scope.txt", "bound")
+                .write(RuntimeContext.empty(), "request-scope.txt", "bound")
                 .isSuccess())
         .isTrue();
 
@@ -559,14 +559,14 @@ class AgentScopeConfigTest {
         RuntimeContext.builder().userId("7").sessionId("another-session").build();
     assertThat(
             sharedFilesystem
-                .read(anotherUserSevenSession, "skills/request-scope.txt", 0, 100)
+                .read(anotherUserSevenSession, "request-scope.txt", 0, 100)
                 .isSuccess())
         .isTrue();
     assertThat(
             sharedFilesystem
                 .read(
                     RuntimeContext.builder().userId("8").sessionId("s_123").build(),
-                    "skills/request-scope.txt",
+                    "request-scope.txt",
                     0,
                     100)
                 .isSuccess())
