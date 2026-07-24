@@ -135,9 +135,11 @@ class ChatServiceConfirmationIntegrationTest {
 
       assertThat(stopped.await(5, TimeUnit.SECONDS)).isTrue();
       assertThat(execution.isDisposed()).isTrue();
-      assertThat(redisTemplate.keys(
-          "myagent:session-execution:" + USER.id() + ":" + SESSION_ID + ":active:*")
-          .collectList().block()).isEmpty();
+      String sessionPrefix =
+          "myagent:agent-state:session-execution:" + USER.id() + ":" + SESSION_ID;
+      assertThat(redisTemplate.opsForValue().get(sessionPrefix + ":active-count").block()).isNull();
+      assertThat(redisTemplate.opsForSet()
+          .size(sessionPrefix + ":pending-completion").block()).isZero();
     } finally {
       if (execution != null) {
         execution.dispose();
