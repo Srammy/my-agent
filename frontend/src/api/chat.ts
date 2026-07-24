@@ -29,7 +29,11 @@ export interface ToolConfirmationDecision {
 }
 
 export class StreamRequestError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string
+  ) {
     super(message)
     this.name = 'StreamRequestError'
   }
@@ -144,7 +148,11 @@ export async function streamNdjson(
   })
 
   if (!response.ok) {
-    throw new StreamRequestError(await readError(response), response.status)
+    throw new StreamRequestError(
+      await readError(response),
+      response.status,
+      response.headers.get('X-Error-Code') ?? undefined
+    )
   }
 
   if (!response.body) {

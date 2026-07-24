@@ -73,6 +73,23 @@ describe('chat confirmation streams', () => {
     await expect(request).rejects.toMatchObject({ name: 'AbortError' })
   })
 
+  it('reads the stable error code from a failed streaming response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('conflict', {
+        status: 409,
+        headers: { 'X-Error-Code': 'SESSION_CANCELLING' }
+      })
+    ))
+
+    await expect(
+      chatApi.streamNdjson('/api/chat/sessions/s1/stream', { message: 'hello' }, vi.fn())
+    ).rejects.toMatchObject({
+      name: 'StreamRequestError',
+      status: 409,
+      code: 'SESSION_CANCELLING'
+    })
+  })
+
   it('aborts only the matching session stream without appending a false error', async () => {
     let streamSignal: AbortSignal | undefined
     vi.spyOn(chatApi, 'streamChat').mockImplementation((...args: unknown[]) => {
@@ -454,9 +471,9 @@ describe('chat confirmation streams', () => {
     ])
   })
 
-  it('marks only an HTTP 409 message stream as cancelling and blocks another send', async () => {
+  it('marks a message stream with the session cancelling code as cancelling and blocks another send', async () => {
     const streamChatMock = vi.spyOn(chatApi, 'streamChat')
-      .mockRejectedValueOnce(new chatApi.StreamRequestError('cancelling', 409))
+      .mockRejectedValueOnce(new chatApi.StreamRequestError('cancelling', 409, 'SESSION_CANCELLING'))
       .mockResolvedValueOnce()
     const store = useChatStore()
 
@@ -467,9 +484,11 @@ describe('chat confirmation streams', () => {
     expect(streamChatMock).toHaveBeenCalledTimes(1)
   })
 
-  it('does not mark a message session as cancelling for a non-409 error', async () => {
-    vi.spyOn(chatApi, 'streamChat')
-      .mockRejectedValue(new chatApi.StreamRequestError('failed', 500))
+  it.each([
+    ['a 409 without a code', new chatApi.StreamRequestError('conflict', 409)],
+    ['a 409 with another code', new chatApi.StreamRequestError('conflict', 409, 'TOOL_CONFIRMATION_CONFLICT')]
+  ])('does not mark a message session as cancelling for %s', async (_label, error) => {
+    vi.spyOn(chatApi, 'streamChat').mockRejectedValue(error)
     const store = useChatStore()
 
     await store.sendMessage('s1', 'hello')
@@ -477,9 +496,9 @@ describe('chat confirmation streams', () => {
     expect(store.isCancellingSession('s1')).toBe(false)
   })
 
-  it('marks only an HTTP 409 confirmation as cancelling', async () => {
+  it('marks a confirmation with the session cancelling code as cancelling', async () => {
     vi.spyOn(chatApi, 'confirmToolCall')
-      .mockRejectedValue(new chatApi.StreamRequestError('cancelling', 409))
+      .mockRejectedValue(new chatApi.StreamRequestError('cancelling', 409, 'SESSION_CANCELLING'))
     const store = useChatStore()
     const event = toolEvent()
     store.messagesBySession.s1 = [
@@ -492,9 +511,11 @@ describe('chat confirmation streams', () => {
     expect(store.isCancellingSession('s1')).toBe(true)
   })
 
-  it('does not mark a confirmation session as cancelling for a non-409 error', async () => {
-    vi.spyOn(chatApi, 'confirmToolCall')
-      .mockRejectedValue(new chatApi.StreamRequestError('failed', 500))
+  it.each([
+    ['a 409 without a code', new chatApi.StreamRequestError('conflict', 409)],
+    ['a 409 with another code', new chatApi.StreamRequestError('conflict', 409, 'TOOL_CONFIRMATION_CONFLICT')]
+  ])('does not mark a confirmation session as cancelling for %s', async (_label, error) => {
+    vi.spyOn(chatApi, 'confirmToolCall').mockRejectedValue(error)
     const store = useChatStore()
     const event = toolEvent()
     store.messagesBySession.s1 = [

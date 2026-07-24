@@ -21,6 +21,7 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.ReactiveRedisMessageListenerContainer;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -294,8 +295,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   public Mono<Void> rejectIfCancelled(Long userId, String sessionId) {
     SessionExecutionKey key = new SessionExecutionKey(userId, sessionId);
     return redisTemplate.opsForValue().get(cancellationKey(key))
-        .flatMap(ignored -> Mono.error(new ResponseStatusException(
-            HttpStatus.CONFLICT, "Session is being cancelled")))
+        .flatMap(ignored -> Mono.error(sessionCancelled()))
         .then();
   }
 
@@ -503,7 +503,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   }
 
   private ResponseStatusException sessionCancelled() {
-    return new ResponseStatusException(HttpStatus.CONFLICT, "Session is being cancelled");
+    return new SessionCancellingException();
   }
 
   private ResponseStatusException cancellationTimeout() {
@@ -514,6 +514,20 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private record CancellationMessage(Long userId, String sessionId) {}
 
   private record CleanupKey(SessionExecutionKey key, String executionId) {}
+
+  private static final class SessionCancellingException extends ResponseStatusException {
+    private final HttpHeaders headers = new HttpHeaders();
+
+    private SessionCancellingException() {
+      super(HttpStatus.CONFLICT, "Session is being cancelled");
+      headers.set("X-Error-Code", "SESSION_CANCELLING");
+    }
+
+    @Override
+    public HttpHeaders getHeaders() {
+      return headers;
+    }
+  }
 
   private static final class CleanupTask {
     private final AtomicBoolean inFlight = new AtomicBoolean();

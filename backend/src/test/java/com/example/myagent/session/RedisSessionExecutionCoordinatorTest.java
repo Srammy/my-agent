@@ -98,6 +98,22 @@ class RedisSessionExecutionCoordinatorTest {
   }
 
   @Test
+  void rejectedCancelledSessionCarriesStableErrorCode() {
+    when(valueOperations.get(
+        "myagent:agent-state:session-execution:1:s_1:cancelled"))
+        .thenReturn(Mono.just("1"));
+
+    StepVerifier.create(coordinator.rejectIfCancelled(1L, "s_1"))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
+              assertThat(status.getStatusCode().value()).isEqualTo(409);
+              assertThat(status.getHeaders().getFirst("X-Error-Code"))
+                  .isEqualTo("SESSION_CANCELLING");
+            }))
+        .verify();
+  }
+
+  @Test
   void cancelWaitsForExecutionCompletionInsteadOfSubscriptionCancellation() {
     AtomicLong activeCount = stubActiveCounter();
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
@@ -365,7 +381,11 @@ class RedisSessionExecutionCoordinatorTest {
         }))
         .expectErrorSatisfies(error -> assertThat(error)
             .isInstanceOfSatisfying(ResponseStatusException.class,
-                status -> assertThat(status.getStatusCode().value()).isEqualTo(409)))
+                status -> {
+                  assertThat(status.getStatusCode().value()).isEqualTo(409);
+                  assertThat(status.getHeaders().getFirst("X-Error-Code"))
+                      .isEqualTo("SESSION_CANCELLING");
+                }))
         .verify();
     assertThat(lateSourceSubscribed).isFalse();
     assertThat(stubActiveCounter()).hasValue(1L);
@@ -389,7 +409,11 @@ class RedisSessionExecutionCoordinatorTest {
         }))
         .expectErrorSatisfies(error -> assertThat(error)
             .isInstanceOfSatisfying(ResponseStatusException.class,
-                status -> assertThat(status.getStatusCode().value()).isEqualTo(409)))
+                status -> {
+                  assertThat(status.getStatusCode().value()).isEqualTo(409);
+                  assertThat(status.getHeaders().getFirst("X-Error-Code"))
+                      .isEqualTo("SESSION_CANCELLING");
+                }))
         .verify();
     assertThat(lateSourceSubscribed).isFalse();
 
@@ -444,7 +468,10 @@ class RedisSessionExecutionCoordinatorTest {
         }))
         .expectErrorSatisfies(error -> assertThat(error)
             .isInstanceOfSatisfying(ResponseStatusException.class,
-                status -> assertThat(status.getStatusCode().value()).isEqualTo(409)))
+                status -> {
+                  assertThat(status.getStatusCode().value()).isEqualTo(409);
+                  assertThat(status.getHeaders().getFirst("X-Error-Code")).isNull();
+                }))
         .verify(Duration.ofSeconds(1));
 
     assertThat(sourceSubscribed).isFalse();
@@ -646,6 +673,7 @@ class RedisSessionExecutionCoordinatorTest {
             .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
               assertThat(status.getStatusCode().value()).isEqualTo(409);
               assertThat(status.getReason()).isEqualTo("Session cancellation is still in progress");
+              assertThat(status.getHeaders().getFirst("X-Error-Code")).isNull();
             }))
         .verify(Duration.ofSeconds(1));
   }
