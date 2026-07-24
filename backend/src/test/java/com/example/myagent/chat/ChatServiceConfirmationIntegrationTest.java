@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.myagent.agent.AgentExecution;
 import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.config.AgentProperties;
 import com.example.myagent.permission.PermissionMode;
@@ -24,8 +26,10 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +45,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 @Testcontainers
@@ -87,10 +93,12 @@ class ChatServiceConfirmationIntegrationTest {
     CountDownLatch gatewaySubscribed = new CountDownLatch(1);
     CountDownLatch gatewayCancelled = new CountDownLatch(1);
     ChatAgentGateway gateway = mock(ChatAgentGateway.class);
-    when(gateway.confirm(org.mockito.ArgumentMatchers.any())).thenReturn(
-        Flux.<StreamEventDto>never()
-            .doOnSubscribe(ignored -> gatewaySubscribed.countDown())
-            .doOnCancel(gatewayCancelled::countDown));
+    when(gateway.confirmExecution(org.mockito.ArgumentMatchers.any())).thenReturn(
+        new AgentExecution<>(
+            Flux.<StreamEventDto>never()
+                .doOnSubscribe(ignored -> gatewaySubscribed.countDown())
+                .doOnCancel(gatewayCancelled::countDown),
+            Mono.empty()));
 
     ChatService chatService = new ChatService(
         sessionService(), gateway, permissionService(), toolConfirmationService,
@@ -140,10 +148,12 @@ class ChatServiceConfirmationIntegrationTest {
   }
 
   @Test
-  void deleteCompletionWaitsForConfirmationTrackedByAnotherCoordinatorToStop() throws Exception {
+  void deleteReturns204OnlyAfterRemoteConfirmationExecutionCompletes() throws Exception {
     RedisSessionExecutionCoordinator deleteCoordinator = coordinator();
     RedisSessionExecutionCoordinator executionCoordinator = coordinator();
+    Sinks.Empty<Void> toolCompletion = Sinks.empty();
     Disposable execution = null;
+    CompletableFuture<Void> deletion = null;
     try {
       awaitCoordinatorSubscribers(2);
       ChatSessionMapper sessionMapper = mock(ChatSessionMapper.class);
@@ -152,15 +162,19 @@ class ChatServiceConfirmationIntegrationTest {
       when(sessionMapper.findOwnedById(USER.id(), SESSION_ID)).thenReturn(session);
       CountDownLatch gatewaySubscribed = new CountDownLatch(1);
       CountDownLatch gatewayCancelled = new CountDownLatch(1);
-      when(sessionMapper.deleteOwnedById(USER.id(), SESSION_ID)).thenAnswer(ignored -> {
-        assertThat(gatewayCancelled.getCount()).isZero();
-        return 1;
-      });
+      AtomicBoolean rejectedBatchSubscribed = new AtomicBoolean();
+      when(sessionMapper.deleteOwnedById(USER.id(), SESSION_ID)).thenReturn(1);
       ChatAgentGateway gateway = mock(ChatAgentGateway.class);
-      when(gateway.confirm(org.mockito.ArgumentMatchers.any())).thenReturn(
-          Flux.<StreamEventDto>never()
-              .doOnSubscribe(ignored -> gatewaySubscribed.countDown())
-              .doOnCancel(gatewayCancelled::countDown));
+      when(gateway.confirmExecution(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(new AgentExecution<>(
+              Flux.<StreamEventDto>never()
+                  .doOnSubscribe(ignored -> gatewaySubscribed.countDown())
+                  .doOnCancel(gatewayCancelled::countDown),
+              toolCompletion.asMono()))
+          .thenReturn(new AgentExecution<>(
+              Flux.<StreamEventDto>never()
+                  .doOnSubscribe(ignored -> rejectedBatchSubscribed.set(true)),
+              Mono.empty()));
       SessionService sessionService = new SessionService(sessionMapper, deleteCoordinator);
       ChatService chatService = new ChatService(
           sessionService, gateway, permissionService(), toolConfirmationService,
@@ -175,12 +189,40 @@ class ChatServiceConfirmationIntegrationTest {
           .subscribe();
       assertThat(gatewaySubscribed.await(5, TimeUnit.SECONDS)).isTrue();
 
-      StepVerifier.create(new SessionController(sessionService).deleteSession(USER, SESSION_ID))
-          .verifyComplete();
+      deletion = new SessionController(sessionService)
+          .deleteSession(USER, SESSION_ID)
+          .toFuture();
 
       assertThat(gatewayCancelled.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(deletion).isNotDone();
+      verify(sessionMapper, never()).deleteOwnedById(USER.id(), SESSION_ID);
+
+      String rejectedConfirmationId = toolConfirmationService.create(
+          USER.id(), SESSION_ID, "reply-2",
+          List.of(new ToolUseBlock("call-2", "shell", Map.of("command", "pwd"))),
+          ConfirmationKind.USER_CONFIRM).block().confirmationId();
+      StepVerifier.create(chatService.confirm(
+              USER,
+              SESSION_ID,
+              rejectedConfirmationId,
+              List.of(new ToolConfirmationDecisionRequest("call-2", true))))
+          .expectErrorSatisfies(error -> {
+            assertThat(error).isInstanceOf(ResponseStatusException.class);
+            assertThat(((ResponseStatusException) error).getStatusCode())
+                .isEqualTo(HttpStatus.CONFLICT);
+          })
+          .verify();
+      assertThat(rejectedBatchSubscribed).isFalse();
+
+      toolCompletion.tryEmitEmpty();
+
+      deletion.get(5, TimeUnit.SECONDS);
       verify(sessionMapper).deleteOwnedById(eq(USER.id()), eq(SESSION_ID));
     } finally {
+      toolCompletion.tryEmitEmpty();
+      if (deletion != null) {
+        deletion.cancel(true);
+      }
       if (execution != null) {
         execution.dispose();
       }
@@ -210,7 +252,7 @@ class ChatServiceConfirmationIntegrationTest {
   private void awaitCoordinatorSubscribers(long expected) {
     Long subscribers = Flux.interval(Duration.ZERO, Duration.ofMillis(25))
         .concatMap(ignored -> redisTemplate.convertAndSend(
-            "myagent:session-execution:cancel",
+            "myagent:agent-state:session-execution:cancel",
             "{\"userId\":-1,\"sessionId\":\"readiness-probe\"}"))
         .filter(count -> count >= expected)
         .next()
@@ -224,6 +266,13 @@ class ChatServiceConfirmationIntegrationTest {
     when(coordinator.track(
         org.mockito.ArgumentMatchers.anyLong(),
         org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.any()))
+        .thenAnswer(invocation ->
+            ((java.util.function.Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());
+    when(coordinator.track(
+        org.mockito.ArgumentMatchers.anyLong(),
+        org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.any(),
         org.mockito.ArgumentMatchers.any()))
         .thenAnswer(invocation ->
             ((java.util.function.Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());
