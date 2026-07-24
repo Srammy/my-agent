@@ -156,6 +156,40 @@ class ToolConfirmationRedisIntegrationTest {
     assertTtlNotReset(before, ttl(key));
   }
 
+  @Test
+  void rollbackIfProcessingOnlyReleasesTheMatchingClaimAndPreservesTtl() throws Exception {
+    ToolConfirmationRecord created = create();
+    String key = key(created);
+    ToolConfirmationClaim claim =
+        service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
+    Duration before = ttl(key);
+
+    assertThat(service.rollbackIfProcessing(
+        created.confirmationId(), "wrong-token").block()).isFalse();
+    assertThat(json(key).get("status").asText()).isEqualTo("PROCESSING");
+
+    assertThat(service.rollbackIfProcessing(
+        created.confirmationId(), claim.processingToken()).block()).isTrue();
+    JsonNode pending = json(key);
+    assertThat(pending.get("status").asText()).isEqualTo("PENDING");
+    assertThat(pending.has("processingToken")).isFalse();
+    assertThat(pending.has("leaseExpiresAtEpochMs")).isFalse();
+    assertTtlNotReset(before, ttl(key));
+  }
+
+  @Test
+  void rollbackIfProcessingDoesNotReopenAConsumedOrMissingRecord() throws Exception {
+    ToolConfirmationRecord created = create();
+    ToolConfirmationClaim claim =
+        service.claim(LARGE_USER_ID, "session", created.confirmationId()).block();
+    service.consume(created.confirmationId(), claim.processingToken(), List.of()).block();
+
+    assertThat(service.rollbackIfProcessing(
+        created.confirmationId(), claim.processingToken()).block()).isFalse();
+    assertThat(json(key(created)).get("status").asText()).isEqualTo("CONSUMED");
+    assertThat(service.rollbackIfProcessing("missing", claim.processingToken()).block()).isFalse();
+  }
+
   private ToolConfirmationRecord create() {
     return service.create(LARGE_USER_ID, "session", "reply",
         List.of(
