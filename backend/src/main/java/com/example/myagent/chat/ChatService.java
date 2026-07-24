@@ -11,6 +11,8 @@ import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -100,24 +102,103 @@ public class ChatService {
               ChatToolConfirmationRequest request = new ChatToolConfirmationRequest(
                   currentUser.id(), sessionId, context.permissionMode(),
                   trustedDecisions);
-              return toolConfirmationService
-                  .consume(confirmationId, claim.processingToken(), persisted)
-                  .thenMany(
-                      Flux.defer(() -> {
-                        AgentExecution<StreamEventDto> execution =
-                            chatAgentGateway.confirmExecution(request);
-                        return sessionExecutionCoordinator.track(
-                            currentUser.id(),
-                            sessionId,
-                            () -> execution.events().onErrorResume(
-                                error -> Flux.just(StreamEventDto.error(errorMessage(error)))),
-                            execution::completion);
-                      }));
+              AtomicBoolean consumed = new AtomicBoolean();
+              Flux<StreamEventDto> resumed = Flux.defer(() -> {
+                AgentExecution<StreamEventDto> execution =
+                    chatAgentGateway.confirmExecution(request);
+                return sessionExecutionCoordinator.track(
+                    currentUser.id(),
+                    sessionId,
+                    () -> toolConfirmationService
+                        .consume(confirmationId, claim.processingToken(), persisted)
+                        .doOnSuccess(ignored -> consumed.set(true))
+                        .thenMany(execution.events().onErrorResume(
+                            error -> Flux.just(StreamEventDto.error(errorMessage(error))))),
+                    execution::completion)
+                    .concatWith(Flux.defer(() -> consumed.get()
+                        ? Flux.empty()
+                        : Flux.error(new IllegalStateException(
+                            "Confirmation execution ended before its event source started"))));
+              });
+              return resumed
+                  .onErrorResume(error -> recoverConfirmationFailure(
+                      confirmationId, claim.processingToken(), consumed.get(), error))
+                  .doOnCancel(() -> {
+                    if (!consumed.get()) {
+                      toolConfirmationService
+                          .rollbackIfProcessing(confirmationId, claim.processingToken())
+                          .subscribe(ignored -> {}, ignored -> {});
+                    }
+                  });
             });
+  }
+
+  private Flux<StreamEventDto> recoverConfirmationFailure(
+      String confirmationId,
+      String processingToken,
+      boolean consumed,
+      Throwable original) {
+    if (consumed) {
+      return Flux.error(consumedFailure(original));
+    }
+    return toolConfirmationService.rollbackIfProcessing(confirmationId, processingToken)
+        .onErrorReturn(false)
+        .flatMapMany(rolledBack -> {
+          if (rolledBack && isSessionCancelling(original)) {
+            return Flux.error(original);
+          }
+          return Flux.error(rolledBack
+              ? retryableFailure(original)
+              : consumedFailure(original));
+        });
+  }
+
+  private static ResponseStatusException retryableFailure(Throwable cause) {
+    return new ToolConfirmationRetryableException(cause);
+  }
+
+  private static ResponseStatusException consumedFailure(Throwable cause) {
+    return new ToolConfirmationConsumedException(cause);
+  }
+
+  private static boolean isSessionCancelling(Throwable error) {
+    return error instanceof ResponseStatusException responseError
+        && "SESSION_CANCELLING".equals(
+            responseError.getHeaders().getFirst("X-Error-Code"));
   }
 
   private static String errorMessage(Throwable error) {
     return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+  }
+
+  private static final class ToolConfirmationRetryableException
+      extends ResponseStatusException {
+    private final HttpHeaders headers = new HttpHeaders();
+
+    private ToolConfirmationRetryableException(Throwable cause) {
+      super(HttpStatus.SERVICE_UNAVAILABLE, errorMessage(cause), cause);
+      headers.set("X-Error-Code", "TOOL_CONFIRMATION_RETRYABLE");
+    }
+
+    @Override
+    public HttpHeaders getHeaders() {
+      return headers;
+    }
+  }
+
+  private static final class ToolConfirmationConsumedException
+      extends ResponseStatusException {
+    private final HttpHeaders headers = new HttpHeaders();
+
+    private ToolConfirmationConsumedException(Throwable cause) {
+      super(HttpStatus.CONFLICT, errorMessage(cause), cause);
+      headers.set("X-Error-Code", "TOOL_CONFIRMATION_CONSUMED");
+    }
+
+    @Override
+    public HttpHeaders getHeaders() {
+      return headers;
+    }
   }
 
   private record ConfirmationContext(
