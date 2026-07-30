@@ -212,6 +212,59 @@ class SkillDraftFingerprintTest {
         .isNotBlank();
   }
 
+  @Test
+  void rejectsDraftsDeeperThanTheMaximumDepth() {
+    String root = "skills/_drafts/my-skill";
+    when(filesystem.exists(alice, root)).thenReturn(true);
+    when(filesystem.exists(alice, root + "/SKILL.md")).thenReturn(true);
+    when(filesystem.ls(alice, root)).thenReturn(
+        LsResult.success(List.of(
+            FileInfo.ofFile("SKILL.md", 10, "now"),
+            FileInfo.ofDir("d1", "now"))));
+
+    String directory = root + "/d1";
+    for (int depth = 1; depth <= 16; depth++) {
+      when(filesystem.ls(alice, directory)).thenReturn(
+          LsResult.success(List.of(FileInfo.ofDir("d" + (depth + 1), "now"))));
+      directory += "/d" + (depth + 1);
+    }
+
+    assertThatThrownBy(() -> fingerprint.computeDraftHash(alice, "my-skill"))
+        .isInstanceOf(SkillDraftFingerprintException.class)
+        .hasMessageContaining("maximum depth");
+  }
+
+  @Test
+  void rejectsDraftsWithMoreThanTheMaximumFileCount() {
+    String root = "skills/_drafts/my-skill";
+    when(filesystem.exists(alice, root)).thenReturn(true);
+    when(filesystem.exists(alice, root + "/SKILL.md")).thenReturn(true);
+    List<FileInfo> entries = new java.util.ArrayList<>();
+    entries.add(FileInfo.ofFile("SKILL.md", 10, "now"));
+    for (int index = 1; index <= 100; index++) {
+      entries.add(FileInfo.ofFile("references/" + index + ".md", 10, "now"));
+    }
+    when(filesystem.ls(alice, root)).thenReturn(LsResult.success(entries));
+
+    assertThatThrownBy(() -> fingerprint.computeDraftHash(alice, "my-skill"))
+        .isInstanceOf(SkillDraftFingerprintException.class)
+        .hasMessageContaining("maximum file count");
+  }
+
+  @Test
+  void rejectsDraftsWhoseDeclaredContentExceedsTheMaximumTotalBytes() {
+    String root = "skills/_drafts/my-skill";
+    when(filesystem.exists(alice, root)).thenReturn(true);
+    when(filesystem.exists(alice, root + "/SKILL.md")).thenReturn(true);
+    when(filesystem.ls(alice, root)).thenReturn(LsResult.success(List.of(
+        FileInfo.ofFile("SKILL.md", 10, "now"),
+        FileInfo.ofFile("references/large.md", 1_048_576, "now"))));
+
+    assertThatThrownBy(() -> fingerprint.computeDraftHash(alice, "my-skill"))
+        .isInstanceOf(SkillDraftFingerprintException.class)
+        .hasMessageContaining("maximum total bytes");
+  }
+
   private void stubDraft(RuntimeContext ctx, String skillMd, String script) {
     when(filesystem.exists(ctx, "skills/_drafts/my-skill")).thenReturn(true);
     when(filesystem.exists(ctx, "skills/_drafts/my-skill/SKILL.md")).thenReturn(true);
