@@ -1,3 +1,3 @@
 package com.example.myagent.skillreview;
 
-public record RejectSkillReviewRequest(String reviewerId, String reason) {}
+public record RejectSkillReviewRequest(String reason) {}

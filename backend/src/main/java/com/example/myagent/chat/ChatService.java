@@ -1,7 +1,9 @@
 package com.example.myagent.chat;
 
+import com.example.myagent.agent.AgentExecution;
 import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.permission.PermissionService;
+import com.example.myagent.session.SessionExecutionCoordinator;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ToolConfirmationClaim;
 import com.example.myagent.toolconfirmation.ToolConfirmationDecision;
@@ -9,6 +11,8 @@ import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -23,16 +27,19 @@ public class ChatService {
   private final ChatAgentGateway chatAgentGateway;
   private final PermissionService permissionService;
   private final ToolConfirmationService toolConfirmationService;
+  private final SessionExecutionCoordinator sessionExecutionCoordinator;
 
   public ChatService(
       SessionService sessionService,
       ChatAgentGateway chatAgentGateway,
       PermissionService permissionService,
-      ToolConfirmationService toolConfirmationService) {
+      ToolConfirmationService toolConfirmationService,
+      SessionExecutionCoordinator sessionExecutionCoordinator) {
     this.sessionService = sessionService;
     this.chatAgentGateway = chatAgentGateway;
     this.permissionService = permissionService;
     this.toolConfirmationService = toolConfirmationService;
+    this.sessionExecutionCoordinator = sessionExecutionCoordinator;
   }
 
   public Flux<StreamEventDto> stream(CurrentUser currentUser, String sessionId, String message) {
@@ -46,7 +53,11 @@ public class ChatService {
                   permissionService.getModeForOwnedSession(sessionId));
             })
         .subscribeOn(Schedulers.boundedElastic())
-        .flatMapMany(chatAgentGateway::stream);
+        .flatMapMany(request -> Flux.defer(() -> {
+          AgentExecution<StreamEventDto> execution = chatAgentGateway.streamExecution(request);
+          return sessionExecutionCoordinator.track(
+              currentUser.id(), sessionId, execution::events, execution::completion);
+        }));
   }
 
   public Flux<StreamEventDto> confirm(
@@ -91,20 +102,126 @@ public class ChatService {
               ChatToolConfirmationRequest request = new ChatToolConfirmationRequest(
                   currentUser.id(), sessionId, context.permissionMode(),
                   trustedDecisions);
-              return toolConfirmationService
-                  .consume(confirmationId, claim.processingToken(), persisted)
-                  .thenMany(
-                      Flux.defer(
-                          () ->
-                              chatAgentGateway
-                                  .confirm(request)
-                                  .onErrorResume(
-                                      error -> Flux.just(StreamEventDto.error(errorMessage(error))))));
+              AtomicBoolean consumed = new AtomicBoolean();
+              Flux<StreamEventDto> resumed = Flux.defer(() -> {
+                AgentExecution<StreamEventDto> execution =
+                    chatAgentGateway.confirmExecution(request);
+                return sessionExecutionCoordinator.track(
+                    currentUser.id(),
+                    sessionId,
+                    () -> toolConfirmationService
+                        .consume(confirmationId, claim.processingToken(), persisted)
+                        .doOnSuccess(ignored -> consumed.set(true)),
+                    () -> execution.events().onErrorResume(
+                        error -> Flux.just(StreamEventDto.error(errorMessage(error)))),
+                    execution::completion)
+                    .concatWith(Flux.defer(() -> consumed.get()
+                        ? Flux.empty()
+                        : Flux.error(new IllegalStateException(
+                            "Confirmation execution ended before its event source started"))));
+              });
+              return resumed
+                  .onErrorResume(error -> recoverConfirmationFailure(
+                      confirmationId, claim.processingToken(), consumed.get(), error))
+                  .doOnCancel(() -> {
+                    if (!consumed.get()) {
+                      toolConfirmationService
+                          .rollbackIfProcessing(confirmationId, claim.processingToken())
+                          .subscribe(ignored -> {}, ignored -> {});
+                    }
+                  });
             });
+  }
+
+  private Flux<StreamEventDto> recoverConfirmationFailure(
+      String confirmationId,
+      String processingToken,
+      boolean consumed,
+      Throwable original) {
+    if (consumed) {
+      return Flux.error(isSessionCancelling(original)
+          ? consumedSessionCancellation((ResponseStatusException) original)
+          : consumedFailure(original));
+    }
+    return toolConfirmationService.rollbackIfProcessing(confirmationId, processingToken)
+        .onErrorReturn(false)
+        .flatMapMany(rolledBack -> {
+          if (rolledBack && isSessionCancelling(original)) {
+            return Flux.error(original);
+          }
+          return Flux.error(rolledBack
+              ? retryableFailure(original)
+              : consumedFailure(original));
+        });
+  }
+
+  private static ResponseStatusException retryableFailure(Throwable cause) {
+    return new ToolConfirmationRetryableException(cause);
+  }
+
+  private static ResponseStatusException consumedFailure(Throwable cause) {
+    return new ToolConfirmationConsumedException(cause);
+  }
+
+  private static ResponseStatusException consumedSessionCancellation(
+      ResponseStatusException cause) {
+    return new ConsumedSessionCancellingException(cause);
+  }
+
+  private static boolean isSessionCancelling(Throwable error) {
+    return error instanceof ResponseStatusException responseError
+        && "SESSION_CANCELLING".equals(
+            responseError.getHeaders().getFirst("X-Error-Code"));
   }
 
   private static String errorMessage(Throwable error) {
     return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+  }
+
+  private static final class ToolConfirmationRetryableException
+      extends ResponseStatusException {
+    private final HttpHeaders headers = new HttpHeaders();
+
+    private ToolConfirmationRetryableException(Throwable cause) {
+      super(HttpStatus.SERVICE_UNAVAILABLE, errorMessage(cause), cause);
+      headers.set("X-Error-Code", "TOOL_CONFIRMATION_RETRYABLE");
+    }
+
+    @Override
+    public HttpHeaders getHeaders() {
+      return headers;
+    }
+  }
+
+  private static final class ToolConfirmationConsumedException
+      extends ResponseStatusException {
+    private final HttpHeaders headers = new HttpHeaders();
+
+    private ToolConfirmationConsumedException(Throwable cause) {
+      super(HttpStatus.CONFLICT, errorMessage(cause), cause);
+      headers.set("X-Error-Code", "TOOL_CONFIRMATION_CONSUMED");
+    }
+
+    @Override
+    public HttpHeaders getHeaders() {
+      return headers;
+    }
+  }
+
+  private static final class ConsumedSessionCancellingException
+      extends ResponseStatusException {
+    private final HttpHeaders headers = new HttpHeaders();
+
+    private ConsumedSessionCancellingException(ResponseStatusException cause) {
+      super(cause.getStatusCode(), cause.getReason(), cause);
+      headers.putAll(cause.getHeaders());
+      headers.set("X-Tool-Confirmation-Consumed", "true");
+    }
+
+    @Override
+    public HttpHeaders getHeaders() {
+      return headers;
+    }
   }
 
   private record ConfirmationContext(

@@ -9,10 +9,40 @@ export function listMySkills(): Promise<Skill[]> {
   return apiGet<Skill[]>('/api/skills/mine')
 }
 
+interface SkillUploadEntry {
+  file: File
+  path: string
+}
+
+function prepareSkillUpload(files: File[]): SkillUploadEntry[] {
+  let rootDirectory = ''
+
+  const entries = files.map((file) => {
+    const segments = (file.webkitRelativePath || '').split('/')
+    if (segments.length < 2 || segments.some((segment) => !segment)) {
+      throw new Error('请选择一个完整的 Skill 目录')
+    }
+
+    const [currentRoot, ...relativeSegments] = segments
+    if (!rootDirectory) {
+      rootDirectory = currentRoot
+    } else if (currentRoot !== rootDirectory) {
+      throw new Error('一次只能上传一个 Skill 目录')
+    }
+
+    return { file, path: relativeSegments.join('/') }
+  })
+
+  if (!entries.some((entry) => entry.path === 'SKILL.md')) {
+    throw new Error('所选目录根部必须包含 SKILL.md')
+  }
+  return entries
+}
+
 export async function uploadSkill(files: File[]): Promise<Skill> {
   const formData = new FormData()
-  for (const file of files) {
-    formData.append(file.name, file)
+  for (const entry of prepareSkillUpload(files)) {
+    formData.append(entry.path, entry.file, entry.path)
   }
   const token = localStorage.getItem(TOKEN_KEY)
   const headers = new Headers()

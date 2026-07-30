@@ -1,5 +1,9 @@
 package com.example.myagent.chat;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -9,6 +13,7 @@ import com.example.myagent.auth.CurrentUser;
 import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.ChatSessionEntity;
+import com.example.myagent.session.SessionExecutionCoordinator;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ConfirmationKind;
 import com.example.myagent.toolconfirmation.ToolCallSnapshot;
@@ -20,6 +25,8 @@ import com.example.myagent.toolconfirmation.ToolConfirmationStatus;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.function.Supplier;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -27,6 +34,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.TestingAuthenticationToken;
@@ -34,6 +42,8 @@ import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 @WebFluxTest(ChatController.class)
 @Import({ChatService.class, StubChatAgentGateway.class, ChatControllerTest.TestSecurityConfig.class})
@@ -49,6 +59,22 @@ class ChatControllerTest {
   @MockBean private SessionService sessionService;
   @MockBean private PermissionService permissionService;
   @MockBean private ToolConfirmationService toolConfirmationService;
+  @MockBean private SessionExecutionCoordinator sessionExecutionCoordinator;
+
+  @BeforeEach
+  @SuppressWarnings("unchecked")
+  void passThroughTrackedExecutions() {
+    when(sessionExecutionCoordinator.track(anyLong(), anyString(), any(), any()))
+        .thenAnswer(invocation ->
+            ((Supplier<Flux<StreamEventDto>>) invocation.getArgument(2)).get());
+    when(sessionExecutionCoordinator.track(
+        anyLong(), anyString(), any(), any(), any()))
+        .thenAnswer(invocation -> {
+          Supplier<Mono<Void>> preflight = invocation.getArgument(2);
+          Supplier<Flux<StreamEventDto>> source = invocation.getArgument(3);
+          return Mono.defer(preflight).thenMany(Flux.defer(source));
+        });
+  }
 
   @Test
   void postStreamRejectsUnknownFields() {
@@ -126,6 +152,35 @@ class ChatControllerTest {
   }
 
   @Test
+  void postStreamPropagatesSessionCancellationErrorCodeHeader() {
+    ResponseStatusException cancellation = new ResponseStatusException(
+        HttpStatus.CONFLICT, "Session is being cancelled") {
+      private final HttpHeaders headers = new HttpHeaders();
+
+      {
+        headers.set("X-Error-Code", "SESSION_CANCELLING");
+      }
+
+      @Override
+      public HttpHeaders getHeaders() {
+        return headers;
+      }
+    };
+    doReturn(Flux.error(cancellation))
+        .when(sessionExecutionCoordinator).track(anyLong(), anyString(), any(), any());
+    ownedSession();
+
+    authenticatedClient()
+        .post()
+        .uri("/api/chat/sessions/s_123/stream")
+        .contentType(MediaType.APPLICATION_JSON)
+        .bodyValue("{\"message\":\"hi\"}")
+        .exchange()
+        .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+        .expectHeader().valueEquals("X-Error-Code", "SESSION_CANCELLING");
+  }
+
+  @Test
   void postConfirmationReturnsGatewayEventsAsNdjson() {
     ownedSession();
     ToolConfirmationClaim claim = claim();
@@ -199,7 +254,9 @@ class ChatControllerTest {
         .uri("/api/chat/sessions/s_123/tool-confirmations/conflict")
         .contentType(MediaType.APPLICATION_JSON)
         .bodyValue("{\"decisions\":[{\"toolCallId\":\"tool_123\",\"confirmed\":true}]}")
-        .exchange().expectStatus().isEqualTo(HttpStatus.CONFLICT);
+        .exchange()
+        .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+        .expectHeader().doesNotExist("X-Error-Code");
   }
 
   private void ownedSession() {

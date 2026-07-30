@@ -1,0 +1,1072 @@
+package com.example.myagent.session;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.example.myagent.agent.AgentExecution;
+import com.example.myagent.chat.ChatAgentRequest;
+import com.example.myagent.chat.ChatToolConfirmationRequest;
+import com.example.myagent.chat.StreamEventDto;
+import com.example.myagent.chat.StubChatAgentGateway;
+import com.example.myagent.permission.PermissionMode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.connection.ReactiveSubscription;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.ReactiveValueOperations;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.ReactiveRedisMessageListenerContainer;
+import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.web.server.ResponseStatusException;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+import reactor.test.StepVerifier;
+
+@ExtendWith(MockitoExtension.class)
+class RedisSessionExecutionCoordinatorTest {
+  private static final Duration ACTIVE_TTL = Duration.ofSeconds(30);
+  private static final Duration CANCELLATION_TTL = Duration.ofSeconds(45);
+
+  @Mock private ReactiveStringRedisTemplate redisTemplate;
+  @Mock private ReactiveValueOperations<String, String> valueOperations;
+  @Mock private ReactiveRedisMessageListenerContainer listenerContainer;
+
+  private Sinks.Many<ReactiveSubscription.Message<String, String>> messages;
+  private Map<String, AtomicLong> activeCounts;
+  private Map<String, Set<String>> pendingExecutions;
+  private RedisSessionExecutionCoordinator coordinator;
+
+  @BeforeEach
+  void setUp() {
+    messages = Sinks.many().multicast().onBackpressureBuffer();
+    activeCounts = new ConcurrentHashMap<>();
+    pendingExecutions = new ConcurrentHashMap<>();
+    lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+    lenient().when(valueOperations.set(anyString(), anyString(), any(Duration.class)))
+        .thenReturn(Mono.just(true));
+    when(listenerContainer.receive(any(ChannelTopic.class))).thenReturn(messages.asFlux());
+    lenient().when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(this::executeScript);
+    lenient().when(redisTemplate.expire(anyString(), any(Duration.class)))
+        .thenReturn(Mono.just(true));
+
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        ACTIVE_TTL,
+        Duration.ofSeconds(10),
+        Duration.ofMillis(1),
+        Duration.ofMillis(100),
+        "myagent:agent-state:",
+        CANCELLATION_TTL);
+  }
+
+  @AfterEach
+  void tearDown() {
+    coordinator.destroy();
+  }
+
+  @Test
+  void rejectedCancelledSessionCarriesStableErrorCode() {
+    when(valueOperations.get(
+        "myagent:agent-state:session-execution:1:s_1:cancelled"))
+        .thenReturn(Mono.just("1"));
+
+    StepVerifier.create(coordinator.rejectIfCancelled(1L, "s_1"))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
+              assertThat(status.getStatusCode().value()).isEqualTo(409);
+              assertThat(status.getHeaders().getFirst("X-Error-Code"))
+                  .isEqualTo("SESSION_CANCELLING");
+            }))
+        .verify();
+  }
+
+  @Test
+  void cancelWaitsForExecutionCompletionInsteadOfSubscriptionCancellation() {
+    AtomicLong activeCount = stubActiveCounter();
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    Sinks.Many<Integer> source = Sinks.many().unicast().onBackpressureBuffer();
+    Sinks.Empty<Void> actualCompletion = Sinks.empty();
+    Disposable execution = coordinator
+        .track(1L, "s_1", source::asFlux, actualCompletion::asMono)
+        .subscribe();
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .thenAwait(Duration.ofMillis(20))
+        .expectNoEvent(Duration.ofMillis(20))
+        .then(() -> {
+          assertThat(execution.isDisposed()).isTrue();
+          assertThat(activeCount).hasValue(1L);
+          actualCompletion.tryEmitEmpty();
+        })
+        .verifyComplete();
+
+    assertThat(activeCount).hasValue(0L);
+    verify(redisTemplate).convertAndSend(
+        eq("myagent:agent-state:session-execution:cancel"), anyString());
+    verify(redisTemplate, never()).keys(anyString());
+  }
+
+  @Test
+  void stubStreamDeliversAllEventsWhenTrackedByRealCoordinator() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    AtomicInteger sourceSubscriptions = new AtomicInteger();
+    StubChatAgentGateway gateway = new StubChatAgentGateway() {
+      @Override
+      public Flux<StreamEventDto> stream(ChatAgentRequest request) {
+        return super.stream(request).doOnSubscribe(ignored -> sourceSubscriptions.incrementAndGet());
+      }
+    };
+    AgentExecution<StreamEventDto> execution = gateway.streamExecution(
+        new ChatAgentRequest(1L, "s_1", "hello", PermissionMode.DEFAULT));
+
+    StepVerifier.create(coordinator.track(
+            1L, "s_1", execution::events, execution::completion))
+        .assertNext(event -> assertThat(event.type()).isEqualTo("reply_start"))
+        .assertNext(event -> {
+          assertThat(event.type()).isEqualTo("text_delta");
+          assertThat(event.payload()).containsEntry("delta", "hello");
+        })
+        .assertNext(event -> assertThat(event.type()).isEqualTo("done"))
+        .verifyComplete();
+
+    assertThat(sourceSubscriptions).hasValue(1);
+  }
+
+  @Test
+  void stubConfirmationDeliversAllEventsWhenTrackedByRealCoordinator() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    AtomicInteger sourceSubscriptions = new AtomicInteger();
+    StubChatAgentGateway gateway = new StubChatAgentGateway() {
+      @Override
+      public Flux<StreamEventDto> confirm(ChatToolConfirmationRequest request) {
+        return super.confirm(request)
+            .doOnSubscribe(ignored -> sourceSubscriptions.incrementAndGet());
+      }
+    };
+    AgentExecution<StreamEventDto> execution = gateway.confirmExecution(
+        new ChatToolConfirmationRequest(1L, "s_1", PermissionMode.DEFAULT, List.of()));
+
+    StepVerifier.create(coordinator.track(
+            1L, "s_1", execution::events, execution::completion))
+        .assertNext(event -> assertThat(event.type()).isEqualTo("reply_start"))
+        .assertNext(event -> assertThat(event.type()).isEqualTo("done"))
+        .verifyComplete();
+
+    assertThat(sourceSubscriptions).hasValue(1);
+  }
+
+  @Test
+  void defaultTrackCreatesIndependentCompletionForEachSubscription() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    Sinks.Many<Integer> firstSource = Sinks.many().unicast().onBackpressureBuffer();
+    Sinks.Many<Integer> secondSource = Sinks.many().unicast().onBackpressureBuffer();
+    AtomicInteger subscriptions = new AtomicInteger();
+    Flux<Integer> tracked = coordinator.track(
+        1L, "s_1", () -> subscriptions.getAndIncrement() == 0
+            ? firstSource.asFlux()
+            : secondSource.asFlux());
+
+    tracked.subscribe();
+    tracked.subscribe();
+    assertThat(stubActiveCounter()).hasValue(2L);
+
+    firstSource.tryEmitComplete();
+
+    assertThat(stubActiveCounter()).hasValue(1L);
+    assertThat(pendingExecutions.values()).singleElement().satisfies(pending ->
+        assertThat(pending).hasSize(1));
+    secondSource.tryEmitComplete();
+    assertThat(stubActiveCounter()).hasValue(0L);
+  }
+
+  @Test
+  void cancellingDefaultTrackCompletesItsExecution() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    Disposable execution = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
+    assertThat(stubActiveCounter()).hasValue(1L);
+
+    execution.dispose();
+
+    assertThat(stubActiveCounter()).hasValue(0L);
+    assertThat(pendingExecutions.values()).singleElement().satisfies(pending ->
+        assertThat(pending).isEmpty());
+  }
+
+  @Test
+  void preflightErrorCleansRegistrationWithoutSubscribingSourceAndAllowsRetry()
+      throws Exception {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    AtomicBoolean sourceSubscribed = new AtomicBoolean();
+    CountDownLatch completionDisposed = new CountDownLatch(1);
+
+    StepVerifier.create(coordinator.track(
+            1L,
+            "s_1",
+            () -> Mono.error(new IllegalStateException("preflight failed")),
+            () -> Flux.defer(() -> {
+              sourceSubscribed.set(true);
+              return Flux.just(1);
+            }),
+            () -> Mono.<Void>never().doOnCancel(completionDisposed::countDown)))
+        .expectErrorMessage("preflight failed")
+        .verify();
+
+    assertThat(sourceSubscribed).isFalse();
+    assertThat(completionDisposed.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(stubActiveCounter()).hasValue(0L);
+    assertThat(pendingExecutions.values()).singleElement().satisfies(
+        pending -> assertThat(pending).isEmpty());
+
+    StepVerifier.create(coordinator.track(1L, "s_1", () -> Flux.just(2)))
+        .expectNext(2)
+        .verifyComplete();
+  }
+
+  @Test
+  void cancellationDuringPreflightPreservesStableErrorAndCleansRegistration()
+      throws Exception {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    CountDownLatch preflightSubscribed = new CountDownLatch(1);
+    CountDownLatch preflightCancelled = new CountDownLatch(1);
+    CountDownLatch terminated = new CountDownLatch(1);
+    AtomicBoolean sourceSubscribed = new AtomicBoolean();
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+
+    Disposable execution = coordinator.track(
+            1L,
+            "s_1",
+            () -> Mono.<Void>never()
+                .doOnSubscribe(ignored -> preflightSubscribed.countDown())
+                .doOnCancel(preflightCancelled::countDown),
+            () -> Flux.defer(() -> {
+              sourceSubscribed.set(true);
+              return Flux.never();
+            }),
+            Mono::<Void>never)
+        .doOnError(failure::set)
+        .doFinally(ignored -> terminated.countDown())
+        .subscribe(ignored -> {}, ignored -> {});
+
+    assertThat(preflightSubscribed.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    messages.tryEmitNext(message("{\"userId\":1,\"sessionId\":\"s_1\"}"));
+
+    assertThat(terminated.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(preflightCancelled.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(failure.get()).isInstanceOfSatisfying(
+        ResponseStatusException.class,
+        error -> {
+          assertThat(error.getStatusCode().value()).isEqualTo(409);
+          assertThat(error.getHeaders().getFirst("X-Error-Code"))
+              .isEqualTo("SESSION_CANCELLING");
+        });
+    assertThat(sourceSubscribed).isFalse();
+    assertThat(execution.isDisposed()).isTrue();
+    assertThat(stubActiveCounter()).hasValue(0L);
+    assertThat(pendingExecutions.values()).singleElement().satisfies(
+        pending -> assertThat(pending).isEmpty());
+  }
+
+  @Test
+  void failedCompletionCleanupRemainsPendingUntilBackgroundRetrySucceeds() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(100),
+        Duration.ofMillis(5),
+        Duration.ofMillis(1),
+        Duration.ofMillis(100));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    AtomicInteger cleanupAttempts = new AtomicInteger();
+    CountDownLatch boundedRetriesExhausted = new CountDownLatch(1);
+    CountDownLatch cleanupCompleted = new CountDownLatch(1);
+    Sinks.One<Void> allowRecovery = Sinks.one();
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          if (!script.getScriptAsString().contains("DECR")) {
+            return executeScript(invocation);
+          }
+          int attempt = cleanupAttempts.incrementAndGet();
+          if (attempt <= 3) {
+            if (attempt == 3) {
+              boundedRetriesExhausted.countDown();
+            }
+            return Flux.error(new IllegalStateException("redis unavailable"));
+          }
+          return allowRecovery.asMono()
+              .then(Mono.defer(() -> executeScript(invocation).next()))
+              .doOnNext(ignored -> cleanupCompleted.countDown())
+              .flux();
+        });
+
+    coordinator.track(1L, "s_1", () -> Flux.just(1)).blockLast();
+
+    assertThat(boundedRetriesExhausted.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(pendingExecutions.values()).singleElement().satisfies(pending ->
+        assertThat(pending).hasSize(1));
+    allowRecovery.tryEmitEmpty();
+    assertThat(cleanupCompleted.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(pendingExecutions.values()).singleElement().satisfies(pending ->
+        assertThat(pending).isEmpty());
+  }
+
+  @Test
+  void cancellationMarkerExpiresAfterConfiguredTtl() {
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+
+    coordinator.cancelAndAwait(1L, "s_1").block();
+
+    verify(valueOperations).set(
+        "myagent:agent-state:session-execution:1:s_1:cancelled", "1", CANCELLATION_TTL);
+  }
+
+  @Test
+  void activeExecutionRenewsCancellationMarkerUntilCompletion() {
+    coordinator.destroy();
+    Duration cancellationTtl = Duration.ofMillis(40);
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(100),
+        Duration.ofMillis(5),
+        Duration.ofMillis(1),
+        Duration.ofMillis(80),
+        "myagent:agent-state:",
+        cancellationTtl);
+    String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
+    AtomicBoolean cancelled = new AtomicBoolean();
+    when(valueOperations.get(cancellationKey))
+        .thenAnswer(ignored -> cancelled.get() ? Mono.just("1") : Mono.empty());
+    Duration safeCancellationTtl = Duration.ofMillis(121);
+    when(valueOperations.set(cancellationKey, "1", safeCancellationTtl))
+        .thenAnswer(ignored -> {
+          cancelled.set(true);
+          return Mono.just(true);
+        });
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    AtomicInteger heartbeatCalls = new AtomicInteger();
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          if (isLeaseRefresh(script)) {
+            heartbeatCalls.incrementAndGet();
+          }
+          return executeScript(invocation);
+        });
+    Sinks.Empty<Void> completion = Sinks.empty();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, completion::asMono).subscribe();
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .expectErrorSatisfies(this::assertCancellationTimeout)
+        .verify(Duration.ofSeconds(1));
+
+    verify(valueOperations).set(cancellationKey, "1", safeCancellationTtl);
+    assertThat(heartbeatCalls).hasValueGreaterThanOrEqualTo(2);
+    completion.tryEmitEmpty();
+  }
+
+  @Test
+  void atomicCancellationLeaseRefreshDoesNotExtendActiveCountAndRejectsNewRegistration()
+      throws Exception {
+    coordinator.destroy();
+    Duration activeTtl = Duration.ofMillis(100);
+    Duration cancellationTtl = Duration.ofMillis(80);
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        activeTtl,
+        Duration.ofMillis(5),
+        Duration.ofMillis(1),
+        Duration.ofMillis(500),
+        "myagent:agent-state:",
+        cancellationTtl);
+    String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
+    AtomicBoolean cancelled = new AtomicBoolean();
+    List<String> renewals = new CopyOnWriteArrayList<>();
+    CountDownLatch markerRenewed = new CountDownLatch(1);
+    when(valueOperations.get(cancellationKey))
+        .thenAnswer(ignored -> cancelled.get() ? Mono.just("1") : Mono.empty());
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          if (script.getScriptAsString().contains("INCR") && cancelled.get()) {
+            return Flux.just(-1L);
+          }
+          if (isLeaseRefresh(script)) {
+            List<?> arguments = invocation.getArgument(2);
+            renewals.add("atomic-cancellation:" + arguments.get(1));
+            markerRenewed.countDown();
+            return Flux.just(-1L);
+          }
+          return executeScript(invocation);
+        });
+    Sinks.Empty<Void> completion = Sinks.empty();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, completion::asMono).subscribe();
+
+    cancelled.set(true);
+    assertThat(markerRenewed.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(renewals).startsWith("atomic-cancellation:141");
+    verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
+    AtomicBoolean lateSourceSubscribed = new AtomicBoolean();
+
+    StepVerifier.create(coordinator.track(1L, "s_1", () -> {
+          lateSourceSubscribed.set(true);
+          return Flux.never();
+        }))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOfSatisfying(ResponseStatusException.class,
+                status -> {
+                  assertThat(status.getStatusCode().value()).isEqualTo(409);
+                  assertThat(status.getHeaders().getFirst("X-Error-Code"))
+                      .isEqualTo("SESSION_CANCELLING");
+                }))
+        .verify();
+    assertThat(lateSourceSubscribed).isFalse();
+    assertThat(stubActiveCounter()).hasValue(1L);
+    completion.tryEmitEmpty();
+  }
+
+  @Test
+  void missingActiveCountWithoutCompletionFailsClosed() {
+    AtomicLong activeCount = stubActiveCounter();
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    Sinks.Empty<Void> completion = Sinks.empty();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, completion::asMono).subscribe();
+    assertThat(activeCount).hasValue(1L);
+    activeCount.set(0L);
+    AtomicBoolean lateSourceSubscribed = new AtomicBoolean();
+
+    StepVerifier.create(coordinator.track(1L, "s_1", () -> {
+          lateSourceSubscribed.set(true);
+          return Flux.never();
+        }))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOfSatisfying(ResponseStatusException.class,
+                status -> {
+                  assertThat(status.getStatusCode().value()).isEqualTo(409);
+                  assertThat(status.getHeaders().getFirst("X-Error-Code"))
+                      .isEqualTo("SESSION_CANCELLING");
+                }))
+        .verify();
+    assertThat(lateSourceSubscribed).isFalse();
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .expectErrorSatisfies(this::assertCancellationTimeout)
+        .verify(Duration.ofSeconds(1));
+
+    completion.tryEmitEmpty();
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .verifyComplete();
+  }
+
+  @Test
+  void oneOfTwoCompletionsCannotClearPendingExecutionsAfterCountExpires() {
+    AtomicLong activeCount = stubActiveCounter();
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    Sinks.Empty<Void> firstCompletion = Sinks.empty();
+    Sinks.Empty<Void> secondCompletion = Sinks.empty();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, firstCompletion::asMono).subscribe();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, secondCompletion::asMono).subscribe();
+    assertThat(activeCount).hasValue(2L);
+    activeCount.set(0L);
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .then(() -> firstCompletion.tryEmitEmpty())
+        .expectNoEvent(Duration.ofMillis(20))
+        .then(() -> secondCompletion.tryEmitEmpty())
+        .verifyComplete();
+  }
+
+  @Test
+  void registrationTimesOutBeforeCancellationMarkerCanExpire() {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(200),
+        Duration.ofMillis(20),
+        Duration.ofMillis(1),
+        Duration.ofMillis(500),
+        "myagent:agent-state:",
+        Duration.ofMillis(100));
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenReturn(Flux.never());
+    AtomicBoolean sourceSubscribed = new AtomicBoolean();
+
+    StepVerifier.create(coordinator.track(1L, "s_1", () -> {
+          sourceSubscribed.set(true);
+          return Flux.never();
+        }))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOfSatisfying(ResponseStatusException.class,
+                status -> {
+                  assertThat(status.getStatusCode().value()).isEqualTo(409);
+                  assertThat(status.getHeaders().getFirst("X-Error-Code")).isNull();
+                }))
+        .verify(Duration.ofSeconds(1));
+
+    assertThat(sourceSubscribed).isFalse();
+  }
+
+  @Test
+  void cancelledRegistrationCleansUpWhenSuccessfulResponseArrivesLate() throws Exception {
+    Sinks.One<Long> registrationResponse = Sinks.one();
+    AtomicReference<String> registeredExecutionId = new AtomicReference<>();
+    CountDownLatch compensationCompleted = new CountDownLatch(1);
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          if (!script.getScriptAsString().contains("INCR")) {
+            return executeScript(invocation)
+                .doOnNext(ignored -> {
+                  if (script.getScriptAsString().contains("DECR")) {
+                    compensationCompleted.countDown();
+                  }
+                });
+          }
+          List<?> arguments = invocation.getArgument(2);
+          registeredExecutionId.set(arguments.get(1).toString());
+          executeScript(invocation).blockFirst();
+          return registrationResponse.asMono().flux();
+        });
+    Disposable subscription = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
+    String pendingKey =
+        "myagent:agent-state:session-execution:1:s_1:pending-completion";
+    String executionId = registeredExecutionId.get();
+    pendingExecutions.get(pendingKey).add("other-execution");
+    stubActiveCounter().incrementAndGet();
+
+    subscription.dispose();
+    registrationResponse.tryEmitValue(1L);
+
+    assertThat(compensationCompleted.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(pendingExecutions.get(pendingKey)).containsExactly("other-execution");
+    assertThat(stubActiveCounter()).hasValue(1L);
+    assertThat(executionId).isNotNull();
+  }
+
+  @Test
+  void cancelAndAwaitFailsClosedWhenActiveCountScriptCompletesEmpty() {
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          return script.getScriptAsString().contains("SCARD")
+                  && !script.getScriptAsString().contains("INCR")
+              ? Flux.empty()
+              : executeScript(invocation);
+        });
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("Failed to read active session executions"))
+        .verify(Duration.ofSeconds(1));
+  }
+
+  @Test
+  void secondCancellationCheckTimeoutDisposesCompletionAndDecrementsOnce() throws Exception {
+    AtomicBoolean registered = new AtomicBoolean();
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> {
+          RedisScript<Long> script = invocation.getArgument(0);
+          if (script.getScriptAsString().contains("INCR")) {
+            registered.set(true);
+          }
+          return executeScript(invocation);
+        });
+    when(valueOperations.get(anyString()))
+        .thenAnswer(ignored -> registered.get() ? Mono.never() : Mono.empty());
+    CountDownLatch completionDisposed = new CountDownLatch(1);
+    AtomicBoolean sourceSubscribed = new AtomicBoolean();
+
+    StepVerifier.create(coordinator.track(
+            1L,
+            "s_1",
+            () -> {
+              sourceSubscribed.set(true);
+              return Flux.never();
+            },
+            () -> Mono.<Void>never().doOnCancel(completionDisposed::countDown)))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOfSatisfying(ResponseStatusException.class,
+                status -> assertThat(status.getStatusCode().value()).isEqualTo(409)))
+        .verify(Duration.ofSeconds(1));
+
+    assertThat(sourceSubscribed).isFalse();
+    assertThat(completionDisposed.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(stubActiveCounter()).hasValue(0L);
+    verify(redisTemplate, times(2)).execute(any(RedisScript.class), anyList(), anyList());
+  }
+
+  @Test
+  void cancellationChannelUsesConfiguredKeyPrefix() {
+    coordinator.destroy();
+    reset(listenerContainer);
+    when(listenerContainer.receive(any(ChannelTopic.class))).thenReturn(messages.asFlux());
+
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        ACTIVE_TTL,
+        Duration.ofSeconds(10),
+        Duration.ofMillis(1),
+        Duration.ofMillis(100),
+        "custom-prefix:",
+        CANCELLATION_TTL);
+
+    verify(listenerContainer).receive(ChannelTopic.of("custom-prefix:session-execution:cancel"));
+  }
+
+  @Test
+  void differentUsersWithSameSessionIdHaveIndependentCounters() {
+    AtomicLong userOneCount = new AtomicLong();
+    AtomicLong userTwoCount = new AtomicLong();
+    stubActiveCountersByUser(userOneCount, userTwoCount);
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    Sinks.Empty<Void> userOneCompletion = Sinks.empty();
+    Sinks.Empty<Void> userTwoCompletion = Sinks.empty();
+    coordinator.track(1L, "s_1", Flux::<Integer>never, userOneCompletion::asMono).subscribe();
+    Disposable userTwo = coordinator
+        .track(2L, "s_1", Flux::<Integer>never, userTwoCompletion::asMono)
+        .subscribe();
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .then(() -> userOneCompletion.tryEmitEmpty())
+        .verifyComplete();
+
+    assertThat(userOneCount).hasValue(0L);
+    assertThat(userTwoCount).hasValue(1L);
+    assertThat(userTwo.isDisposed()).isFalse();
+    userTwo.dispose();
+    userTwoCompletion.tryEmitEmpty();
+  }
+
+  @Test
+  void trackRejectsExecutionAfterCancellationWasRecorded() {
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+    coordinator.cancelAndAwait(1L, "s_1").block();
+    when(valueOperations.get("myagent:agent-state:session-execution:1:s_1:cancelled"))
+        .thenReturn(Mono.just("1"));
+
+    StepVerifier.create(coordinator.track(1L, "s_1", () -> Flux.just("unexpected")))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOfSatisfying(ResponseStatusException.class,
+                status -> assertThat(status.getStatusCode().value()).isEqualTo(409)))
+        .verify();
+  }
+
+  @Test
+  void cancellationMessageCancelsOnlyExactlyMatchingLocalExecution() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    Disposable matching = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
+    Disposable differentSession = coordinator.track(1L, "s_2", Flux::<Integer>never).subscribe();
+
+    messages.tryEmitNext(message("{\"userId\":1,\"sessionId\":\"s_1\"}"));
+
+    assertThat(matching.isDisposed()).isTrue();
+    assertThat(differentSession.isDisposed()).isFalse();
+    differentSession.dispose();
+  }
+
+  @Test
+  void trackRenewsTheActiveExecutionTtl() {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        ACTIVE_TTL,
+        Duration.ofMillis(1),
+        Duration.ofMillis(1),
+        Duration.ofMillis(100));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+
+    Disposable subscription = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
+
+    verify(redisTemplate, timeout(500).atLeast(2))
+        .execute(any(RedisScript.class), anyList(), anyList());
+    subscription.dispose();
+  }
+
+  @Test
+  void cancelAndAwaitFailsWithConflictWhenActiveExecutionDoesNotDisappear() {
+    stubActiveCounter().set(1L);
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
+              assertThat(status.getStatusCode().value()).isEqualTo(409);
+              assertThat(status.getReason()).isEqualTo("Session cancellation is still in progress");
+              assertThat(status.getHeaders().getFirst("X-Error-Code")).isNull();
+            }))
+        .verify(Duration.ofSeconds(1));
+  }
+
+  @Test
+  void publicConstructorUsesOnlyAutoConfiguredDependencies() {
+    assertThatCode(() -> RedisSessionExecutionCoordinator.class.getConstructor(
+        ReactiveStringRedisTemplate.class, ObjectMapper.class))
+        .doesNotThrowAnyException();
+  }
+
+  @Test
+  void runningExecutionStopsWhenCancellationMessageWasLostButMarkerExists() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(100),
+        Duration.ofMillis(5),
+        Duration.ofMillis(1),
+        Duration.ofMillis(200));
+    String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
+    when(valueOperations.get(cancellationKey))
+        .thenReturn(Mono.empty(), Mono.empty(), Mono.just("1"));
+    CountDownLatch stopped = new CountDownLatch(1);
+
+    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    assertThat(stopped.await(500, TimeUnit.MILLISECONDS)).isTrue();
+  }
+
+  @Test
+  void listenerReconnectsAfterSubscriptionFailure() {
+    coordinator.destroy();
+    reset(listenerContainer);
+    when(listenerContainer.receive(any(ChannelTopic.class)))
+        .thenReturn(Flux.error(new IllegalStateException("disconnected")), messages.asFlux());
+
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        ACTIVE_TTL,
+        Duration.ofSeconds(10),
+        Duration.ofMillis(1),
+        Duration.ofMillis(100));
+
+    verify(listenerContainer, timeout(500).atLeast(2)).receive(any(ChannelTopic.class));
+  }
+
+  @Test
+  void executionStopsWhenLeaseCannotBeRenewedBeforeSafetyDeadline() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(50),
+        Duration.ofMillis(5),
+        Duration.ofMillis(1),
+        Duration.ofMillis(200));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> isLeaseRefresh(invocation.getArgument(0))
+            ? Flux.error(new IllegalStateException("redis unavailable"))
+            : executeScript(invocation));
+    CountDownLatch stopped = new CountDownLatch(1);
+
+    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    assertThat(stopped.await(500, TimeUnit.MILLISECONDS)).isTrue();
+  }
+
+  @Test
+  void cancelAndAwaitTimesOutWhenCancellationMarkerWriteDoesNotComplete() {
+    when(valueOperations.set(
+        "myagent:agent-state:session-execution:1:s_1:cancelled", "1", CANCELLATION_TTL))
+        .thenReturn(Mono.never());
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .expectErrorSatisfies(this::assertCancellationTimeout)
+        .verify(Duration.ofSeconds(1));
+  }
+
+  @Test
+  void cancelAndAwaitFailsWhenCancellationMarkerWriteCompletesEmpty() {
+    when(valueOperations.set(
+        "myagent:agent-state:session-execution:1:s_1:cancelled", "1", CANCELLATION_TTL))
+        .thenReturn(Mono.empty());
+
+    StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
+        .expectErrorSatisfies(error -> assertThat(error)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("Failed to record session cancellation"))
+        .verify(Duration.ofSeconds(1));
+
+    verify(redisTemplate, never()).convertAndSend(anyString(), anyString());
+    verify(redisTemplate, never()).keys(anyString());
+  }
+
+  @Test
+  void cancelAndAwaitCancelsLocalExecutionBeforePublishCompletes() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        ACTIVE_TTL,
+        Duration.ofSeconds(10),
+        Duration.ofMillis(1),
+        Duration.ofMillis(500));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.never());
+    CountDownLatch stopped = new CountDownLatch(1);
+    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    Disposable cancellation = coordinator.cancelAndAwait(1L, "s_1").subscribe(ignored -> {}, ignored -> {});
+
+    assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    cancellation.dispose();
+  }
+
+  @Test
+  void destroyStopsLocalExecutionsAndDestroysListenerContainer() throws Exception {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    CountDownLatch stopped = new CountDownLatch(1);
+    coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    coordinator.destroy();
+
+    assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    verify(listenerContainer).destroy();
+  }
+
+  @Test
+  void executionStopsBeforeLeaseExpiresWhenRenewalNeverCompletes() throws Exception {
+    coordinator.destroy();
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        Duration.ofMillis(200),
+        Duration.ofMillis(20),
+        Duration.ofMillis(1),
+        Duration.ofMillis(300));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> isLeaseRefresh(invocation.getArgument(0))
+            ? Flux.never()
+            : executeScript(invocation));
+    CountDownLatch stopped = new CountDownLatch(1);
+    Sinks.Empty<Void> completion = Sinks.empty();
+
+    coordinator.track(
+        1L,
+        "s_1",
+        () -> Flux.<Integer>never().doOnCancel(stopped::countDown),
+        completion::asMono).subscribe();
+
+    assertThat(stopped.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(stubActiveCounter()).hasValue(1L);
+    completion.tryEmitEmpty();
+  }
+
+  @Test
+  void destroyStopsExecutionWhileSecondCancellationCheckIsPending() throws Exception {
+    String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
+    when(valueOperations.get(cancellationKey)).thenReturn(Mono.never());
+    AtomicBoolean sourceSubscribed = new AtomicBoolean();
+    CountDownLatch terminated = new CountDownLatch(1);
+    coordinator.track(1L, "s_1", () -> {
+          sourceSubscribed.set(true);
+          return Flux.never();
+        })
+        .doFinally(ignored -> terminated.countDown())
+        .subscribe();
+
+    coordinator.destroy();
+
+    assertThat(terminated.await(200, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(sourceSubscribed).isFalse();
+    assertThat(stubActiveCounter()).hasValue(0L);
+  }
+
+  @Test
+  void cancellationMessageDoesNotCancelSameSessionOwnedByDifferentUser() {
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    Disposable matching = coordinator.track(1L, "s_1", Flux::<Integer>never).subscribe();
+    Disposable differentUser = coordinator.track(2L, "s_1", Flux::<Integer>never).subscribe();
+
+    messages.tryEmitNext(message("{\"userId\":1,\"sessionId\":\"s_1\"}"));
+
+    assertThat(matching.isDisposed()).isTrue();
+    assertThat(differentUser.isDisposed()).isFalse();
+    differentUser.dispose();
+  }
+
+  @Test
+  void firstSuccessfulRenewalKeepsDefaultRatioExecutionRunning() throws Exception {
+    coordinator.destroy();
+    Duration activeTtl = Duration.ofMillis(300);
+    Duration refreshInterval = Duration.ofMillis(100);
+    coordinator = new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        listenerContainer,
+        new ObjectMapper(),
+        activeTtl,
+        refreshInterval,
+        Duration.ofMillis(1),
+        Duration.ofMillis(500));
+    when(valueOperations.get(anyString())).thenReturn(Mono.empty());
+    CountDownLatch heartbeatRenewed = new CountDownLatch(1);
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> isLeaseRefresh(invocation.getArgument(0))
+            ? Mono.delay(Duration.ofMillis(20))
+                .thenReturn(1L)
+                .doOnNext(ignored -> heartbeatRenewed.countDown())
+                .flux()
+            : executeScript(invocation));
+    CountDownLatch stopped = new CountDownLatch(1);
+
+    Disposable subscription = coordinator.track(
+        1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
+
+    assertThat(heartbeatRenewed.await(500, TimeUnit.MILLISECONDS)).isTrue();
+    assertThat(stopped.await(150, TimeUnit.MILLISECONDS)).isFalse();
+    subscription.dispose();
+  }
+
+  private void assertCancellationTimeout(Throwable error) {
+    assertThat(error).isInstanceOfSatisfying(ResponseStatusException.class, status -> {
+      assertThat(status.getStatusCode().value()).isEqualTo(409);
+      assertThat(status.getReason()).isEqualTo("Session cancellation is still in progress");
+    });
+  }
+
+  private AtomicLong stubActiveCounter() {
+    return activeCounts.computeIfAbsent(
+        "myagent:agent-state:session-execution:1:s_1:active-count",
+        ignored -> new AtomicLong());
+  }
+
+  private void stubActiveCountersByUser(AtomicLong userOneCount, AtomicLong userTwoCount) {
+    activeCounts.put(
+        "myagent:agent-state:session-execution:1:s_1:active-count", userOneCount);
+    activeCounts.put(
+        "myagent:agent-state:session-execution:2:s_1:active-count", userTwoCount);
+  }
+
+  private Flux<Long> executeScript(org.mockito.invocation.InvocationOnMock invocation) {
+    RedisScript<Long> script = invocation.getArgument(0);
+    List<String> keys = invocation.getArgument(1);
+    List<?> arguments = invocation.getArgument(2);
+    String scriptText = script.getScriptAsString();
+    String countKey = scriptText.contains("INCR") && keys.size() >= 3
+        ? keys.get(1)
+        : keys.getFirst();
+    AtomicLong count = activeCounts.computeIfAbsent(countKey, ignored -> new AtomicLong());
+    if (scriptText.contains("INCR")) {
+      String pendingKey = keys.get(keys.size() - 1);
+      Set<String> pending = pendingExecutions.computeIfAbsent(
+          pendingKey, ignored -> ConcurrentHashMap.newKeySet());
+      if (keys.size() >= 3
+          && !pending.isEmpty()
+          && count.get() == 0L
+          && (scriptText.contains("EXISTS', KEYS[3]")
+              || scriptText.contains("SCARD', KEYS[3]"))) {
+        return Flux.just(-2L);
+      }
+      long updated = count.incrementAndGet();
+      String executionId = scriptText.contains("SADD") && arguments.size() >= 2
+          ? arguments.get(1).toString()
+          : "shared-pending";
+      pending.add(executionId);
+      return Flux.just(updated);
+    }
+    if (scriptText.contains("DECR")) {
+      Set<String> pending = pendingExecutions.computeIfAbsent(
+          keys.get(1), ignored -> ConcurrentHashMap.newKeySet());
+      if (scriptText.contains("SREM")) {
+        String executionId = arguments.size() >= 2
+            ? arguments.get(1).toString()
+            : "";
+        if (!pending.remove(executionId)) {
+          return Flux.just(count.get());
+        }
+      }
+      long updated = count.updateAndGet(current -> Math.max(0L, current - 1L));
+      if (!scriptText.contains("SREM") && updated == 0L) {
+        pending.clear();
+      }
+      return Flux.just(pending.isEmpty() ? updated : Math.max(1L, updated));
+    }
+    if (keys.size() >= 2) {
+      int pending = pendingExecutions.getOrDefault(keys.get(1), Set.of()).size();
+      if (pending > 0 && count.get() == 0L) {
+        return Flux.just(-1L * pending);
+      }
+    }
+    return Flux.just(count.get());
+  }
+
+  private boolean isLeaseRefresh(RedisScript<Long> script) {
+    return script.getScriptAsString().contains("return redis.call('PEXPIRE', KEYS[2]");
+  }
+
+  private ReactiveSubscription.Message<String, String> message(String payload) {
+    return new ReactiveSubscription.Message<>() {
+      @Override
+      public String getChannel() {
+        return RedisSessionExecutionCoordinator.CANCELLATION_CHANNEL;
+      }
+
+      @Override
+      public String getMessage() {
+        return payload;
+      }
+    };
+  }
+}

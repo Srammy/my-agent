@@ -14,8 +14,12 @@ import com.example.myagent.chat.ChatAgentRequest;
 import com.example.myagent.chat.ChatToolConfirmationRequest;
 import com.example.myagent.chat.ChatAgentGateway;
 import com.example.myagent.chat.StubChatAgentGateway;
+import com.example.myagent.agent.AgentExecution;
 import com.example.myagent.agent.AgentScopeStreamExecutor;
 import com.example.myagent.permission.PermissionMode;
+import com.example.myagent.skillreview.BaseStoreSkillDraftLock;
+import com.example.myagent.skillreview.SkillDraftFingerprint;
+import com.example.myagent.skillreview.SkillPromotionGuard;
 import com.example.myagent.skillreview.SkillReviewDecisionStore;
 import com.example.myagent.skillreview.WebApprovalGate;
 import io.agentscope.harness.agent.skill.curator.SkillUsageStore;
@@ -25,13 +29,22 @@ import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.event.ConfirmResult;
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.middleware.ActingInput;
+import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.nio.file.Path;
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -46,6 +59,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Answers;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
+import reactor.test.StepVerifier;
 
 class AgentScopeConfigTest {
 
@@ -57,6 +72,130 @@ class AgentScopeConfigTest {
           .withConfiguration(
               AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class))
           .withUserConfiguration(AgentScopeGatewayContextConfiguration.class);
+
+  @Test
+  void cancellationWaitsForUnderlyingAgentStreamBeforeReportingCompletion() {
+    HarnessAgent agent = mock(HarnessAgent.class);
+    io.agentscope.core.ReActAgent delegate = mock(io.agentscope.core.ReActAgent.class);
+    when(agent.getDelegate()).thenReturn(delegate);
+    RuntimeContext runtimeContext =
+        RuntimeContext.builder().userId("7").sessionId("s_123").build();
+    Sinks.Many<Object> underlying = Sinks.many().unicast().onBackpressureBuffer();
+    AgentExecution<Object> execution = config.agentExecution(
+        () -> agent, ignored -> underlying.asFlux(), runtimeContext);
+    java.util.concurrent.atomic.AtomicBoolean completed =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    reactor.core.Disposable completionSubscription =
+        execution.completion().subscribe(ignored -> {}, ignored -> {}, () -> completed.set(true));
+    reactor.core.Disposable eventSubscription = execution.events().subscribe();
+
+    eventSubscription.dispose();
+
+    verify(delegate).interrupt(runtimeContext);
+    assertThat(completed).isFalse();
+    verify(agent, org.mockito.Mockito.never()).close();
+
+    underlying.tryEmitComplete();
+
+    assertThat(completed).isTrue();
+    verify(agent).close();
+    completionSubscription.dispose();
+  }
+
+  @Test
+  void cancellationPreventsActingFromStartingAfterReasoningHasAlreadyBegun() {
+    HarnessAgent agent = mock(HarnessAgent.class);
+    io.agentscope.core.ReActAgent delegate = mock(io.agentscope.core.ReActAgent.class);
+    when(agent.getDelegate()).thenReturn(delegate);
+    RuntimeContext runtimeContext =
+        RuntimeContext.builder().userId("7").sessionId("s_123").build();
+    Sinks.Many<Object> underlying = Sinks.many().unicast().onBackpressureBuffer();
+    AgentExecution<Object> execution = config.agentExecution(
+        () -> agent, ignored -> underlying.asFlux(), runtimeContext);
+    reactor.core.Disposable eventSubscription = execution.events().subscribe();
+
+    eventSubscription.dispose();
+
+    AtomicBoolean actingInvoked = new AtomicBoolean();
+    StepVerifier.create(config.cancellationAwareActingMiddleware().onActing(
+            delegate,
+            runtimeContext,
+            new ActingInput(List.of()),
+            ignored -> {
+              actingInvoked.set(true);
+              return Flux.empty();
+            }))
+        .expectError(InterruptedException.class)
+        .verify();
+    assertThat(actingInvoked).isFalse();
+
+    underlying.tryEmitComplete();
+    execution.completion().block();
+    verify(agent).close();
+  }
+
+  @Test
+  void cancellationAndActingStartAreLinearizedByOneExecutionGate() throws Exception {
+    AgentScopeConfig.ExecutionCancellationGate cancelFirst =
+        new AgentScopeConfig.ExecutionCancellationGate();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      CountDownLatch actingReady = new CountDownLatch(1);
+      Future<Boolean> actingStart;
+      synchronized (cancelFirst) {
+        actingStart = executor.submit(() -> {
+          actingReady.countDown();
+          return cancelFirst.tryBeginActing();
+        });
+        assertThat(actingReady.await(1, TimeUnit.SECONDS)).isTrue();
+        cancelFirst.cancel();
+      }
+      assertThat(actingStart.get(1, TimeUnit.SECONDS)).isFalse();
+
+      AgentScopeConfig.ExecutionCancellationGate actingFirst =
+          new AgentScopeConfig.ExecutionCancellationGate();
+      CountDownLatch cancelReady = new CountDownLatch(1);
+      Future<?> cancellation;
+      synchronized (actingFirst) {
+        assertThat(actingFirst.tryBeginActing()).isTrue();
+        cancellation = executor.submit(() -> {
+          cancelReady.countDown();
+          actingFirst.cancel();
+        });
+        assertThat(cancelReady.await(1, TimeUnit.SECONDS)).isTrue();
+      }
+      cancellation.get(1, TimeUnit.SECONDS);
+      assertThat(actingFirst.tryBeginActing()).isFalse();
+    } finally {
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  void interruptFailureDoesNotHideLaterUnderlyingCompletion() {
+    HarnessAgent agent = mock(HarnessAgent.class);
+    io.agentscope.core.ReActAgent delegate = mock(io.agentscope.core.ReActAgent.class);
+    when(agent.getDelegate()).thenReturn(delegate);
+    RuntimeContext runtimeContext =
+        RuntimeContext.builder().userId("7").sessionId("s_123").build();
+    org.mockito.Mockito.doThrow(new IllegalStateException("interrupt failed"))
+        .when(delegate)
+        .interrupt(runtimeContext);
+    Sinks.Many<Object> underlying = Sinks.many().unicast().onBackpressureBuffer();
+    AgentExecution<Object> execution = config.agentExecution(
+        () -> agent, ignored -> underlying.asFlux(), runtimeContext);
+    AtomicBoolean completed = new AtomicBoolean();
+    execution.completion().subscribe(ignored -> {}, ignored -> {}, () -> completed.set(true));
+    reactor.core.Disposable eventSubscription = execution.events().subscribe();
+
+    eventSubscription.dispose();
+    assertThat(completed).isFalse();
+
+    underlying.tryEmitComplete();
+
+    assertThat(completed).isTrue();
+    verify(agent).close();
+  }
 
   @Test
   void createsDashScopeModelByDefault() {
@@ -198,6 +337,8 @@ class AgentScopeConfigTest {
     assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
     assertThat(toolsConfig(builder).getAllow()).containsExactly("http_fetch", "web_fetch");
     assertThat(toolsConfig(builder).getMcpServers()).isNull();
+    assertThat((List<?>) objectField(objectField(builder, "inner"), "middlewares"))
+        .anyMatch(MiddlewareBase.class::isInstance);
   }
 
   @Test
@@ -337,6 +478,17 @@ class AgentScopeConfigTest {
     HarnessAgent.Builder builder = mock(HarnessAgent.Builder.class, Answers.RETURNS_SELF);
     HarnessAgent agent = mock(HarnessAgent.class);
     ReactiveStringRedisTemplate redisTemplate = mock(ReactiveStringRedisTemplate.class);
+    io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore workspaceStore =
+        new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
+    UserScopedFilesystemFactory filesystemFactory =
+        new UserScopedFilesystemFactory(
+            workspaceStore,
+            new BaseStoreSkillDraftLock(workspaceStore),
+            new SkillPromotionGuard(
+                new SkillReviewDecisionStore(
+                    new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(
+                        workspaceStore,
+                        io.agentscope.harness.agent.IsolationScope.USER.toNamespaceFactory()))));
     org.springframework.beans.factory.support.DefaultListableBeanFactory beanFactory =
         new org.springframework.beans.factory.support.DefaultListableBeanFactory();
     beanFactory.registerSingleton("redisTemplate", redisTemplate);
@@ -352,7 +504,7 @@ class AgentScopeConfigTest {
               mock(Model.class),
               properties(false, false, false, false),
               beanFactory.getBeanProvider(ReactiveStringRedisTemplate.class),
-              mock(SkillUsageStore.class),
+              filesystemFactory,
               mock(WebApprovalGate.class));
 
       ChatToolConfirmationRequest request = new ChatToolConfirmationRequest(
@@ -389,6 +541,36 @@ class AgentScopeConfigTest {
     verify(builder).build();
     verify(agent).streamEvents(any(UserMessage.class), any(RuntimeContext.class));
     verify(agent).close();
+    ArgumentCaptor<io.agentscope.harness.agent.filesystem.AbstractFilesystem> filesystemCaptor =
+        ArgumentCaptor.forClass(io.agentscope.harness.agent.filesystem.AbstractFilesystem.class);
+    verify(builder).abstractFilesystem(filesystemCaptor.capture());
+    assertThat(
+            filesystemCaptor
+                .getValue()
+                .write(RuntimeContext.empty(), "request-scope.txt", "bound")
+                .isSuccess())
+        .isTrue();
+
+    io.agentscope.harness.agent.filesystem.AbstractFilesystem sharedFilesystem =
+        new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(
+            workspaceStore,
+            io.agentscope.harness.agent.IsolationScope.USER.toNamespaceFactory());
+    RuntimeContext anotherUserSevenSession =
+        RuntimeContext.builder().userId("7").sessionId("another-session").build();
+    assertThat(
+            sharedFilesystem
+                .read(anotherUserSevenSession, "request-scope.txt", 0, 100)
+                .isSuccess())
+        .isTrue();
+    assertThat(
+            sharedFilesystem
+                .read(
+                    RuntimeContext.builder().userId("8").sessionId("s_123").build(),
+                    "request-scope.txt",
+                    0,
+                    100)
+                .isSuccess())
+        .isFalse();
   }
 
   @Test
@@ -436,13 +618,35 @@ class AgentScopeConfigTest {
         new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(store);
     SkillUsageStore usageStore = new SkillUsageStore(fs);
     SkillReviewDecisionStore decisionStore = new SkillReviewDecisionStore(fs);
-    WebApprovalGate webApprovalGate = new WebApprovalGate(decisionStore);
+    WebApprovalGate webApprovalGate =
+        new WebApprovalGate(decisionStore, mock(SkillDraftFingerprint.class));
 
     assertThatNoException().isThrownBy(() ->
         config.applySkillLearning(builder, props, usageStore, webApprovalGate));
 
     assertThat(booleanField(builder, "skillManageToolEnabled")).isTrue();
     assertThat(booleanField(builder, "skillCuratorEnabled")).isTrue();
+  }
+
+  @Test
+  void workspaceSkillsRemainVisibleWhenManagementIsDisabled() throws Exception {
+    HarnessAgent.Builder builder = HarnessAgent.builder();
+    AgentProperties props = properties(false, false, false, false, false);
+    io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore store =
+        new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
+    io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem fs =
+        new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(store);
+    SkillUsageStore usageStore = new SkillUsageStore(fs);
+    SkillReviewDecisionStore decisionStore = new SkillReviewDecisionStore(fs);
+    WebApprovalGate webApprovalGate =
+        new WebApprovalGate(decisionStore, mock(SkillDraftFingerprint.class));
+
+    config.configureHarnessAgentBuilder(builder, config.toolPolicy(props), props);
+    config.applySkillLearning(builder, props, usageStore, webApprovalGate);
+
+    assertThat(booleanField(builder, "disableDefaultWorkspaceSkills")).isFalse();
+    assertThat(booleanField(builder, "skillManageToolEnabled")).isFalse();
+    assertThat(booleanField(builder, "skillCuratorEnabled")).isFalse();
   }
 
   @Test
@@ -468,13 +672,23 @@ class AgentScopeConfigTest {
       boolean shellEnabled,
       boolean httpFetchEnabled,
       boolean mcpEnabled) {
+    return properties(
+        fileToolsEnabled, shellEnabled, httpFetchEnabled, mcpEnabled, true);
+  }
+
+  private AgentProperties properties(
+      boolean fileToolsEnabled,
+      boolean shellEnabled,
+      boolean httpFetchEnabled,
+      boolean mcpEnabled,
+      boolean manageToolEnabled) {
     return new AgentProperties(
         new AgentProperties.AgentScope(true),
         new AgentProperties.Workspace(tempDir.toString()),
         new AgentProperties.Model("dashscope", "dashscope:qwen-plus", "", "DASHSCOPE_API_KEY"),
         new AgentProperties.StateStore(
             "redis", new AgentProperties.StateStore.Redis("redis://localhost:6379", "myagent:")),
-        new AgentProperties.Skill("agentscope", "prod", 10, true, true),
+        new AgentProperties.Skill("agentscope", "prod", 10, manageToolEnabled, true),
         new AgentProperties.Permission("DEFAULT"),
         new AgentProperties.Tools(
             fileToolsEnabled, shellEnabled, httpFetchEnabled, mcpEnabled));
@@ -525,6 +739,7 @@ class AgentScopeConfigTest {
     AgentScopeConfig.class,
     AgentScopeChatAgentGateway.class,
     AgentEventMapper.class,
+    SkillReviewDecisionStore.class,
     StubChatAgentGateway.class
   })
   static class AgentScopeGatewayContextConfiguration {

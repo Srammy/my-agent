@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { markRaw } from 'vue'
 import {
   confirmToolCall,
   StreamRequestError,
@@ -45,6 +46,8 @@ export interface ChatMessage {
 
 interface ChatState {
   messagesBySession: Record<string, ChatMessage[]>
+  controllersBySession: Record<string, AbortController>
+  cancellingSessionIds: Record<string, true>
   loadingSessionId: string
   error: string
 }
@@ -58,6 +61,10 @@ function makeId(prefix: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : '发送失败，请稍后重试'
+}
+
+function isAbortError(error: unknown) {
+  return typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError'
 }
 
 function toToolEvent(event: StreamEvent): ToolEvent | null {
@@ -106,17 +113,40 @@ function toToolEvent(event: StreamEvent): ToolEvent | null {
 export const useChatStore = defineStore('chat', {
   state: (): ChatState => ({
     messagesBySession: {},
+    controllersBySession: {},
+    cancellingSessionIds: {},
     loadingSessionId: '',
     error: ''
   }),
   getters: {
     isLoading: (state) => Boolean(state.loadingSessionId),
+    isCancellingSession:
+      (state) =>
+      (sessionId: string): boolean =>
+        Boolean(state.cancellingSessionIds[sessionId]),
     messages:
       (state) =>
       (sessionId: string): ChatMessage[] =>
         state.messagesBySession[sessionId] ?? []
   },
   actions: {
+    startSessionExecution(sessionId: string) {
+      const controller = markRaw(new AbortController())
+      this.controllersBySession[sessionId] = controller
+      return controller
+    },
+    finishSessionExecution(sessionId: string, controller: AbortController) {
+      if (this.controllersBySession[sessionId] === controller) {
+        delete this.controllersBySession[sessionId]
+      }
+    },
+    abortSession(sessionId: string) {
+      this.cancellingSessionIds[sessionId] = true
+      this.controllersBySession[sessionId]?.abort()
+    },
+    finishSessionCancellation(sessionId: string) {
+      delete this.cancellingSessionIds[sessionId]
+    },
     useSession(sessionId: string) {
       if (sessionId && !this.messagesBySession[sessionId]) {
         this.messagesBySession[sessionId] = []
@@ -138,7 +168,13 @@ export const useChatStore = defineStore('chat', {
       event.decisions[toolCallId] = confirmed
     },
     async confirmTool(sessionId: string, messageId: string, event: ToolEvent) {
-      if (this.loadingSessionId || !event.confirmationId || event.confirming || event.consumed) {
+      if (
+        this.loadingSessionId ||
+        this.cancellingSessionIds[sessionId] ||
+        !event.confirmationId ||
+        event.confirming ||
+        event.consumed
+      ) {
         return
       }
 
@@ -156,9 +192,13 @@ export const useChatStore = defineStore('chat', {
       this.loadingSessionId = sessionId
       event.confirming = true
       this.error = ''
+      const controller = this.startSessionExecution(sessionId)
+      let receivedStreamEvent = false
 
       try {
         await confirmToolCall(sessionId, event.confirmationId, decisions, (streamEvent) => {
+          receivedStreamEvent = true
+
           if (streamEvent.type === 'text_delta') {
             const message = this.messagesBySession[sessionId]?.find((item) => item.id === messageId)
 
@@ -181,22 +221,34 @@ export const useChatStore = defineStore('chat', {
               this.error = toolEvent.message ?? '流式响应返回错误'
             }
           }
-        })
+        }, controller.signal)
         event.consumed = true
       } catch (error) {
+        if (isAbortError(error) && controller.signal.aborted) {
+          event.consumed = receivedStreamEvent
+          return
+        }
+
         const message = errorMessage(error)
         this.error = message
-        if (error instanceof StreamRequestError && (error.status === 404 || error.status === 409)) {
-          event.consumed = true
-        } else {
-          event.consumed = false
+        if (error instanceof StreamRequestError && error.code === 'SESSION_CANCELLING') {
+          this.cancellingSessionIds[sessionId] = true
         }
+        const safelyRetryable = error instanceof StreamRequestError && (
+          error.code === 'SESSION_CANCELLING' ||
+          error.code === 'TOOL_CONFIRMATION_RETRYABLE' ||
+          (error.status === 400 && !error.code)
+        )
+        event.consumed = receivedStreamEvent ||
+          (error instanceof StreamRequestError && error.confirmationConsumed === true) ||
+          !safelyRetryable
         this.appendEvent(sessionId, messageId, {
           id: makeId('event'),
           type: 'error',
           message
         })
       } finally {
+        this.finishSessionExecution(sessionId, controller)
         event.confirming = false
         if (this.loadingSessionId === sessionId) {
           this.loadingSessionId = ''
@@ -206,13 +258,14 @@ export const useChatStore = defineStore('chat', {
     async sendMessage(sessionId: string, content: string) {
       const text = content.trim()
 
-      if (!text || this.loadingSessionId) {
+      if (!text || this.loadingSessionId || this.cancellingSessionIds[sessionId]) {
         return
       }
 
       this.useSession(sessionId)
       this.error = ''
       this.loadingSessionId = sessionId
+      const controller = this.startSessionExecution(sessionId)
 
       const assistant: ChatMessage = {
         id: makeId('assistant'),
@@ -258,16 +311,24 @@ export const useChatStore = defineStore('chat', {
               assistant.loading = false
             }
           }
-        })
+        }, controller.signal)
       } catch (error) {
+        if (isAbortError(error) && controller.signal.aborted) {
+          return
+        }
+
         const message = errorMessage(error)
         this.error = message
+        if (error instanceof StreamRequestError && error.code === 'SESSION_CANCELLING') {
+          this.cancellingSessionIds[sessionId] = true
+        }
         this.appendEvent(sessionId, assistant.id, {
           id: makeId('event'),
           type: 'error',
           message
         })
       } finally {
+        this.finishSessionExecution(sessionId, controller)
         assistant.loading = false
         if (this.loadingSessionId === sessionId) {
           this.loadingSessionId = ''
@@ -275,6 +336,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
     clearSession(sessionId: string) {
+      this.finishSessionCancellation(sessionId)
       delete this.messagesBySession[sessionId]
     }
   }

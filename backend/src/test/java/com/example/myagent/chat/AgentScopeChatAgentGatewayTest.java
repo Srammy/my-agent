@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.myagent.agent.AgentScopeStreamExecutor;
+import com.example.myagent.agent.AgentExecution;
 import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.toolconfirmation.ConfirmationKind;
 import com.example.myagent.toolconfirmation.ToolCallSnapshot;
@@ -44,6 +45,41 @@ class AgentScopeChatAgentGatewayTest {
 
   @Mock private AgentScopeStreamExecutor executor;
   @Mock private ToolConfirmationService toolConfirmationService;
+
+  @Test
+  void preservesUnderlyingCompletionWhenMappingAgentEvents() {
+    Sinks.Empty<Void> completion = Sinks.empty();
+    when(executor.streamExecution(any(ChatAgentRequest.class), any()))
+        .thenReturn(new AgentExecution<>(
+            Flux.just(new AgentEndEvent("reply-1")), completion.asMono()));
+
+    AgentExecution<StreamEventDto> execution = gateway().streamExecution(request());
+
+    assertThat(execution.events().collectList().block())
+        .containsExactly(StreamEventDto.done());
+    StepVerifier.create(execution.completion())
+        .expectSubscription()
+        .then(() -> completion.tryEmitEmpty())
+        .verifyComplete();
+  }
+
+  @Test
+  void preservesUnderlyingCompletionWhenMappingConfirmationEvents() {
+    Sinks.Empty<Void> completion = Sinks.empty();
+    when(executor.confirmExecution(any(ChatToolConfirmationRequest.class), any()))
+        .thenReturn(new AgentExecution<>(
+            Flux.just(new AgentEndEvent("reply-1")), completion.asMono()));
+
+    AgentExecution<StreamEventDto> execution =
+        gateway().confirmExecution(confirmationRequest(true));
+
+    assertThat(execution.events().collectList().block())
+        .containsExactly(StreamEventDto.done());
+    StepVerifier.create(execution.completion())
+        .expectSubscription()
+        .then(() -> completion.tryEmitEmpty())
+        .verifyComplete();
+  }
 
   @Test
   void mapsAgentScopeEventsAndBuildsRuntimeContextFromRequest() {

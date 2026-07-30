@@ -4,8 +4,8 @@ export interface SkillReview {
   skillName: string
   description: string
   status: string          // 'PENDING' | 'APPROVED' | 'REJECTED'
-  createdBy: string
-  sourceSessionId?: string
+  createdBy: string | null
+  sourceSessionId?: string | null
   environments: string[]
   useCount: number
   viewCount: number

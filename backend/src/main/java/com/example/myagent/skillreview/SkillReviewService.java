@@ -1,5 +1,7 @@
 package com.example.myagent.skillreview;
 
+import com.example.myagent.config.UserScopedFilesystemFactory;
+import com.example.myagent.skill.SkillPathValidator;
 import com.example.myagent.skill.SkillValidator;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
@@ -22,19 +24,26 @@ public class SkillReviewService {
 
   private final AbstractFilesystem filesystem;
   private final SkillReviewDecisionStore decisionStore;
-  private final SkillUsageStore usageStore;
+  private final UserScopedFilesystemFactory filesystemFactory;
+  private final SkillDraftFingerprint fingerprint;
+  private final SkillDraftLock draftLock;
 
   public SkillReviewService(
       AbstractFilesystem filesystem,
       SkillReviewDecisionStore decisionStore,
-      SkillUsageStore usageStore) {
+      UserScopedFilesystemFactory filesystemFactory,
+      SkillDraftFingerprint fingerprint,
+      SkillDraftLock draftLock) {
     this.filesystem = filesystem;
     this.decisionStore = decisionStore;
-    this.usageStore = usageStore;
+    this.filesystemFactory = filesystemFactory;
+    this.fingerprint = fingerprint;
+    this.draftLock = draftLock;
   }
 
   public List<SkillReviewDto> list(String userId) {
     RuntimeContext ctx = userContext(userId);
+    SkillUsageStore usageStore = usageStore(userId);
     if (!filesystem.exists(ctx, DRAFTS_DIR)) {
       return List.of();
     }
@@ -45,46 +54,64 @@ public class SkillReviewService {
     return result.entries().stream()
         .filter(FileInfo::isDirectory)
         .map(FileInfo::path)
+        .map(SkillReviewService::draftSkillName)
+        .flatMap(Optional::stream)
         .sorted()
-        .map(skillName -> buildDto(ctx, skillName, userId))
+        .map(skillName -> buildDto(ctx, skillName, userId, usageStore))
         .toList();
   }
 
-  public SkillReviewDto approve(String skillName, ApproveSkillReviewRequest request, String userId) {
+  public SkillReviewDto approve(
+      String skillName, ApproveSkillReviewRequest request, String userId, String reviewerId) {
     validateSkillName(skillName);
+    RuntimeContext ctx = userContext(userId);
     List<String> environments =
         request.environments() != null ? request.environments() : List.of();
-    String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
-    SkillReviewDecision decision = decisionStore.approve(skillName, reviewerId, environments, userId);
-    return toDto(skillName, decision, userId);
-  }
-
-  public SkillReviewDto reject(String skillName, RejectSkillReviewRequest request, String userId) {
-    validateSkillName(skillName);
-    String reviewerId = request.reviewerId() != null ? request.reviewerId() : "unknown";
-    String reason = request.reason() != null ? request.reason() : "";
-    SkillReviewDecision decision = decisionStore.reject(skillName, reviewerId, reason, userId);
-    return toDto(skillName, decision, userId);
-  }
-
-  private SkillReviewDto buildDto(RuntimeContext ctx, String skillName, String userId) {
-    String skillMdPath = DRAFTS_DIR + "/" + skillName + "/SKILL.md";
-    String description = "";
-    if (filesystem.exists(ctx, skillMdPath)) {
-      ReadResult readResult = filesystem.read(ctx, skillMdPath, 0, READ_LIMIT);
-      if (readResult.isSuccess()) {
-        try {
-          SkillValidator.SkillMarkdownMetadata meta =
-              SkillValidator.validateSkillMarkdown(readResult.fileData().content());
-          description = meta.description();
-        } catch (Exception ignored) {
-          // non-fatal: use empty description if SKILL.md is malformed
-        }
-      }
+    SkillReviewDecision decision;
+    try (SkillDraftLock.Handle handle = draftLock.acquire(userId)) {
+      String draftHash = requireDraftHash(ctx, skillName);
+      requireRenewed(handle, userId);
+      decision =
+          decisionStore.approve(skillName, reviewerId, environments, draftHash, userId);
     }
+    return toDto(ctx, skillName, decision, usageStore(userId));
+  }
+
+  public SkillReviewDto reject(
+      String skillName, RejectSkillReviewRequest request, String userId, String reviewerId) {
+    validateSkillName(skillName);
+    RuntimeContext ctx = userContext(userId);
+    String reason = request.reason() != null ? request.reason() : "";
+    SkillReviewDecision decision;
+    try (SkillDraftLock.Handle handle = draftLock.acquire(userId)) {
+      String draftHash = requireDraftHash(ctx, skillName);
+      requireRenewed(handle, userId);
+      decision = decisionStore.reject(skillName, reviewerId, reason, draftHash, userId);
+    }
+    return toDto(ctx, skillName, decision, usageStore(userId));
+  }
+
+  private String requireDraftHash(RuntimeContext ctx, String skillName) {
+    try {
+      return fingerprint.computeDraftHash(ctx, skillName);
+    } catch (SkillDraftFingerprintException exception) {
+      HttpStatus status =
+          exception.reason() == SkillDraftFingerprintException.Reason.NOT_FOUND
+              ? HttpStatus.NOT_FOUND
+              : HttpStatus.INTERNAL_SERVER_ERROR;
+      throw new ResponseStatusException(status, exception.getMessage(), exception);
+    }
+  }
+
+  private SkillReviewDto buildDto(
+      RuntimeContext ctx,
+      String skillName,
+      String userId,
+      SkillUsageStore usageStore) {
+    String description = draftDescription(ctx, skillName);
 
     Optional<SkillReviewDecision> maybeDecision = decisionStore.find(skillName, userId);
-    String status = maybeDecision.map(SkillReviewDecision::status).orElse("PENDING");
+    String status = effectiveStatus(ctx, skillName, maybeDecision);
 
     Optional<SkillUsageRecord> maybeUsage = usageStore.get(skillName);
     long useCount = maybeUsage.map(SkillUsageRecord::useCount).orElse(0L);
@@ -102,7 +129,46 @@ public class SkillReviewService {
         useCount, viewCount, patchCount);
   }
 
-  private SkillReviewDto toDto(String skillName, SkillReviewDecision decision, String userId) {
+  private String draftDescription(RuntimeContext ctx, String skillName) {
+    String skillMdPath = DRAFTS_DIR + "/" + skillName + "/SKILL.md";
+    String description = "";
+    if (filesystem.exists(ctx, skillMdPath)) {
+      ReadResult readResult = filesystem.read(ctx, skillMdPath, 0, READ_LIMIT);
+      if (readResult.isSuccess()) {
+        try {
+          SkillValidator.SkillMarkdownMetadata meta =
+              SkillValidator.validateSkillMarkdown(readResult.fileData().content());
+          description = meta.description();
+        } catch (Exception ignored) {
+          // non-fatal: use empty description if SKILL.md is malformed
+        }
+      }
+    }
+    return description;
+  }
+
+  private String effectiveStatus(
+      RuntimeContext ctx,
+      String skillName,
+      Optional<SkillReviewDecision> maybeDecision) {
+    if (maybeDecision.isEmpty() || maybeDecision.get().draftHash() == null) {
+      return "PENDING";
+    }
+    try {
+      String currentHash = fingerprint.computeDraftHash(ctx, skillName);
+      return currentHash.equals(maybeDecision.get().draftHash())
+          ? maybeDecision.get().status()
+          : "PENDING";
+    } catch (SkillDraftFingerprintException exception) {
+      return "PENDING";
+    }
+  }
+
+  private SkillReviewDto toDto(
+      RuntimeContext ctx,
+      String skillName,
+      SkillReviewDecision decision,
+      SkillUsageStore usageStore) {
     Optional<SkillUsageRecord> maybeUsage = usageStore.get(skillName);
     long useCount = maybeUsage.map(SkillUsageRecord::useCount).orElse(0L);
     long viewCount = maybeUsage.map(SkillUsageRecord::viewCount).orElse(0L);
@@ -113,13 +179,63 @@ public class SkillReviewService {
         decision.environments() != null ? decision.environments() : List.of();
 
     return new SkillReviewDto(
-        skillName, null, decision.status(), createdBy, sourceSessionId, environments,
+        skillName,
+        draftDescription(ctx, skillName),
+        decision.status(),
+        createdBy,
+        sourceSessionId,
+        environments,
         useCount, viewCount, patchCount);
   }
 
+  private SkillUsageStore usageStore(String userId) {
+    return filesystemFactory.usageStore(userId);
+  }
+
+  private static void requireRenewed(SkillDraftLock.Handle handle, String userId) {
+    if (!handle.renew()) {
+      throw new SkillDraftLockException(
+          "Skill draft lock expired before saving review for user " + userId);
+    }
+  }
+
+  private static Optional<String> draftSkillName(String path) {
+    if (path == null || path.isBlank()) {
+      return Optional.empty();
+    }
+    String normalized = path.trim().replace('\\', '/');
+    while (normalized.startsWith("/")) {
+      normalized = normalized.substring(1);
+    }
+    while (normalized.endsWith("/") && !normalized.isEmpty()) {
+      normalized = normalized.substring(0, normalized.length() - 1);
+    }
+
+    String prefix = DRAFTS_DIR + "/";
+    String candidate;
+    if (normalized.startsWith(prefix)) {
+      candidate = normalized.substring(prefix.length());
+      if (candidate.contains("/")) {
+        return Optional.empty();
+      }
+    } else if (!normalized.contains("/")) {
+      candidate = normalized;
+    } else {
+      return Optional.empty();
+    }
+
+    try {
+      return Optional.of(SkillPathValidator.validateSkillName(candidate));
+    } catch (IllegalArgumentException exception) {
+      return Optional.empty();
+    }
+  }
+
   private static void validateSkillName(String skillName) {
-    if (skillName == null || skillName.isBlank()) {
-      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Skill name is required");
+    try {
+      SkillPathValidator.validateSkillName(skillName);
+    } catch (IllegalArgumentException exception) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
     }
   }
 

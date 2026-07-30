@@ -1,6 +1,7 @@
 package com.example.myagent.chat;
 
 import com.example.myagent.agent.AgentScopeStreamExecutor;
+import com.example.myagent.agent.AgentExecution;
 import com.example.myagent.toolconfirmation.ConfirmationKind;
 import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import io.agentscope.core.agent.RuntimeContext;
@@ -47,6 +48,19 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
   }
 
   @Override
+  public AgentExecution<StreamEventDto> streamExecution(ChatAgentRequest request) {
+    RuntimeContext runtimeContext =
+        runtimeContext(request.userId(), request.sessionId(), request.permissionMode());
+    AgentExecution<Object> execution = executor.streamExecution(request, runtimeContext);
+    Flux<StreamEventDto> events = execution.events()
+        .concatMap(
+            agentEvent -> mapAgentEvent(request.userId(), request.sessionId(), agentEvent))
+        .onErrorResume(
+            throwable -> Flux.just(StreamEventDto.error(errorMessage(throwable))));
+    return new AgentExecution<>(events, execution.completion());
+  }
+
+  @Override
   public Flux<StreamEventDto> confirm(ChatToolConfirmationRequest request) {
     RuntimeContext runtimeContext =
         runtimeContext(request.userId(), request.sessionId(), request.permissionMode());
@@ -55,6 +69,17 @@ public class AgentScopeChatAgentGateway implements ChatAgentGateway {
         .confirm(request, runtimeContext)
         .concatMap(
             agentEvent -> mapAgentEvent(request.userId(), request.sessionId(), agentEvent));
+  }
+
+  @Override
+  public AgentExecution<StreamEventDto> confirmExecution(ChatToolConfirmationRequest request) {
+    RuntimeContext runtimeContext =
+        runtimeContext(request.userId(), request.sessionId(), request.permissionMode());
+    AgentExecution<Object> execution = executor.confirmExecution(request, runtimeContext);
+    Flux<StreamEventDto> events = execution.events()
+        .concatMap(
+            agentEvent -> mapAgentEvent(request.userId(), request.sessionId(), agentEvent));
+    return new AgentExecution<>(events, execution.completion());
   }
 
   private Flux<StreamEventDto> mapAgentEvent(

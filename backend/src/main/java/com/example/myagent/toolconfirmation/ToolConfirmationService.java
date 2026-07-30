@@ -61,6 +61,19 @@ public class ToolConfirmationService {
       redis.call('SET', KEYS[1], cjson.encode(data), 'PX', ttl)
       return '__OK__'
       """);
+  private static final DefaultRedisScript<Long> ROLLBACK_IF_PROCESSING_SCRIPT =
+      new DefaultRedisScript<>("""
+          local value = redis.call('GET', KEYS[1])
+          local ttl = redis.call('PTTL', KEYS[1])
+          if not value or ttl <= 0 then return 0 end
+          local data = cjson.decode(value)
+          if data.status ~= 'PROCESSING' or data.processingToken ~= ARGV[1] then return 0 end
+          data.status = 'PENDING'
+          data.processingToken = nil
+          data.leaseExpiresAtEpochMs = nil
+          redis.call('SET', KEYS[1], cjson.encode(data), 'PX', ttl)
+          return 1
+          """, Long.class);
 
   private final ReactiveStringRedisTemplate redisTemplate;
   private final ObjectMapper objectMapper;
@@ -104,6 +117,17 @@ public class ToolConfirmationService {
 
   public Mono<Void> release(String confirmationId, String processingToken) {
     return transition(RELEASE_SCRIPT, confirmationId, List.of(processingToken));
+  }
+
+  public Mono<Boolean> rollbackIfProcessing(String confirmationId, String processingToken) {
+    return redisTemplate.execute(
+            ROLLBACK_IF_PROCESSING_SCRIPT,
+            List.of(key(confirmationId)),
+            List.of(processingToken))
+        .next()
+        .switchIfEmpty(Mono.error(
+            new IllegalStateException("Failed to inspect tool confirmation rollback")))
+        .map(result -> result == 1L);
   }
 
   public Mono<Void> consume(

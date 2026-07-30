@@ -9,4 +9,5 @@ public record SkillReviewDecision(
     String reviewerId,
     String reason,
     List<String> environments,
-    Instant decidedAt) {}
+    Instant decidedAt,
+    String draftHash) {}

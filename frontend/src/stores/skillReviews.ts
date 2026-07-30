@@ -27,14 +27,24 @@ export const useSkillReviewsStore = defineStore('skillReviews', () => {
   async function approve(skillName: string, environments: string[]) {
     const updated = await approveSkillReview(skillName, environments)
     const idx = reviews.value.findIndex(r => r.skillName === skillName)
-    if (idx >= 0) reviews.value[idx] = updated
+    if (idx >= 0) {
+      reviews.value[idx] = {
+        ...updated,
+        description: updated.description ?? reviews.value[idx].description
+      }
+    }
     else reviews.value.push(updated)
   }
 
   async function reject(skillName: string, reason: string) {
     const updated = await rejectSkillReview(skillName, reason)
     const idx = reviews.value.findIndex(r => r.skillName === skillName)
-    if (idx >= 0) reviews.value[idx] = updated
+    if (idx >= 0) {
+      reviews.value[idx] = {
+        ...updated,
+        description: updated.description ?? reviews.value[idx].description
+      }
+    }
     else reviews.value.push(updated)
   }
 

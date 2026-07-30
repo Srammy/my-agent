@@ -500,7 +500,7 @@ void approveStoresTheCurrentDraftHash() {
 
   assertThat(result.status()).isEqualTo("APPROVED");
   ArgumentCaptor<RuntimeContext> context = ArgumentCaptor.forClass(RuntimeContext.class);
-  verify(fingerprint).computeDraftHash(context.capture(), "my-skill");
+  verify(fingerprint).computeDraftHash(context.capture(), eq("my-skill"));
   assertThat(context.getValue().getUserId()).isEqualTo("1");
   assertThat(context.getValue().getSessionId()).isEqualTo("skill-review");
   verify(decisionStore).approve("my-skill", "admin", List.of("prod"), "hash-v1", "1");
