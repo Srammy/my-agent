@@ -50,6 +50,24 @@ class RedisBaseStoreTest {
   }
 
   @Test
+  void searchSkipsAKeyDeletedAfterEnumeration() {
+    RedisBaseStore store = new RedisBaseStore(redisTemplate, "prefix:");
+    String namespacePrefix = "prefix:" + encode("workspace") + ":";
+    String existingKey = namespacePrefix + encode("existing.txt");
+    String deletedKey = namespacePrefix + encode("deleted.txt");
+
+    when(redisTemplate.keys(namespacePrefix + "*"))
+        .thenReturn(Flux.just(existingKey, deletedKey));
+    when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+    when(valueOperations.get(existingKey)).thenReturn(Mono.just(itemJson("existing", 1)));
+    when(valueOperations.get(deletedKey)).thenReturn(Mono.empty());
+
+    List<StoreItem> result = store.search(List.of("workspace"), 10, 0);
+
+    assertThat(result).extracting(StoreItem::key).containsExactly("existing.txt");
+  }
+
+  @Test
   void putIfVersionUsesAtomicScriptAndAllowsVersionZeroCreate() {
     RedisBaseStore store = new RedisBaseStore(redisTemplate, "prefix:");
     when(redisTemplate.execute(

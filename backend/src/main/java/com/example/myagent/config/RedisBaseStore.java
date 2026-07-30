@@ -9,6 +9,7 @@ import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 
@@ -84,6 +85,7 @@ class RedisBaseStore implements BaseStore {
     }
     return keys.stream()
         .map(this::toStoreItem)
+        .filter(Objects::nonNull)
         .sorted(Comparator.comparing(StoreItem::key))
         .skip(offset)
         .limit(limit)
@@ -97,6 +99,9 @@ class RedisBaseStore implements BaseStore {
 
   private StoreItem toStoreItem(String redisKey) {
     String value = redisTemplate.opsForValue().get(redisKey).block();
+    if (value == null) {
+      return null;
+    }
     StoredItem storedItem = readJson(value, StoredItem.class);
     String itemKey = decode(redisKey.substring(redisKey.lastIndexOf(':') + 1));
     return new StoreItem(itemKey, storedItem.value(), storedItem.version());
