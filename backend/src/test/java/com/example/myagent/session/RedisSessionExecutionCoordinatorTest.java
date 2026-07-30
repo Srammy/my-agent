@@ -320,7 +320,7 @@ class RedisSessionExecutionCoordinatorTest {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
         .thenAnswer(invocation -> {
           RedisScript<Long> script = invocation.getArgument(0);
-          if (!script.getScriptAsString().contains("DECR")) {
+          if (!isCleanup(script)) {
             return executeScript(invocation);
           }
           int attempt = cleanupAttempts.incrementAndGet();
@@ -429,7 +429,7 @@ class RedisSessionExecutionCoordinatorTest {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
         .thenAnswer(invocation -> {
           RedisScript<Long> script = invocation.getArgument(0);
-          if (script.getScriptAsString().contains("INCR") && cancelled.get()) {
+          if (isRegistration(script) && cancelled.get()) {
             return Flux.just(-1L);
           }
           if (isLeaseRefresh(script)) {
@@ -467,7 +467,7 @@ class RedisSessionExecutionCoordinatorTest {
   }
 
   @Test
-  void missingActiveCountWithoutCompletionFailsClosed() {
+  void missingActiveCountIsRebuiltFromExecutionLeases() {
     AtomicLong activeCount = stubActiveCounter();
     when(valueOperations.get(anyString())).thenReturn(Mono.empty());
     when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
@@ -475,21 +475,10 @@ class RedisSessionExecutionCoordinatorTest {
     coordinator.track(1L, "s_1", Flux::<Integer>never, completion::asMono).subscribe();
     assertThat(activeCount).hasValue(1L);
     activeCount.set(0L);
-    AtomicBoolean lateSourceSubscribed = new AtomicBoolean();
 
-    StepVerifier.create(coordinator.track(1L, "s_1", () -> {
-          lateSourceSubscribed.set(true);
-          return Flux.never();
-        }))
-        .expectErrorSatisfies(error -> assertThat(error)
-            .isInstanceOfSatisfying(ResponseStatusException.class,
-                status -> {
-                  assertThat(status.getStatusCode().value()).isEqualTo(409);
-                  assertThat(status.getHeaders().getFirst("X-Error-Code"))
-                      .isEqualTo("SESSION_CANCELLING");
-                }))
-        .verify();
-    assertThat(lateSourceSubscribed).isFalse();
+    assertThat(coordinator.track(1L, "s_1", () -> Flux.just("recovered")).blockLast())
+        .isEqualTo("recovered");
+    assertThat(activeCount).hasValue(1L);
 
     StepVerifier.create(coordinator.cancelAndAwait(1L, "s_1"))
         .expectErrorSatisfies(this::assertCancellationTimeout)
@@ -559,10 +548,10 @@ class RedisSessionExecutionCoordinatorTest {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
         .thenAnswer(invocation -> {
           RedisScript<Long> script = invocation.getArgument(0);
-          if (!script.getScriptAsString().contains("INCR")) {
+          if (!isRegistration(script)) {
             return executeScript(invocation)
                 .doOnNext(ignored -> {
-                  if (script.getScriptAsString().contains("DECR")) {
+                  if (isCleanup(script)) {
                     compensationCompleted.countDown();
                   }
                 });
@@ -594,8 +583,7 @@ class RedisSessionExecutionCoordinatorTest {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
         .thenAnswer(invocation -> {
           RedisScript<Long> script = invocation.getArgument(0);
-          return script.getScriptAsString().contains("SCARD")
-                  && !script.getScriptAsString().contains("INCR")
+          return isRead(script)
               ? Flux.empty()
               : executeScript(invocation);
         });
@@ -613,7 +601,7 @@ class RedisSessionExecutionCoordinatorTest {
     when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
         .thenAnswer(invocation -> {
           RedisScript<Long> script = invocation.getArgument(0);
-          if (script.getScriptAsString().contains("INCR")) {
+          if (isRegistration(script)) {
             registered.set(true);
           }
           return executeScript(invocation);
@@ -739,6 +727,10 @@ class RedisSessionExecutionCoordinatorTest {
   @Test
   void cancelAndAwaitFailsWithConflictWhenActiveExecutionDoesNotDisappear() {
     stubActiveCounter().set(1L);
+    pendingExecutions.computeIfAbsent(
+            "myagent:agent-state:session-execution:1:s_1:pending-completion",
+            ignored -> ConcurrentHashMap.newKeySet())
+        .add("active-execution");
     when(valueOperations.set(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
     when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(Mono.just(1L));
 
@@ -771,8 +763,11 @@ class RedisSessionExecutionCoordinatorTest {
         Duration.ofMillis(1),
         Duration.ofMillis(200));
     String cancellationKey = "myagent:agent-state:session-execution:1:s_1:cancelled";
-    when(valueOperations.get(cancellationKey))
-        .thenReturn(Mono.empty(), Mono.empty(), Mono.just("1"));
+    when(valueOperations.get(cancellationKey)).thenReturn(Mono.empty());
+    when(redisTemplate.execute(any(RedisScript.class), anyList(), anyList()))
+        .thenAnswer(invocation -> isLeaseRefresh(invocation.getArgument(0))
+            ? Flux.just(-1L)
+            : executeScript(invocation));
     CountDownLatch stopped = new CountDownLatch(1);
 
     coordinator.track(1L, "s_1", () -> Flux.<Integer>never().doOnCancel(stopped::countDown)).subscribe();
@@ -1003,57 +998,59 @@ class RedisSessionExecutionCoordinatorTest {
     RedisScript<Long> script = invocation.getArgument(0);
     List<String> keys = invocation.getArgument(1);
     List<?> arguments = invocation.getArgument(2);
-    String scriptText = script.getScriptAsString();
-    String countKey = scriptText.contains("INCR") && keys.size() >= 3
+    String countKey = isRegistration(script) && keys.size() >= 3
         ? keys.get(1)
         : keys.getFirst();
     AtomicLong count = activeCounts.computeIfAbsent(countKey, ignored -> new AtomicLong());
-    if (scriptText.contains("INCR")) {
-      String pendingKey = keys.get(keys.size() - 1);
+    if (isRegistration(script)) {
+      String pendingKey = keys.get(3);
       Set<String> pending = pendingExecutions.computeIfAbsent(
           pendingKey, ignored -> ConcurrentHashMap.newKeySet());
-      if (keys.size() >= 3
-          && !pending.isEmpty()
-          && count.get() == 0L
-          && (scriptText.contains("EXISTS', KEYS[3]")
-              || scriptText.contains("SCARD', KEYS[3]"))) {
-        return Flux.just(-2L);
+      String executionId = arguments.get(1).toString();
+      if (!pending.add(executionId)) {
+        return Flux.just(-3L);
       }
-      long updated = count.incrementAndGet();
-      String executionId = scriptText.contains("SADD") && arguments.size() >= 2
-          ? arguments.get(1).toString()
-          : "shared-pending";
-      pending.add(executionId);
-      return Flux.just(updated);
+      count.set(pending.size());
+      return Flux.just(count.get());
     }
-    if (scriptText.contains("DECR")) {
+    if (isCleanup(script)) {
       Set<String> pending = pendingExecutions.computeIfAbsent(
-          keys.get(1), ignored -> ConcurrentHashMap.newKeySet());
-      if (scriptText.contains("SREM")) {
-        String executionId = arguments.size() >= 2
-            ? arguments.get(1).toString()
-            : "";
-        if (!pending.remove(executionId)) {
-          return Flux.just(count.get());
-        }
+          keys.get(2), ignored -> ConcurrentHashMap.newKeySet());
+      pending.remove(arguments.get(1).toString());
+      count.set(pending.size());
+      return Flux.just(count.get());
+    }
+    if (isLeaseRefresh(script)) {
+      Set<String> pending = pendingExecutions.computeIfAbsent(
+          keys.get(3), ignored -> ConcurrentHashMap.newKeySet());
+      if (!pending.contains(arguments.get(2).toString())) {
+        return Flux.just(0L);
       }
-      long updated = count.updateAndGet(current -> Math.max(0L, current - 1L));
-      if (!scriptText.contains("SREM") && updated == 0L) {
-        pending.clear();
-      }
-      return Flux.just(pending.isEmpty() ? updated : Math.max(1L, updated));
+      count.set(pending.size());
+      return Flux.just(1L);
     }
     if (keys.size() >= 2) {
-      int pending = pendingExecutions.getOrDefault(keys.get(1), Set.of()).size();
-      if (pending > 0 && count.get() == 0L) {
-        return Flux.just(-1L * pending);
-      }
+      int pending = pendingExecutions.getOrDefault(keys.get(2), Set.of()).size();
+      count.set(pending);
     }
     return Flux.just(count.get());
   }
 
+  private boolean isRegistration(RedisScript<Long> script) {
+    return script.getScriptAsString().contains("'ZADD', KEYS[3], 'NX'");
+  }
+
+  private boolean isCleanup(RedisScript<Long> script) {
+    return script.getScriptAsString().contains("'ZREM', KEYS[2], ARGV[2]");
+  }
+
+  private boolean isRead(RedisScript<Long> script) {
+    return script.getScriptAsString().contains("'SCARD', KEYS[3]")
+        && !isCleanup(script);
+  }
+
   private boolean isLeaseRefresh(RedisScript<Long> script) {
-    return script.getScriptAsString().contains("return redis.call('PEXPIRE', KEYS[2]");
+    return script.getScriptAsString().contains("'ZSCORE', KEYS[3], ARGV[3]");
   }
 
   private ReactiveSubscription.Message<String, String> message(String payload) {
