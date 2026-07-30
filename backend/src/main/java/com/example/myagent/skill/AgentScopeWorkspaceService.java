@@ -33,6 +33,7 @@ public class AgentScopeWorkspaceService {
   private static final String WORKSPACE_SOURCE = "workspace";
   static final int MAX_FILE_COUNT = 32;
   static final int MAX_FILE_SIZE = 1024 * 1024;
+  static final int MAX_IN_MEMORY_SIZE = 64 * 1024;
   private static final long MAX_TOTAL_SIZE = 5L * 1024 * 1024;
 
   private final AbstractFilesystem filesystem;
@@ -58,8 +59,15 @@ public class AgentScopeWorkspaceService {
 
     String skillMdContent = decodeSkillMd(skillMdBytes);
     // Validate frontmatter for HTTP-friendly errors before passing to SkillUtil
-    SkillValidator.SkillMarkdownMetadata meta = SkillValidator.validateSkillMarkdown(skillMdContent);
-    String name = validateSkillName(meta.name());
+    SkillValidator.validateSkillMarkdown(skillMdContent);
+
+    AgentSkill skill;
+    try {
+      skill = SkillUtil.createFrom(skillMdContent, Map.of(), WORKSPACE_SOURCE);
+    } catch (IllegalArgumentException e) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+    }
+    String name = validateSkillName(skill.getName());
 
     WorkspaceSkillRepository repo = repoFor(user);
     if (repo.skillExists(name)) {
@@ -72,17 +80,10 @@ public class AgentScopeWorkspaceService {
         continue;
       }
       String validatedPath = validateFilePath(entry.getKey());
-      if ("SKILL.md".equals(validatedPath)) {
-        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "SKILL.md must use the exact file name");
+      if ("SKILL.md".equals(validatedPath) || validatedPath.endsWith("/SKILL.md")) {
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "SKILL.md must be at the skill root");
       }
       resources.add(Map.entry(skillPath(name, validatedPath), entry.getValue()));
-    }
-
-    AgentSkill skill;
-    try {
-      skill = SkillUtil.createFrom(skillMdContent, Map.of(), WORKSPACE_SOURCE);
-    } catch (IllegalArgumentException e) {
-      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
     }
 
     RuntimeContext context = runtimeContext(user);

@@ -105,3 +105,21 @@ required.
 - `SKILL.md` remains strictly validated text.
 - A failed resource upload does not publish a visible Skill.
 - The backend test suite passes.
+
+## Final Review Discovery
+
+AgentScope 2.0.0-RC4 `RemoteFilesystem.uploadFiles()` attempts UTF-8 storage
+with `new String(bytes, UTF_8)` and only selects Base64 if that call throws.
+Malformed byte sequences are replaced rather than rejected, so the fallback is
+unreachable for arbitrary binary content. The project-owned
+`BinarySafeRemoteFilesystem` retains the SDK's `BaseStore`, namespace,
+`FileData` metadata, and response contract while selecting UTF-8 only through
+a strict decoder and Base64 otherwise. Only the workspace filesystem bean uses
+this adapter.
+
+The final review also found that resource paths must reject `SKILL.md` in every
+path segment position other than the required root marker, and that repository
+operations must use the canonical name parsed by `SkillUtil`, not the
+lightweight front-matter parser. Multipart acceptance limits remain unchanged;
+the parser's in-memory threshold is 64 KiB so accepted near-limit parts spool
+to disk before service-level total-size accounting.

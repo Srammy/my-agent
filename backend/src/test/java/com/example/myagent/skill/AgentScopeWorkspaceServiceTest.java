@@ -108,6 +108,39 @@ class AgentScopeWorkspaceServiceTest {
   }
 
   @Test
+  void createSkillRejectsNestedSkillMarkersWithoutWritingFiles() {
+    for (String path : List.of("references/SKILL.md", "scripts/SKILL.md", "assets/SKILL.md")) {
+      assertThatThrownBy(() -> service.createSkill(ALICE, List.of(
+          skillMdPart("java-helper", "Java helper"),
+          fakeFilePart(path, "not a skill marker"))))
+          .isInstanceOf(ResponseStatusException.class)
+          .satisfies(error -> assertThat(((ResponseStatusException) error).getStatusCode())
+              .isEqualTo(HttpStatus.BAD_REQUEST));
+
+      assertThat(filesystem.isEmpty()).isTrue();
+    }
+  }
+
+  @Test
+  void createSkillUsesCanonicalYamlEscapedNameForAllRepositoryOperations() {
+    FilePart escapedName = fakeFilePart(
+        "SKILL.md", "---\nname: \"\\u0061\"\ndescription: Escaped name\n---\nUse escaped names.\n");
+
+    SkillDto created = service.createSkill(ALICE, List.of(escapedName));
+
+    assertThat(created.name()).isEqualTo("a");
+    assertThat(service.listSkills(ALICE)).extracting(SkillDto::name).containsExactly("a");
+    assertThatThrownBy(() -> service.createSkill(ALICE, List.of(escapedName)))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(error -> assertThat(((ResponseStatusException) error).getStatusCode())
+            .isEqualTo(HttpStatus.CONFLICT));
+
+    service.deleteSkill(ALICE, "a");
+
+    assertThat(service.listSkills(ALICE)).isEmpty();
+  }
+
+  @Test
   void createDuplicateSkillThrows409() {
     service.createSkill(ALICE, List.of(skillMdPart("java-helper", "Java helper")));
 

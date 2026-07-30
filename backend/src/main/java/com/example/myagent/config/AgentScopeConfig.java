@@ -27,7 +27,6 @@ import io.agentscope.harness.agent.DistributedStore;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.IsolationScope;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
-import io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem;
 import io.agentscope.harness.agent.filesystem.remote.store.BaseStore;
 import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
@@ -302,7 +301,7 @@ public class AgentScopeConfig {
 
   @Bean
   AbstractFilesystem workspaceFilesystem(BaseStore workspaceBaseStore) {
-    return new RemoteFilesystem(
+    return new BinarySafeRemoteFilesystem(
         workspaceBaseStore, IsolationScope.USER.toNamespaceFactory());
   }
 

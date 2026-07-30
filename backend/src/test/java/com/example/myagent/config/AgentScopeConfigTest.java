@@ -650,6 +650,39 @@ class AgentScopeConfigTest {
   }
 
   @Test
+  void workspaceFilesystemPreservesBinaryResourcesThroughTheProductionBean() {
+    io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore store =
+        new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
+    io.agentscope.harness.agent.filesystem.AbstractFilesystem fs = config.workspaceFilesystem(store);
+    io.agentscope.core.agent.RuntimeContext alice =
+        io.agentscope.core.agent.RuntimeContext.builder().userId("1").sessionId("s").build();
+    io.agentscope.core.agent.RuntimeContext bob =
+        io.agentscope.core.agent.RuntimeContext.builder().userId("2").sessionId("s").build();
+    byte[] skillMd = "---\nname: image-helper\ndescription: Image helper\n---\n\nUse image tools.\n".getBytes(
+        java.nio.charset.StandardCharsets.UTF_8);
+    byte[] icon = {
+      (byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, (byte) 0xff
+    };
+
+    fs.uploadFiles(alice, java.util.List.of(
+        java.util.Map.entry("/skills/image-helper/SKILL.md", skillMd),
+        java.util.Map.entry("/skills/image-helper/assets/icon.png", icon)));
+
+    io.agentscope.harness.agent.skill.WorkspaceSkillRepository aliceRepository =
+        new io.agentscope.harness.agent.skill.WorkspaceSkillRepository(
+            fs, "/skills", () -> alice, "workspace");
+    io.agentscope.harness.agent.skill.WorkspaceSkillRepository bobRepository =
+        new io.agentscope.harness.agent.skill.WorkspaceSkillRepository(
+            fs, "/skills", () -> bob, "workspace");
+
+    assertThat(aliceRepository.getAllSkills()).extracting(skill -> skill.getName())
+        .containsExactly("image-helper");
+    assertThat(aliceRepository.resourcesFor("image-helper", alice).readBinary("assets/icon.png"))
+        .hasValueSatisfying(bytes -> assertThat(bytes).containsExactly(icon));
+    assertThat(bobRepository.getAllSkills()).isEmpty();
+  }
+
+  @Test
   void workspaceFilesystemIsolatesUsersByNamespace() {
     io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore store =
         new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
