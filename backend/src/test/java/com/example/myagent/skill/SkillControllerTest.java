@@ -143,6 +143,37 @@ class SkillControllerTest {
   }
 
   @Test
+  void postMineRejects33rdFileAfter32FilesAndFormField() {
+    LinkedMultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
+    for (int index = 0; index < 32; index++) {
+      int fileIndex = index;
+      parts.add("file-" + index, new ByteArrayResource(new byte[0]) {
+        @Override
+        public String getFilename() {
+          return "assets/file-" + fileIndex + ".txt";
+        }
+      });
+    }
+    parts.add("description", "ordinary form field");
+    parts.add("file-32", new ByteArrayResource(new byte[0]) {
+      @Override
+      public String getFilename() {
+        return "assets/file-32.txt";
+      }
+    });
+
+    authenticatedClient()
+        .post()
+        .uri("/api/skills/mine")
+        .contentType(MediaType.MULTIPART_FORM_DATA)
+        .body(BodyInserters.fromMultipartData(parts))
+        .exchange()
+        .expectStatus().isEqualTo(413);
+
+    verifyNoInteractions(workspaceService);
+  }
+
+  @Test
   void postMineRejectsMultipartFileLargerThanOneMebibyte() {
     LinkedMultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
     parts.add("large", new ByteArrayResource(new byte[1024 * 1024 + 1]) {

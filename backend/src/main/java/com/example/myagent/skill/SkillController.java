@@ -2,20 +2,24 @@ package com.example.myagent.skill;
 
 import com.example.myagent.auth.CurrentUser;
 import java.util.List;
+import org.springframework.core.codec.DecodingException;
 import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.http.codec.multipart.Part;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ServerWebInputException;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -41,10 +45,12 @@ public class SkillController {
   public Mono<SkillDto> createMine(
       @AuthenticationPrincipal CurrentUser currentUser,
       @RequestBody Flux<Part> body) {
-    return body.take(AgentScopeWorkspaceService.MAX_FILE_COUNT + 1L)
-        .collectList()
+    return body.collectList()
         .flatMap(parts -> {
-          long fileCount = parts.stream().filter(FilePart.class::isInstance).count();
+          long fileCount = parts.stream()
+              .filter(part -> part instanceof FilePart filePart
+                  && StringUtils.hasText(filePart.filename()))
+              .count();
           if (fileCount > AgentScopeWorkspaceService.MAX_FILE_COUNT) {
             return Mono.error(new ResponseStatusException(
                 HttpStatus.PAYLOAD_TOO_LARGE,
@@ -54,11 +60,34 @@ public class SkillController {
               .subscribeOn(Schedulers.boundedElastic());
         })
         .onErrorMap(
-            DataBufferLimitException.class,
+            error -> error instanceof DataBufferLimitException
+                || error instanceof DecodingException
+                && error.getMessage() != null
+                && error.getMessage().startsWith("Too many parts"),
             error -> new ResponseStatusException(
                 HttpStatus.PAYLOAD_TOO_LARGE,
                 "Skill upload is too large",
                 error));
+  }
+
+  @ExceptionHandler(ServerWebInputException.class)
+  @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
+  public void handleUploadLimit(ServerWebInputException error) {
+    if (!isUploadLimit(error)) {
+      throw error;
+    }
+  }
+
+  private static boolean isUploadLimit(Throwable error) {
+    for (Throwable current = error; current != null; current = current.getCause()) {
+      if (current instanceof DataBufferLimitException
+          || current instanceof DecodingException
+          && current.getMessage() != null
+          && current.getMessage().startsWith("Too many parts")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @DeleteMapping("/mine/{skillName}")
