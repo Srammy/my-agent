@@ -118,7 +118,7 @@ async function logout() {
           :session-id="currentSessionId"
         />
         <Composer
-          :disabled="isSending || sessions.loading || chat.isCancellingSession(currentSessionId)"
+          :disabled="chat.isLoading || sessions.loading || chat.isCancellingSession(currentSessionId)"
           :has-session="Boolean(currentSessionId)"
           @send="sendMessage"
         />
