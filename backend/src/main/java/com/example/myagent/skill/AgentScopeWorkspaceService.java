@@ -72,6 +72,9 @@ public class AgentScopeWorkspaceService {
         continue;
       }
       String validatedPath = validateFilePath(entry.getKey());
+      if ("SKILL.md".equals(validatedPath)) {
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "SKILL.md must use the exact file name");
+      }
       resources.add(Map.entry(skillPath(name, validatedPath), entry.getValue()));
     }
 

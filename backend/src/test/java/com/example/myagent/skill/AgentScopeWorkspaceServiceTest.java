@@ -179,6 +179,22 @@ class AgentScopeWorkspaceServiceTest {
   }
 
   @Test
+  void createSkillRejectsTrimmedSkillMdResourcePathWithoutWritingFiles() {
+    assertThatThrownBy(
+            () ->
+                service.createSkill(
+                    ALICE,
+                    List.of(
+                        skillMdPart("image-helper", "Image helper"),
+                        fakeFilePart(" SKILL.md ", "unexpected resource"))))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+            .isEqualTo(HttpStatus.BAD_REQUEST));
+
+    assertThat(filesystem.isEmpty()).isTrue();
+  }
+
+  @Test
   void createSkillRejectsFailedResourceUploadWithoutSkillMarker() {
     filesystem.failUploadsFor("skills/image-helper/assets/icon.png");
 
@@ -194,6 +210,34 @@ class AgentScopeWorkspaceServiceTest {
             .isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR));
 
     assertThat(filesystem.exists(runtimeContext(ALICE), "skills/image-helper/SKILL.md")).isFalse();
+  }
+
+  @Test
+  void createSkillRejectsNullUploadResponseListWithoutSkillMarker() {
+    filesystem.respondToUploadsWith(UploadResponseMode.NULL_LIST);
+
+    assertResourceUploadResponseFailure();
+  }
+
+  @Test
+  void createSkillRejectsIncompleteUploadResponsesWithoutSkillMarker() {
+    filesystem.respondToUploadsWith(UploadResponseMode.INCOMPLETE);
+
+    assertResourceUploadResponseFailure();
+  }
+
+  @Test
+  void createSkillRejectsNullUploadResponseWithoutSkillMarker() {
+    filesystem.respondToUploadsWith(UploadResponseMode.NULL_ELEMENT);
+
+    assertResourceUploadResponseFailure();
+  }
+
+  @Test
+  void createSkillRejectsMismatchedUploadResponsePathWithoutSkillMarker() {
+    filesystem.respondToUploadsWith(UploadResponseMode.MISMATCHED_PATH);
+
+    assertResourceUploadResponseFailure();
   }
 
   @Test
@@ -230,6 +274,21 @@ class AgentScopeWorkspaceServiceTest {
             .isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE));
   }
 
+  private void assertResourceUploadResponseFailure() {
+    assertThatThrownBy(
+            () ->
+                service.createSkill(
+                    ALICE,
+                    List.of(
+                        skillMdPart("image-helper", "Image helper"),
+                        fakeFilePart("assets/icon.png", new byte[] {1}))))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+            .isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR));
+
+    assertThat(filesystem.exists(runtimeContext(ALICE), "skills/image-helper/SKILL.md")).isFalse();
+  }
+
   private static FilePart skillMdPart(String name, String description) {
     // SkillUtil.createFrom() requires non-empty body content after the YAML front matter
     String content = "---\nname: " + name + "\ndescription: " + description + "\n---\n\nSkill instructions.\n";
@@ -261,8 +320,8 @@ class AgentScopeWorkspaceServiceTest {
 
   /**
    * In-memory filesystem that isolates data by RuntimeContext.userId.
-   * Implements the operations used by WorkspaceSkillRepository:
-   *   - uploadFiles()  → save()
+   * Implements the operations used by AgentScopeWorkspaceService and WorkspaceSkillRepository:
+   *   - uploadFiles()  → skill creation
    *   - glob()         → getAllSkills() / skillExists()
    *   - read()         → reading SKILL.md content (limit=0 means read all)
    *   - move()         → delete() archives the skill directory
@@ -272,9 +331,14 @@ class AgentScopeWorkspaceServiceTest {
     // key = "userId::normalizedPath"
     private final Map<String, byte[]> store = new LinkedHashMap<>();
     private String failingUploadPath;
+    private UploadResponseMode uploadResponseMode = UploadResponseMode.SUCCESS;
 
     void failUploadsFor(String path) {
       failingUploadPath = normalize(path);
+    }
+
+    void respondToUploadsWith(UploadResponseMode mode) {
+      uploadResponseMode = mode;
     }
 
     byte[] bytes(CurrentUser user, String path) {
@@ -304,13 +368,16 @@ class AgentScopeWorkspaceServiceTest {
       return p;
     }
 
-    // ---- core operations used by WorkspaceSkillRepository ----
+    // ---- core operations used by AgentScopeWorkspaceService or WorkspaceSkillRepository ----
 
     /**
-     * WorkspaceSkillRepository.save() calls uploadFiles() to write SKILL.md and resources.
+     * AgentScopeWorkspaceService writes resources and the SKILL.md marker through uploadFiles().
      */
     @Override
     public List<FileUploadResponse> uploadFiles(RuntimeContext ctx, List<Entry<String, byte[]>> files) {
+      if (uploadResponseMode == UploadResponseMode.NULL_LIST) {
+        return null;
+      }
       List<FileUploadResponse> responses = new ArrayList<>();
       for (Entry<String, byte[]> entry : files) {
         String path = entry.getKey();
@@ -320,6 +387,17 @@ class AgentScopeWorkspaceServiceTest {
         }
         store.put(key(ctx, path), entry.getValue().clone());
         responses.add(FileUploadResponse.success(path));
+      }
+      if (uploadResponseMode == UploadResponseMode.INCOMPLETE) {
+        return List.of();
+      }
+      if (uploadResponseMode == UploadResponseMode.NULL_ELEMENT) {
+        return java.util.Collections.nCopies(files.size(), null);
+      }
+      if (uploadResponseMode == UploadResponseMode.MISMATCHED_PATH) {
+        return files.stream()
+            .map(entry -> FileUploadResponse.success(entry.getKey() + ".unexpected"))
+            .toList();
       }
       return responses;
     }
@@ -460,5 +538,13 @@ class AgentScopeWorkspaceServiceTest {
     public List<FileDownloadResponse> downloadFiles(RuntimeContext ctx, List<String> paths) {
       throw new UnsupportedOperationException();
     }
+  }
+
+  private enum UploadResponseMode {
+    SUCCESS,
+    NULL_LIST,
+    INCOMPLETE,
+    NULL_ELEMENT,
+    MISMATCHED_PATH
   }
 }
