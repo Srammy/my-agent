@@ -220,6 +220,17 @@ class AgentScopeWorkspaceServiceTest {
   }
 
   @Test
+  void nullUploadResponseModeOnlyFailsFirstUpload() {
+    String path = "skills/image-helper/assets/icon.png";
+    List<Entry<String, byte[]>> files = List.of(Map.entry(path, new byte[] {1}));
+    filesystem.respondToUploadsWith(UploadResponseMode.NULL_LIST);
+
+    assertThat(filesystem.uploadFiles(runtimeContext(ALICE), files)).isNull();
+    assertThat(filesystem.uploadFiles(runtimeContext(ALICE), files))
+        .containsExactly(FileUploadResponse.success(path));
+  }
+
+  @Test
   void createSkillRejectsIncompleteUploadResponsesWithoutSkillMarker() {
     filesystem.respondToUploadsWith(UploadResponseMode.INCOMPLETE);
 
@@ -332,6 +343,7 @@ class AgentScopeWorkspaceServiceTest {
     private final Map<String, byte[]> store = new LinkedHashMap<>();
     private String failingUploadPath;
     private UploadResponseMode uploadResponseMode = UploadResponseMode.SUCCESS;
+    private int uploadCalls;
 
     void failUploadsFor(String path) {
       failingUploadPath = normalize(path);
@@ -339,6 +351,7 @@ class AgentScopeWorkspaceServiceTest {
 
     void respondToUploadsWith(UploadResponseMode mode) {
       uploadResponseMode = mode;
+      uploadCalls = 0;
     }
 
     byte[] bytes(CurrentUser user, String path) {
@@ -375,7 +388,7 @@ class AgentScopeWorkspaceServiceTest {
      */
     @Override
     public List<FileUploadResponse> uploadFiles(RuntimeContext ctx, List<Entry<String, byte[]>> files) {
-      if (uploadResponseMode == UploadResponseMode.NULL_LIST) {
+      if (uploadResponseMode == UploadResponseMode.NULL_LIST && uploadCalls++ == 0) {
         return null;
       }
       List<FileUploadResponse> responses = new ArrayList<>();
