@@ -44,10 +44,12 @@ class AgentScopeWorkspaceServiceTest {
   private static final int MEBIBYTE = 1024 * 1024;
 
   private AgentScopeWorkspaceService service;
+  private IsolatedFakeFilesystem filesystem;
 
   @BeforeEach
   void setUp() {
-    service = new AgentScopeWorkspaceService(new IsolatedFakeFilesystem());
+    filesystem = new IsolatedFakeFilesystem();
+    service = new AgentScopeWorkspaceService(filesystem);
   }
 
   @Test
@@ -112,8 +114,86 @@ class AgentScopeWorkspaceServiceTest {
     assertThatThrownBy(
             () -> service.createSkill(ALICE, List.of(skillMdPart("java-helper", "Java helper"))))
         .isInstanceOf(ResponseStatusException.class)
+            .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.CONFLICT));
+  }
+
+  @Test
+  void createSkillPreservesBinaryResourceBytes() {
+    byte[] icon = {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, (byte) 0xc3, 0x28};
+
+    service.createSkill(
+        ALICE,
+        List.of(skillMdPart("image-helper", "Image helper"), fakeFilePart("assets/icon.png", icon)));
+
+    assertThat(filesystem.bytes(ALICE, "skills/image-helper/assets/icon.png")).isEqualTo(icon);
+  }
+
+  @Test
+  void createSkillRejectsMalformedUtf8SkillMdWithoutWritingFiles() {
+    assertThatThrownBy(
+            () ->
+                service.createSkill(
+                    ALICE,
+                    List.of(
+                        fakeFilePart("SKILL.md", new byte[] {(byte) 0xc3, 0x28}),
+                        fakeFilePart("assets/icon.png", new byte[] {1}))))
+        .isInstanceOf(ResponseStatusException.class)
         .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
-            .isEqualTo(HttpStatus.CONFLICT));
+            .isEqualTo(HttpStatus.BAD_REQUEST));
+
+    assertThat(filesystem.isEmpty()).isTrue();
+  }
+
+  @Test
+  void createSkillPreservesCrLfResourceBytes() {
+    byte[] reference = "line one\r\nline two\r\n".getBytes(StandardCharsets.UTF_8);
+    byte[] script = "echo one\r\necho two\r\n".getBytes(StandardCharsets.UTF_8);
+
+    service.createSkill(
+        ALICE,
+        List.of(
+            skillMdPart("line-helper", "Line helper"),
+            fakeFilePart("references/guide.txt", reference),
+            fakeFilePart("scripts/run.sh", script)));
+
+    assertThat(filesystem.bytes(ALICE, "skills/line-helper/references/guide.txt"))
+        .isEqualTo(reference);
+    assertThat(filesystem.bytes(ALICE, "skills/line-helper/scripts/run.sh")).isEqualTo(script);
+  }
+
+  @Test
+  void createSkillRejectsTraversalPathWithoutWritingFiles() {
+    assertThatThrownBy(
+            () ->
+                service.createSkill(
+                    ALICE,
+                    List.of(
+                        skillMdPart("image-helper", "Image helper"),
+                        fakeFilePart("assets/../../escape.bin", new byte[] {1}))))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+            .isEqualTo(HttpStatus.BAD_REQUEST));
+
+    assertThat(filesystem.isEmpty()).isTrue();
+  }
+
+  @Test
+  void createSkillRejectsFailedResourceUploadWithoutSkillMarker() {
+    filesystem.failUploadsFor("skills/image-helper/assets/icon.png");
+
+    assertThatThrownBy(
+            () ->
+                service.createSkill(
+                    ALICE,
+                    List.of(
+                        skillMdPart("image-helper", "Image helper"),
+                        fakeFilePart("assets/icon.png", new byte[] {1}))))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+            .isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR));
+
+    assertThat(filesystem.exists(runtimeContext(ALICE), "skills/image-helper/SKILL.md")).isFalse();
   }
 
   @Test
@@ -175,6 +255,10 @@ class AgentScopeWorkspaceServiceTest {
     };
   }
 
+  private static RuntimeContext runtimeContext(CurrentUser user) {
+    return RuntimeContext.builder().userId(user.id().toString()).sessionId("workspace-api").build();
+  }
+
   /**
    * In-memory filesystem that isolates data by RuntimeContext.userId.
    * Implements the operations used by WorkspaceSkillRepository:
@@ -186,7 +270,21 @@ class AgentScopeWorkspaceServiceTest {
   private static final class IsolatedFakeFilesystem implements AbstractFilesystem {
 
     // key = "userId::normalizedPath"
-    private final Map<String, String> store = new LinkedHashMap<>();
+    private final Map<String, byte[]> store = new LinkedHashMap<>();
+    private String failingUploadPath;
+
+    void failUploadsFor(String path) {
+      failingUploadPath = normalize(path);
+    }
+
+    byte[] bytes(CurrentUser user, String path) {
+      byte[] value = store.get(key(runtimeContext(user), path));
+      return value == null ? null : value.clone();
+    }
+
+    boolean isEmpty() {
+      return store.isEmpty();
+    }
 
     // ---- path helpers ----
 
@@ -216,8 +314,11 @@ class AgentScopeWorkspaceServiceTest {
       List<FileUploadResponse> responses = new ArrayList<>();
       for (Entry<String, byte[]> entry : files) {
         String path = entry.getKey();
-        String content = new String(entry.getValue(), StandardCharsets.UTF_8);
-        store.put(key(ctx, path), content);
+        if (normalize(path).equals(failingUploadPath)) {
+          responses.add(FileUploadResponse.fail(path, "Configured upload failure"));
+          continue;
+        }
+        store.put(key(ctx, path), entry.getValue().clone());
         responses.add(FileUploadResponse.success(path));
       }
       return responses;
@@ -244,7 +345,7 @@ class AgentScopeWorkspaceServiceTest {
             ? filePath.substring(filePath.lastIndexOf('/') + 1)
             : filePath;
         if (!filePattern.isEmpty() && !fileName.equals(filePattern)) continue;
-        matches.add(FileInfo.ofFile(filePath, store.get(storeKey).length(), LocalDateTime.now().toString()));
+        matches.add(FileInfo.ofFile(filePath, store.get(storeKey).length, LocalDateTime.now().toString()));
       }
       return GlobResult.success(matches);
     }
@@ -255,8 +356,9 @@ class AgentScopeWorkspaceServiceTest {
      */
     @Override
     public ReadResult read(RuntimeContext ctx, String path, int offset, int limit) {
-      String val = store.get(key(ctx, path));
-      if (val == null) return ReadResult.fail("Not found: " + path);
+      byte[] value = store.get(key(ctx, path));
+      if (value == null) return ReadResult.fail("Not found: " + path);
+      String val = new String(value, StandardCharsets.UTF_8);
       String content = offset > 0 && offset < val.length() ? val.substring(offset) : val;
       if (limit > 0 && content.length() > limit) {
         content = content.substring(0, limit);
@@ -277,18 +379,18 @@ class AgentScopeWorkspaceServiceTest {
 
       // Move single file
       if (store.containsKey(srcExact)) {
-        String content = store.remove(srcExact);
+        byte[] content = store.remove(srcExact);
         store.put(key(ctx, dst), content);
         return WriteResult.ok(dst);
       }
 
       // Move directory (all keys under src prefix)
-      List<Entry<String, String>> toMove = store.entrySet().stream()
+      List<Entry<String, byte[]>> toMove = store.entrySet().stream()
           .filter(e -> e.getKey().startsWith(srcPrefix))
           .map(e -> Map.entry(e.getKey(), e.getValue()))
           .toList();
       if (toMove.isEmpty()) return WriteResult.fail("Not found: " + src);
-      for (Entry<String, String> entry : toMove) {
+      for (Entry<String, byte[]> entry : toMove) {
         String newKey = dstPrefix + entry.getKey().substring(srcPrefix.length());
         store.remove(entry.getKey());
         store.put(newKey, entry.getValue());
@@ -300,7 +402,7 @@ class AgentScopeWorkspaceServiceTest {
 
     @Override
     public WriteResult write(RuntimeContext ctx, String path, String content) {
-      store.put(key(ctx, path), content);
+      store.put(key(ctx, path), content.getBytes(StandardCharsets.UTF_8));
       return WriteResult.ok(path);
     }
 
@@ -316,14 +418,14 @@ class AgentScopeWorkspaceServiceTest {
     public LsResult ls(RuntimeContext ctx, String path) {
       String pref = prefix(ctx, path);
       Map<String, FileInfo> entries = new LinkedHashMap<>();
-      for (Entry<String, String> entry : store.entrySet()) {
+      for (Entry<String, byte[]> entry : store.entrySet()) {
         if (!entry.getKey().startsWith(pref)) continue;
         String remainder = entry.getKey().substring(pref.length());
         if (remainder.isEmpty()) continue;
         int sep = remainder.indexOf('/');
         if (sep < 0) {
           entries.putIfAbsent(remainder,
-              FileInfo.ofFile(remainder, entry.getValue().length(), LocalDateTime.now().toString()));
+              FileInfo.ofFile(remainder, entry.getValue().length, LocalDateTime.now().toString()));
         } else {
           String dir = remainder.substring(0, sep);
           entries.putIfAbsent(dir, FileInfo.ofDir(dir, LocalDateTime.now().toString()));

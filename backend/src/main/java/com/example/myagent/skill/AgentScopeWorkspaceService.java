@@ -5,8 +5,13 @@ import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.skill.AgentSkill;
 import io.agentscope.core.skill.util.SkillUtil;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
+import io.agentscope.harness.agent.filesystem.model.FileUploadResponse;
 import io.agentscope.harness.agent.skill.WorkspaceSkillRepository;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,7 +56,7 @@ public class AgentScopeWorkspaceService {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "SKILL.md is required");
     }
 
-    String skillMdContent = new String(skillMdBytes, StandardCharsets.UTF_8);
+    String skillMdContent = decodeSkillMd(skillMdBytes);
     // Validate frontmatter for HTTP-friendly errors before passing to SkillUtil
     SkillValidator.SkillMarkdownMetadata meta = SkillValidator.validateSkillMarkdown(skillMdContent);
     String name = validateSkillName(meta.name());
@@ -61,24 +66,26 @@ public class AgentScopeWorkspaceService {
       throw new ResponseStatusException(HttpStatus.CONFLICT, "Skill already exists: " + name);
     }
 
-    // Validate and collect resource files (references/, scripts/, assets/)
-    Map<String, String> resources = new LinkedHashMap<>();
+    List<Map.Entry<String, byte[]>> resources = new ArrayList<>();
     for (Map.Entry<String, byte[]> entry : files.entrySet()) {
       if ("SKILL.md".equals(entry.getKey())) {
         continue;
       }
       String validatedPath = validateFilePath(entry.getKey());
-      resources.put(validatedPath, new String(entry.getValue(), StandardCharsets.UTF_8));
+      resources.add(Map.entry(skillPath(name, validatedPath), entry.getValue()));
     }
 
     AgentSkill skill;
     try {
-      skill = SkillUtil.createFrom(skillMdContent, resources, WORKSPACE_SOURCE);
+      skill = SkillUtil.createFrom(skillMdContent, Map.of(), WORKSPACE_SOURCE);
     } catch (IllegalArgumentException e) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
     }
 
-    repo.save(List.of(skill), false);
+    RuntimeContext context = runtimeContext(user);
+    requireSuccessfulUploads(resources, filesystem.uploadFiles(context, resources));
+    List<Map.Entry<String, byte[]>> marker = List.of(Map.entry(skillPath(name, "SKILL.md"), skillMdBytes));
+    requireSuccessfulUploads(marker, filesystem.uploadFiles(context, marker));
     return new SkillDto(skill.getName(), skill.getDescription());
   }
 
@@ -149,6 +156,42 @@ public class AgentScopeWorkspaceService {
     } finally {
       DataBufferUtils.release(joined);
     }
+  }
+
+  private static String decodeSkillMd(byte[] skillMdBytes) {
+    try {
+      return StandardCharsets.UTF_8
+          .newDecoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT)
+          .decode(ByteBuffer.wrap(skillMdBytes))
+          .toString();
+    } catch (CharacterCodingException e) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "SKILL.md must be valid UTF-8");
+    }
+  }
+
+  private static String skillPath(String skillName, String relativePath) {
+    return SKILLS_DIR + "/" + skillName + "/" + relativePath;
+  }
+
+  private static void requireSuccessfulUploads(
+      List<Map.Entry<String, byte[]>> files, List<FileUploadResponse> responses) {
+    if (responses == null || responses.size() != files.size()) {
+      throw uploadFailed();
+    }
+    for (int index = 0; index < files.size(); index++) {
+      FileUploadResponse response = responses.get(index);
+      if (response == null
+          || !response.isSuccess()
+          || !files.get(index).getKey().equals(response.path())) {
+        throw uploadFailed();
+      }
+    }
+  }
+
+  private static ResponseStatusException uploadFailed() {
+    return new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to upload skill files");
   }
 
   private static ResponseStatusException payloadTooLarge(String reason) {
