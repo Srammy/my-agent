@@ -113,6 +113,36 @@ class SkillControllerTest {
   }
 
   @Test
+  void postMineAccepts32MultipartFilesAndOneFormField() {
+    when(workspaceService.createSkill(eq(USER), any())).thenReturn(SKILL);
+
+    LinkedMultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
+    for (int index = 0; index < 32; index++) {
+      int fileIndex = index;
+      parts.add("file-" + index, new ByteArrayResource(new byte[0]) {
+        @Override
+        public String getFilename() {
+          return "assets/file-" + fileIndex + ".txt";
+        }
+      });
+    }
+    parts.add("description", "ordinary form field");
+
+    authenticatedClient()
+        .post()
+        .uri("/api/skills/mine")
+        .contentType(MediaType.MULTIPART_FORM_DATA)
+        .body(BodyInserters.fromMultipartData(parts))
+        .exchange()
+        .expectStatus().isOk()
+        .expectBody()
+        .jsonPath("$.name").isEqualTo("java-helper")
+        .jsonPath("$.description").isEqualTo("Java helper");
+
+    verify(workspaceService).createSkill(eq(USER), any());
+  }
+
+  @Test
   void postMineRejectsMultipartFileLargerThanOneMebibyte() {
     LinkedMultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
     parts.add("large", new ByteArrayResource(new byte[1024 * 1024 + 1]) {

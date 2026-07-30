@@ -5,6 +5,7 @@ import java.util.List;
 import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.http.codec.multipart.Part;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -43,7 +44,8 @@ public class SkillController {
     return body.take(AgentScopeWorkspaceService.MAX_FILE_COUNT + 1L)
         .collectList()
         .flatMap(parts -> {
-          if (parts.size() > AgentScopeWorkspaceService.MAX_FILE_COUNT) {
+          long fileCount = parts.stream().filter(FilePart.class::isInstance).count();
+          if (fileCount > AgentScopeWorkspaceService.MAX_FILE_COUNT) {
             return Mono.error(new ResponseStatusException(
                 HttpStatus.PAYLOAD_TOO_LARGE,
                 "Skill upload contains too many files"));
