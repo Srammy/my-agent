@@ -45,65 +45,115 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private static final Duration DEFAULT_CANCELLATION_TTL = Duration.ofSeconds(30);
   private static final String DEFAULT_KEY_PREFIX = "myagent:agent-state:";
   static final String CANCELLATION_CHANNEL = DEFAULT_KEY_PREFIX + CANCELLATION_CHANNEL_SUFFIX;
+  // Expired scores are cleanup evidence, so the lease ZSet must outlive active-count.
+  // The legacy Set is dual-written until older instances have drained during a rolling upgrade.
   private static final RedisScript<Long> INCREMENT_ACTIVE_COUNT = RedisScript.of("""
       if redis.call('EXISTS', KEYS[1]) == 1 then
         return -1
       end
-      if redis.call('SCARD', KEYS[3]) > 0 and redis.call('EXISTS', KEYS[2]) == 0 then
-        return -2
+      local time = redis.call('TIME')
+      local now = time[1] * 1000 + math.floor(time[2] / 1000)
+      local expired = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', now)
+      for _, executionId in ipairs(expired) do
+        redis.call('ZREM', KEYS[3], executionId)
+        redis.call('SREM', KEYS[4], executionId)
       end
-      if redis.call('SADD', KEYS[3], ARGV[2]) == 0 then
+      if redis.call('EXISTS', KEYS[2]) == 0 then
+        local live = redis.call('ZRANGE', KEYS[3], 0, -1)
+        redis.call('DEL', KEYS[4])
+        for _, executionId in ipairs(live) do
+          redis.call('SADD', KEYS[4], executionId)
+        end
+      end
+      if redis.call('ZADD', KEYS[3], 'NX', now + tonumber(ARGV[1]), ARGV[2]) == 0 then
         return -3
       end
-      local value = redis.call('INCR', KEYS[2])
-      redis.call('PEXPIRE', KEYS[2], ARGV[1])
-      return value
+      redis.call('SADD', KEYS[4], ARGV[2])
+      local current = redis.call('SCARD', KEYS[4])
+      redis.call('SET', KEYS[2], current, 'PX', ARGV[1])
+      return current
       """, Long.class);
   private static final RedisScript<Long> DECREMENT_ACTIVE_COUNT = RedisScript.of("""
-      local removed = redis.call('SREM', KEYS[2], ARGV[2])
-      local current = tonumber(redis.call('GET', KEYS[1]) or '0')
-      local pending = redis.call('SCARD', KEYS[2])
-      if removed == 0 then
-        if pending == 0 and current == 0 then
-          return 0
-        end
-        if current == 0 then
-          return -pending
-        end
-        return math.max(current, pending)
+      local time = redis.call('TIME')
+      local now = time[1] * 1000 + math.floor(time[2] / 1000)
+      local expired = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now)
+      for _, executionId in ipairs(expired) do
+        redis.call('ZREM', KEYS[2], executionId)
+        redis.call('SREM', KEYS[3], executionId)
       end
-      if current > 0 then
-        current = redis.call('DECR', KEYS[1])
+      if redis.call('EXISTS', KEYS[1]) == 0 then
+        local live = redis.call('ZRANGE', KEYS[2], 0, -1)
+        redis.call('DEL', KEYS[3])
+        for _, executionId in ipairs(live) do
+          redis.call('SADD', KEYS[3], executionId)
+        end
       end
-      if pending == 0 then
+      redis.call('ZREM', KEYS[2], ARGV[2])
+      redis.call('SREM', KEYS[3], ARGV[2])
+      local current = redis.call('SCARD', KEYS[3])
+      if current == 0 then
         redis.call('DEL', KEYS[1])
-        redis.call('DEL', KEYS[2])
         return 0
       end
-      if current <= 0 then
-        redis.call('DEL', KEYS[1])
-        return -pending
-      end
-      redis.call('PEXPIRE', KEYS[1], ARGV[1])
-      return math.max(current, pending)
+      redis.call('SET', KEYS[1], current, 'PX', ARGV[1])
+      return current
       """, Long.class);
   private static final RedisScript<Long> READ_ACTIVE_COUNT = RedisScript.of("""
-      local pending = redis.call('SCARD', KEYS[2])
-      local current = tonumber(redis.call('GET', KEYS[1]) or '0')
-      if pending == 0 and current == 0 then
+      local time = redis.call('TIME')
+      local now = time[1] * 1000 + math.floor(time[2] / 1000)
+      local expired = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now)
+      for _, executionId in ipairs(expired) do
+        redis.call('ZREM', KEYS[2], executionId)
+        redis.call('SREM', KEYS[3], executionId)
+      end
+      if redis.call('EXISTS', KEYS[1]) == 0 then
+        local live = redis.call('ZRANGE', KEYS[2], 0, -1)
+        redis.call('DEL', KEYS[3])
+        for _, executionId in ipairs(live) do
+          redis.call('SADD', KEYS[3], executionId)
+        end
+      end
+      local current = redis.call('SCARD', KEYS[3])
+      if current == 0 then
+        redis.call('DEL', KEYS[1])
         return 0
       end
-      if pending > 0 and current == 0 then
-        return -pending
-      end
-      return math.max(current, pending)
+      redis.call('SET', KEYS[1], current, 'PX', ARGV[1])
+      return current
       """, Long.class);
   private static final RedisScript<Long> REFRESH_EXECUTION_LEASE = RedisScript.of("""
+      local time = redis.call('TIME')
+      local now = time[1] * 1000 + math.floor(time[2] / 1000)
+      local expired = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', now)
+      for _, executionId in ipairs(expired) do
+        redis.call('ZREM', KEYS[3], executionId)
+        redis.call('SREM', KEYS[4], executionId)
+      end
+      if redis.call('EXISTS', KEYS[2]) == 0 then
+        local live = redis.call('ZRANGE', KEYS[3], 0, -1)
+        redis.call('DEL', KEYS[4])
+        for _, executionId in ipairs(live) do
+          redis.call('SADD', KEYS[4], executionId)
+        end
+      end
+      if redis.call('ZSCORE', KEYS[3], ARGV[3]) == false then
+        local current = redis.call('SCARD', KEYS[4])
+        if current == 0 then
+          redis.call('DEL', KEYS[2])
+        else
+          redis.call('SET', KEYS[2], current, 'PX', ARGV[1])
+        end
+        return 0
+      end
+      redis.call('ZADD', KEYS[3], now + tonumber(ARGV[1]), ARGV[3])
+      redis.call('SADD', KEYS[4], ARGV[3])
+      local current = redis.call('SCARD', KEYS[4])
+      redis.call('SET', KEYS[2], current, 'PX', ARGV[1])
       if redis.call('EXISTS', KEYS[1]) == 1 then
         redis.call('PEXPIRE', KEYS[1], ARGV[2])
         return -1
       end
-      return redis.call('PEXPIRE', KEYS[2], ARGV[1])
+      return 1
       """, Long.class);
 
   private final ReactiveStringRedisTemplate redisTemplate;
@@ -261,7 +311,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
               return Flux.empty();
             }
             Disposable heartbeat = Flux.interval(refreshInterval)
-                .concatMap(tick -> heartbeat(key, execution))
+                .concatMap(tick -> heartbeat(key, executionId, execution))
                 .subscribe(ignored -> {}, ignored -> {});
             Disposable watchdog = Flux.interval(refreshInterval)
                 .subscribe(ignored -> execution.cancelIfLeaseUnsafe(activeTtl, refreshInterval));
@@ -379,13 +429,18 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   }
 
   private Mono<Void> heartbeat(
-      SessionExecutionKey key, LocalExecution execution) {
+      SessionExecutionKey key, String executionId, LocalExecution execution) {
     Mono<Void> operation = redisTemplate.execute(
             REFRESH_EXECUTION_LEASE,
-            List.of(cancellationKey(key), activeCountKey(key)),
+            List.of(
+                cancellationKey(key),
+                activeCountKey(key),
+                executionLeaseKey(key),
+                pendingCompletionKey(key)),
             List.of(
                 Long.toString(activeTtl.toMillis()),
-                Long.toString(cancellationLeaseTtl().toMillis())))
+                Long.toString(cancellationLeaseTtl().toMillis()),
+                executionId))
         .next()
         .switchIfEmpty(Mono.error(new IllegalStateException("Failed to renew execution lease")))
         .doOnNext(result -> {
@@ -423,7 +478,11 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private Mono<Long> incrementActiveCount(SessionExecutionKey key, String executionId) {
     return redisTemplate.execute(
             INCREMENT_ACTIVE_COUNT,
-            List.of(cancellationKey(key), activeCountKey(key), pendingCompletionKey(key)),
+            List.of(
+                cancellationKey(key),
+                activeCountKey(key),
+                executionLeaseKey(key),
+                pendingCompletionKey(key)),
             List.of(Long.toString(activeTtl.toMillis()), executionId))
         .next()
         .switchIfEmpty(Mono.error(
@@ -433,7 +492,7 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private Mono<Long> decrementActiveCount(SessionExecutionKey key, String executionId) {
     return redisTemplate.execute(
             DECREMENT_ACTIVE_COUNT,
-            List.of(activeCountKey(key), pendingCompletionKey(key)),
+            List.of(activeCountKey(key), executionLeaseKey(key), pendingCompletionKey(key)),
             List.of(Long.toString(activeTtl.toMillis()), executionId))
         .next()
         .switchIfEmpty(Mono.error(
@@ -473,8 +532,8 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
   private Mono<Long> activeCount(SessionExecutionKey key) {
     return redisTemplate.execute(
             READ_ACTIVE_COUNT,
-            List.of(activeCountKey(key), pendingCompletionKey(key)),
-            List.of())
+            List.of(activeCountKey(key), executionLeaseKey(key), pendingCompletionKey(key)),
+            List.of(Long.toString(activeTtl.toMillis())))
         .next()
         .switchIfEmpty(Mono.error(
             new IllegalStateException("Failed to read active session executions")));
@@ -494,6 +553,10 @@ public class RedisSessionExecutionCoordinator implements SessionExecutionCoordin
 
   private String pendingCompletionKey(SessionExecutionKey key) {
     return sessionPrefix(key) + ":pending-completion";
+  }
+
+  private String executionLeaseKey(SessionExecutionKey key) {
+    return sessionPrefix(key) + ":execution-leases";
   }
 
   private long registrationTimeoutNanos() {

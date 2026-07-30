@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.listener.ReactiveRedisMessageListenerContainer;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 import org.springframework.web.server.ResponseStatusException;
@@ -25,6 +26,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
 @Testcontainers
@@ -103,8 +105,8 @@ class SessionExecutionCoordinatorRedisIntegrationTest {
 
       redisTemplate.opsForValue().set("unrelated:key", "value").block();
       redisTemplate.delete(SESSION_PREFIX + ":active-count").block();
-      assertThat(redisTemplate.opsForSet()
-          .size(SESSION_PREFIX + ":pending-completion").block()).isEqualTo(1L);
+      assertThat(redisTemplate.opsForZSet()
+          .size(SESSION_PREFIX + ":execution-leases").block()).isEqualTo(1L);
       resetCommandStats();
 
       cancellation = cancellingCoordinator.cancelAndAwait(USER_ID, SESSION_ID).toFuture();
@@ -144,8 +146,116 @@ class SessionExecutionCoordinatorRedisIntegrationTest {
     }
   }
 
+  @Test
+  void expiredExecutionLeaseDoesNotBlockTheSessionAfterCoordinatorCrash() throws Exception {
+    Duration activeTtl = Duration.ofMillis(200);
+    RedisSessionExecutionCoordinator crashedCoordinator = coordinator(activeTtl);
+    RedisSessionExecutionCoordinator recoveringCoordinator = coordinator(activeTtl);
+    CountDownLatch started = new CountDownLatch(1);
+    try {
+      crashedCoordinator.track(
+              USER_ID,
+              SESSION_ID,
+              () -> Flux.<Integer>never().doOnSubscribe(ignored -> started.countDown()),
+              Mono::never)
+          .subscribe();
+      assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+      awaitValue(SESSION_PREFIX + ":active-count", "1");
+
+      crashedCoordinator.destroy();
+      Thread.sleep(activeTtl.plusMillis(100).toMillis());
+
+      assertThat(redisTemplate.hasKey(SESSION_PREFIX + ":execution-leases").block()).isTrue();
+      assertThat(recoveringCoordinator
+          .track(USER_ID, SESSION_ID, () -> Flux.just("recovered"))
+          .blockLast(Duration.ofSeconds(5))).isEqualTo("recovered");
+    } finally {
+      crashedCoordinator.destroy();
+      recoveringCoordinator.destroy();
+    }
+  }
+
+  @Test
+  void legacyPendingSetWithoutActiveCountDoesNotBlockTheSession() {
+    String pendingKey = SESSION_PREFIX + ":pending-completion";
+    redisTemplate.opsForSet().add(pendingKey, "orphaned-execution").block();
+    RedisSessionExecutionCoordinator recoveringCoordinator = coordinator();
+    try {
+      assertThat(recoveringCoordinator
+          .track(USER_ID, SESSION_ID, () -> Flux.just("recovered"))
+          .blockLast(Duration.ofSeconds(5))).isEqualTo("recovered");
+    } finally {
+      recoveringCoordinator.destroy();
+    }
+  }
+
+  @Test
+  void cancellationKeepsExecutionLeaseUntilUnderlyingCompletion() {
+    Duration activeTtl = Duration.ofMillis(200);
+    RedisSessionExecutionCoordinator coordinator =
+        coordinator(activeTtl, Duration.ofMillis(500));
+    Sinks.Empty<Void> completion = Sinks.empty();
+    try {
+      coordinator.track(USER_ID, SESSION_ID, Flux::<Integer>never, completion::asMono)
+          .subscribe();
+      awaitValue(SESSION_PREFIX + ":active-count", "1");
+
+      assertThatThrownBy(() -> coordinator.cancelAndAwait(USER_ID, SESSION_ID).block())
+          .isInstanceOfSatisfying(
+              ResponseStatusException.class,
+              error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+      completion.tryEmitEmpty();
+      coordinator.cancelAndAwait(USER_ID, SESSION_ID).block(Duration.ofSeconds(5));
+    } finally {
+      completion.tryEmitEmpty();
+      coordinator.destroy();
+    }
+  }
+
+  @Test
+  void newExecutionRemainsVisibleToLegacyPendingSet() {
+    RedisSessionExecutionCoordinator coordinator = coordinator();
+    Sinks.Empty<Void> completion = Sinks.empty();
+    String pendingKey = SESSION_PREFIX + ":pending-completion";
+    try {
+      coordinator.track(USER_ID, SESSION_ID, Flux::<Integer>never, completion::asMono)
+          .subscribe();
+      awaitValue(SESSION_PREFIX + ":active-count", "1");
+
+      assertThat(redisTemplate.opsForSet().isMember(pendingKey, "legacy-execution").block())
+          .isFalse();
+      assertThat(redisTemplate.opsForSet().size(pendingKey).block()).isEqualTo(1L);
+      assertThat(redisTemplate.opsForSet()
+          .add(pendingKey, "legacy-execution")
+          .block()).isEqualTo(1L);
+      assertThat(redisTemplate.opsForSet().size(pendingKey).block()).isEqualTo(2L);
+    } finally {
+      completion.tryEmitEmpty();
+      coordinator.destroy();
+    }
+  }
+
   private RedisSessionExecutionCoordinator coordinator() {
     return new RedisSessionExecutionCoordinator(redisTemplate, objectMapper);
+  }
+
+  private RedisSessionExecutionCoordinator coordinator(Duration activeTtl) {
+    return coordinator(activeTtl, Duration.ofSeconds(1));
+  }
+
+  private RedisSessionExecutionCoordinator coordinator(
+      Duration activeTtl, Duration waitTimeout) {
+    return new RedisSessionExecutionCoordinator(
+        redisTemplate,
+        new ReactiveRedisMessageListenerContainer(connectionFactory),
+        objectMapper,
+        activeTtl,
+        Duration.ofMillis(50),
+        Duration.ofMillis(50),
+        waitTimeout,
+        "myagent:agent-state:",
+        Duration.ofSeconds(1));
   }
 
   private void awaitCoordinatorSubscribers(long expected) {
