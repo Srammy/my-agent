@@ -41,6 +41,7 @@ class AgentScopeWorkspaceServiceTest {
 
   private static final CurrentUser ALICE = new CurrentUser(1L, "alice", "USER");
   private static final CurrentUser BOB   = new CurrentUser(2L, "bob",   "USER");
+  private static final int MEBIBYTE = 1024 * 1024;
 
   private AgentScopeWorkspaceService service;
 
@@ -115,6 +116,40 @@ class AgentScopeWorkspaceServiceTest {
             .isEqualTo(HttpStatus.CONFLICT));
   }
 
+  @Test
+  void createSkillRejectsMoreThan32Files() {
+    List<Part> parts = new ArrayList<>();
+    for (int index = 0; index < 33; index++) {
+      parts.add(fakeFilePart("assets/file-" + index + ".txt", new byte[0]));
+    }
+
+    assertPayloadTooLarge(() -> service.createSkill(ALICE, parts));
+  }
+
+  @Test
+  void createSkillRejectsFileLargerThanOneMebibyte() {
+    assertPayloadTooLarge(() -> service.createSkill(
+        ALICE,
+        List.of(fakeFilePart("assets/large.txt", new byte[MEBIBYTE + 1]))));
+  }
+
+  @Test
+  void createSkillRejectsMoreThanFiveMebibytesInTotal() {
+    List<Part> parts = new ArrayList<>();
+    for (int index = 0; index < 6; index++) {
+      parts.add(fakeFilePart("assets/file-" + index + ".txt", new byte[900 * 1024]));
+    }
+
+    assertPayloadTooLarge(() -> service.createSkill(ALICE, parts));
+  }
+
+  private static void assertPayloadTooLarge(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
+    assertThatThrownBy(call)
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+            .isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE));
+  }
+
   private static FilePart skillMdPart(String name, String description) {
     // SkillUtil.createFrom() requires non-empty body content after the YAML front matter
     String content = "---\nname: " + name + "\ndescription: " + description + "\n---\n\nSkill instructions.\n";
@@ -122,7 +157,10 @@ class AgentScopeWorkspaceServiceTest {
   }
 
   private static FilePart fakeFilePart(String filename, String content) {
-    byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+    return fakeFilePart(filename, content.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static FilePart fakeFilePart(String filename, byte[] bytes) {
     return new FilePart() {
       @Override public String name() { return filename; }
       @Override public HttpHeaders headers() { return new HttpHeaders(); }

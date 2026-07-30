@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
@@ -26,7 +27,7 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.reactive.function.BodyInserters;
 
 @WebFluxTest(SkillController.class)
-@Import(SkillControllerTest.TestSecurityConfig.class)
+@Import({SkillControllerTest.TestSecurityConfig.class, SkillUploadWebConfig.class})
 class SkillControllerTest {
 
   private static final CurrentUser USER = new CurrentUser(1L, "alice", "USER");
@@ -85,6 +86,51 @@ class SkillControllerTest {
         .jsonPath("$.description").isEqualTo("Java helper");
 
     verify(workspaceService).createSkill(eq(USER), any());
+  }
+
+  @Test
+  void postMineRejectsMoreThan32MultipartFiles() {
+    LinkedMultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
+    for (int index = 0; index < 33; index++) {
+      int fileIndex = index;
+      parts.add("file-" + index, new ByteArrayResource(new byte[0]) {
+        @Override
+        public String getFilename() {
+          return "assets/file-" + fileIndex + ".txt";
+        }
+      });
+    }
+
+    authenticatedClient()
+        .post()
+        .uri("/api/skills/mine")
+        .contentType(MediaType.MULTIPART_FORM_DATA)
+        .body(BodyInserters.fromMultipartData(parts))
+        .exchange()
+        .expectStatus().isEqualTo(413);
+
+    verifyNoInteractions(workspaceService);
+  }
+
+  @Test
+  void postMineRejectsMultipartFileLargerThanOneMebibyte() {
+    LinkedMultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
+    parts.add("large", new ByteArrayResource(new byte[1024 * 1024 + 1]) {
+      @Override
+      public String getFilename() {
+        return "assets/large.txt";
+      }
+    });
+
+    authenticatedClient()
+        .post()
+        .uri("/api/skills/mine")
+        .contentType(MediaType.MULTIPART_FORM_DATA)
+        .body(BodyInserters.fromMultipartData(parts))
+        .exchange()
+        .expectStatus().isEqualTo(413);
+
+    verifyNoInteractions(workspaceService);
   }
 
   private WebTestClient authenticatedClient() {

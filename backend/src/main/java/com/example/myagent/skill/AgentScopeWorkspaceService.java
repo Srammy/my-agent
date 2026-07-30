@@ -11,6 +11,9 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferLimitException;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.http.codec.multipart.Part;
@@ -23,6 +26,9 @@ public class AgentScopeWorkspaceService {
 
   private static final String SKILLS_DIR = "skills";
   private static final String WORKSPACE_SOURCE = "workspace";
+  static final int MAX_FILE_COUNT = 32;
+  static final int MAX_FILE_SIZE = 1024 * 1024;
+  private static final long MAX_TOTAL_SIZE = 5L * 1024 * 1024;
 
   private final AbstractFilesystem filesystem;
 
@@ -105,28 +111,48 @@ public class AgentScopeWorkspaceService {
 
   private static Map<String, byte[]> collectParts(List<Part> parts) {
     Map<String, byte[]> result = new LinkedHashMap<>();
+    int fileCount = 0;
+    long totalSize = 0;
     for (Part part : parts) {
       if (part instanceof FilePart filePart) {
         String filename = filePart.filename();
         if (StringUtils.hasText(filename)) {
-          byte[] content = filePart.content()
-              .map(buffer -> {
-                byte[] bytes = new byte[buffer.readableByteCount()];
-                buffer.read(bytes);
-                return bytes;
-              })
-              .reduce(new byte[0], (a, b) -> {
-                byte[] merged = new byte[a.length + b.length];
-                System.arraycopy(a, 0, merged, 0, a.length);
-                System.arraycopy(b, 0, merged, a.length, b.length);
-                return merged;
-              })
-              .block();
-          result.put(filename, content != null ? content : new byte[0]);
+          if (++fileCount > MAX_FILE_COUNT) {
+            throw payloadTooLarge("Skill upload contains too many files");
+          }
+          byte[] content = readFile(filePart);
+          totalSize += content.length;
+          if (totalSize > MAX_TOTAL_SIZE) {
+            throw payloadTooLarge("Skill upload is too large");
+          }
+          result.put(filename, content);
         }
       }
     }
     return result;
+  }
+
+  private static byte[] readFile(FilePart filePart) {
+    DataBuffer joined;
+    try {
+      joined = DataBufferUtils.join(filePart.content(), MAX_FILE_SIZE).block();
+    } catch (DataBufferLimitException e) {
+      throw payloadTooLarge("Skill file is too large");
+    }
+    if (joined == null) {
+      return new byte[0];
+    }
+    try {
+      byte[] content = new byte[joined.readableByteCount()];
+      joined.read(content);
+      return content;
+    } finally {
+      DataBufferUtils.release(joined);
+    }
+  }
+
+  private static ResponseStatusException payloadTooLarge(String reason) {
+    return new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, reason);
   }
 
   private static String validateSkillName(String name) {
