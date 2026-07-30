@@ -173,6 +173,29 @@ describe('ChatView session deletion', () => {
   })
 })
 
+describe('ChatView cross-session sending', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('disables the composer in session B while session A is streaming', async () => {
+    const wrapper = await mountView()
+    const sessions = useSessionsStore()
+    const chat = useChatStore()
+    sessions.sessions = [
+      session,
+      { ...session, id: 's2', title: 'Session 2' }
+    ]
+    sessions.currentSessionId = 's2'
+    chat.loadingSessionId = 's1'
+
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent({ name: 'Composer' }).props('disabled')).toBe(true)
+  })
+})
+
 describe('SessionSidebar deletion controls', () => {
   it('disables every delete button while one session is being deleted', () => {
     const wrapper = shallowMount(SessionSidebar, {
