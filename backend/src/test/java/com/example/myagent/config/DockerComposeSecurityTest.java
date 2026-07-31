@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class DockerComposeSecurityTest {
@@ -25,13 +26,13 @@ class DockerComposeSecurityTest {
 
   @Test
   void exampleEnvironmentDoesNotProvideUsableSecrets() throws IOException {
-    String example = Files.readString(projectRoot().resolve(".env.example"));
+    Path examplePath = projectRoot().resolve(".env.example");
+    List<String> lines = Files.readAllLines(examplePath);
+    String example = Files.readString(examplePath);
 
-    assertThat(example)
-        .contains("MYSQL_ROOT_PASSWORD=\n")
-        .contains("MYSQL_PASSWORD=\n")
-        .contains("REDIS_PASSWORD=\n")
-        .doesNotContain("change-me");
+    assertThat(lines)
+        .contains("MYSQL_ROOT_PASSWORD=", "MYSQL_PASSWORD=", "REDIS_PASSWORD=");
+    assertThat(example).doesNotContain("change-me");
   }
 
   @Test
