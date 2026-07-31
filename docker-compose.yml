@@ -3,24 +3,23 @@ services:
     image: mysql:8.4
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-myagent}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
     volumes:
       - mysql_data:/var/lib/mysql
       - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    ports:
-      - "3306:3306"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-change-me}"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p\"$$MYSQL_ROOT_PASSWORD\""]
       interval: 10s
       timeout: 5s
       retries: 10
 
   redis:
     image: redis:7
-    ports:
-      - "6379:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -30,7 +29,7 @@ services:
       context: ./backend
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SECURITY_JWT_SECRET: ${SECURITY_JWT_SECRET:-dev-only-change-me-to-a-long-random-secret}
+      SECURITY_JWT_SECRET: ${SECURITY_JWT_SECRET:?Set SECURITY_JWT_SECRET in .env}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       AGENT_SCOPE_ENABLED: ${AGENT_SCOPE_ENABLED:-false}
       AGENT_MODEL_PROVIDER: ${AGENT_MODEL_PROVIDER:-dashscope}
@@ -40,10 +39,12 @@ services:
       MYSQL_HOST: ${MYSQL_HOST:-mysql}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-myagent}
       MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_DATABASE: ${REDIS_DATABASE:-0}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      AGENT_STATE_STORE_REDIS_URI: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
     depends_on:
       mysql:
         condition: service_healthy

@@ -19,9 +19,9 @@ cp .env.example .env
 
 重要变量：
 
-- `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USERNAME`, `MYSQL_PASSWORD`：MySQL 配置。示例配置使用 root 用户和 `change-me`，仅适合本地开发。
-- `REDIS_HOST`, `REDIS_PORT`, `REDIS_DATABASE`：Redis 配置。
-- `SECURITY_JWT_SECRET`：后端必需配置。非本地开发环境请替换为足够长的随机密钥。
+- `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USERNAME`, `MYSQL_PASSWORD`：MySQL 配置。两个密码没有默认值，启动前必须设置为强随机值；使用 root 用户时两者应保持一致。
+- `REDIS_HOST`, `REDIS_PORT`, `REDIS_DATABASE`, `REDIS_PASSWORD`：Redis 配置。`REDIS_PASSWORD` 没有默认值，启动前必须设置为只含 URL 安全字符的强随机值。
+- `SECURITY_JWT_SECRET`：后端必需配置，没有默认值。启动前必须设置为足够长的随机密钥。
 - `AGENT_SCOPE_ENABLED`：默认值为 `false`。只有在模型凭证和运行时行为都准备好后，才设置为 `true`。
 - `DASHSCOPE_API_KEY`：默认模型提供方使用的 DashScope key。
 - `AGENT_MODEL_PROVIDER`：默认值为 `dashscope`。
@@ -33,10 +33,13 @@ cp .env.example .env
 ## Docker 启动
 
 ```bash
-cp .env.example .env && docker compose up -d
+cp .env.example .env
+# 编辑 .env，填写 MySQL、Redis 和 JWT 强随机密钥
+docker compose up -d
 ```
 
 前端发布在 `http://localhost:5173`，并将 `/api/` 请求代理到后端容器。后端监听 `http://localhost:8080`。
+MySQL 和 Redis 仅在 Compose 内部网络可用，不发布到宿主机端口。
 
 如果 UI 提示后端或模型配置错误，可以使用 `docker compose logs -f backend` 查看日志。
 
@@ -45,13 +48,16 @@ cp .env.example .env && docker compose up -d
 先启动本地 MySQL 和 Redis。默认后端本地配置要求：
 
 - MySQL：`localhost:3306`，数据库 `myagent`，用户 `root`，密码 `root`。
-- Redis：`localhost:6379`，数据库 `0`。
+- Redis：`localhost:6379`，数据库 `0`，并启用密码认证。
 
 然后运行：
 
 ```bash
 cd backend
 $env:SECURITY_JWT_SECRET="dev-only-change-me-to-a-long-random-secret"
+$env:MYSQL_PASSWORD="root"
+$env:REDIS_PASSWORD="your-local-redis-password"
+$env:AGENT_STATE_STORE_REDIS_URI="redis://:your-local-redis-password@localhost:6379"
 $env:AGENT_SCOPE_ENABLED="false"
 mvn spring-boot:run
 ```
