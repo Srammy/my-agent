@@ -1,13 +1,30 @@
 <script setup lang="ts">
+import { computed, nextTick, ref, watch } from 'vue'
 import type { ChatMessage } from '../stores/chat'
 import ToolEventCard from './ToolEventCard.vue'
 
-defineProps<{
+const NEAR_BOTTOM_THRESHOLD = 80
+
+const props = defineProps<{
   messages: ChatMessage[]
   loading: boolean
   hasSession: boolean
   sessionId: string
 }>()
+
+const transcript = ref<HTMLElement | null>(null)
+const isNearBottom = ref(true)
+
+const scrollSignature = computed(() =>
+  props.messages
+    .map((message) => [
+      message.id,
+      message.content.length,
+      message.events.length,
+      message.loading ? 1 : 0
+    ].join(':'))
+    .join('|')
+)
 
 function roleLabel(role: ChatMessage['role']) {
   if (role === 'user') {
@@ -24,10 +41,54 @@ function roleLabel(role: ChatMessage['role']) {
 
   return '系统'
 }
+
+function updateNearBottom() {
+  const element = transcript.value
+
+  if (!element) {
+    isNearBottom.value = true
+    return
+  }
+
+  const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+  isNearBottom.value = distance <= NEAR_BOTTOM_THRESHOLD
+}
+
+async function scrollToBottom() {
+  await nextTick()
+  const element = transcript.value
+
+  if (element) {
+    element.scrollTop = element.scrollHeight
+    updateNearBottom()
+  }
+}
+
+function handleScroll() {
+  updateNearBottom()
+}
+
+watch(
+  () => props.sessionId,
+  () => {
+    isNearBottom.value = true
+    scrollToBottom()
+  }
+)
+
+watch(
+  [scrollSignature, () => props.loading, () => props.hasSession],
+  () => {
+    if (isNearBottom.value) {
+      scrollToBottom()
+    }
+  },
+  { flush: 'post' }
+)
 </script>
 
 <template>
-  <section class="chat-transcript" aria-label="聊天记录">
+  <section ref="transcript" class="chat-transcript" aria-label="聊天记录" @scroll="handleScroll">
     <div v-if="!hasSession" class="chat-empty">
       <h1>创建会话后开始聊天</h1>
       <p>左侧新建一个会话，消息会以流式方式显示在这里。</p>

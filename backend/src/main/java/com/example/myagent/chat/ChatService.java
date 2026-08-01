@@ -8,10 +8,12 @@ import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ToolConfirmationClaim;
 import com.example.myagent.toolconfirmation.ToolConfirmationDecision;
 import com.example.myagent.toolconfirmation.ToolConfirmationService;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,7 @@ public class ChatService {
   private final PermissionService permissionService;
   private final ToolConfirmationService toolConfirmationService;
   private final SessionExecutionCoordinator sessionExecutionCoordinator;
+  private final ChatMessageService chatMessageService;
 
   public ChatService(
       SessionService sessionService,
@@ -35,11 +38,29 @@ public class ChatService {
       PermissionService permissionService,
       ToolConfirmationService toolConfirmationService,
       SessionExecutionCoordinator sessionExecutionCoordinator) {
+    this(
+        sessionService,
+        chatAgentGateway,
+        permissionService,
+        toolConfirmationService,
+        sessionExecutionCoordinator,
+        null);
+  }
+
+  @Autowired
+  public ChatService(
+      SessionService sessionService,
+      ChatAgentGateway chatAgentGateway,
+      PermissionService permissionService,
+      ToolConfirmationService toolConfirmationService,
+      SessionExecutionCoordinator sessionExecutionCoordinator,
+      ChatMessageService chatMessageService) {
     this.sessionService = sessionService;
     this.chatAgentGateway = chatAgentGateway;
     this.permissionService = permissionService;
     this.toolConfirmationService = toolConfirmationService;
     this.sessionExecutionCoordinator = sessionExecutionCoordinator;
+    this.chatMessageService = chatMessageService;
   }
 
   public Flux<StreamEventDto> stream(CurrentUser currentUser, String sessionId, String message) {
@@ -53,11 +74,64 @@ public class ChatService {
                   permissionService.getModeForOwnedSession(sessionId));
             })
         .subscribeOn(Schedulers.boundedElastic())
-        .flatMapMany(request -> Flux.defer(() -> {
-          AgentExecution<StreamEventDto> execution = chatAgentGateway.streamExecution(request);
-          return sessionExecutionCoordinator.track(
-              currentUser.id(), sessionId, execution::events, execution::completion);
-        }));
+        .flatMapMany(
+            request ->
+                Flux.defer(
+                    () -> {
+                      AgentExecution<StreamEventDto> execution =
+                          chatAgentGateway.streamExecution(request);
+                      Flux<StreamEventDto> tracked =
+                          sessionExecutionCoordinator.track(
+                              currentUser.id(), sessionId, execution::events, execution::completion);
+                      if (chatMessageService == null) {
+                        return tracked;
+                      }
+                      chatMessageService.createMessage(
+                          currentUser.id(),
+                          sessionId,
+                          "user",
+                          message == null ? "" : message.trim(),
+                          false);
+                      ChatMessageEntity assistantMessage =
+                          chatMessageService.createMessage(
+                              currentUser.id(), sessionId, "assistant", "", true);
+                      StringBuilder assistantContent = new StringBuilder();
+                      List<Map<String, Object>> assistantEvents = new ArrayList<>();
+                      AtomicBoolean finalized = new AtomicBoolean();
+                      return tracked.doOnNext(
+                              event ->
+                                  persistAssistantEvent(
+                                      currentUser.id(),
+                                      assistantMessage.getId(),
+                                      assistantContent,
+                                      assistantEvents,
+                                      finalized,
+                                      event))
+                          .doOnError(
+                              error -> {
+                                assistantEvents.add(
+                                    chatMessageService.toPersistedEvent(
+                                        StreamEventDto.error(errorMessage(error))));
+                                finalized.set(true);
+                                chatMessageService.updateAssistant(
+                                    currentUser.id(),
+                                    assistantMessage.getId(),
+                                    assistantContent.toString(),
+                                    assistantEvents,
+                                    false);
+                              })
+                          .doFinally(
+                              ignored -> {
+                                if (!finalized.get()) {
+                                  chatMessageService.updateAssistant(
+                                      currentUser.id(),
+                                      assistantMessage.getId(),
+                                      assistantContent.toString(),
+                                      assistantEvents,
+                                      false);
+                                }
+                              });
+                    }));
   }
 
   public Flux<StreamEventDto> confirm(
@@ -104,6 +178,16 @@ public class ChatService {
                   trustedDecisions);
               AtomicBoolean consumed = new AtomicBoolean();
               Flux<StreamEventDto> resumed = Flux.defer(() -> {
+                ChatMessageEntity assistantMessage =
+                    chatMessageService == null
+                        ? null
+                        : chatMessageService.latestAssistant(currentUser.id(), sessionId);
+                StringBuilder assistantContent = new StringBuilder(
+                    assistantMessage == null ? "" : assistantMessage.getContent());
+                List<Map<String, Object>> assistantEvents = assistantMessage == null
+                    ? new ArrayList<>()
+                    : new ArrayList<>(chatMessageService.readEvents(assistantMessage));
+                AtomicBoolean finalizedMessage = new AtomicBoolean();
                 AgentExecution<StreamEventDto> execution =
                     chatAgentGateway.confirmExecution(request);
                 return sessionExecutionCoordinator.track(
@@ -115,6 +199,27 @@ public class ChatService {
                     () -> execution.events().onErrorResume(
                         error -> Flux.just(StreamEventDto.error(errorMessage(error)))),
                     execution::completion)
+                    .doOnNext(event -> {
+                      if (assistantMessage != null) {
+                        persistAssistantEvent(
+                            currentUser.id(),
+                            assistantMessage.getId(),
+                            assistantContent,
+                            assistantEvents,
+                            finalizedMessage,
+                            event);
+                      }
+                    })
+                    .doFinally(ignored -> {
+                      if (assistantMessage != null && !finalizedMessage.get()) {
+                        chatMessageService.updateAssistant(
+                            currentUser.id(),
+                            assistantMessage.getId(),
+                            assistantContent.toString(),
+                            assistantEvents,
+                            false);
+                      }
+                    })
                     .concatWith(Flux.defer(() -> consumed.get()
                         ? Flux.empty()
                         : Flux.error(new IllegalStateException(
@@ -176,6 +281,44 @@ public class ChatService {
 
   private static String errorMessage(Throwable error) {
     return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+  }
+
+  private void persistAssistantEvent(
+      Long userId,
+      String messageId,
+      StringBuilder content,
+      List<Map<String, Object>> events,
+      AtomicBoolean finalized,
+      StreamEventDto event) {
+    if ("text_delta".equals(event.type())) {
+      Object delta = event.jsonFields().get("delta");
+      if (delta instanceof String text) {
+        content.append(text);
+      }
+      chatMessageService.updateAssistant(userId, messageId, content.toString(), events, true);
+      return;
+    }
+
+    if ("done".equals(event.type())) {
+      finalized.set(true);
+      chatMessageService.updateAssistant(userId, messageId, content.toString(), events, false);
+      return;
+    }
+
+    if (isPersistedToolEvent(event)) {
+      events.add(chatMessageService.toPersistedEvent(event));
+      finalized.set("error".equals(event.type()));
+      chatMessageService.updateAssistant(
+          userId, messageId, content.toString(), events, !"error".equals(event.type()));
+    }
+  }
+
+  private boolean isPersistedToolEvent(StreamEventDto event) {
+    return "tool_call".equals(event.type())
+        || "tool_result".equals(event.type())
+        || "permission_required".equals(event.type())
+        || "evolution_proposal".equals(event.type())
+        || "error".equals(event.type());
   }
 
   private static final class ToolConfirmationRetryableException

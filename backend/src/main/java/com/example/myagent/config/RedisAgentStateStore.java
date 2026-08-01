@@ -12,35 +12,35 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 class RedisAgentStateStore implements AgentStateStore {
 
   private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-  private final ReactiveStringRedisTemplate redisTemplate;
+  private final StringRedisTemplate redisTemplate;
   private final String keyPrefix;
 
-  RedisAgentStateStore(ReactiveStringRedisTemplate redisTemplate, String keyPrefix) {
+  RedisAgentStateStore(StringRedisTemplate redisTemplate, String keyPrefix) {
     this.redisTemplate = redisTemplate;
     this.keyPrefix = keyPrefix;
   }
 
   @Override
   public void save(String agentId, String sessionId, String stateKey, State state) {
-    redisTemplate.opsForValue().set(key(agentId, sessionId, stateKey), serializeState(state)).block();
+    redisTemplate.opsForValue().set(key(agentId, sessionId, stateKey), serializeState(state));
   }
 
   @Override
   public void save(String agentId, String sessionId, String stateKey, List<? extends State> states) {
     List<String> serializedStates = states.stream().map(this::serializeState).toList();
-    redisTemplate.opsForValue().set(key(agentId, sessionId, stateKey), writeJson(serializedStates)).block();
+    redisTemplate.opsForValue().set(key(agentId, sessionId, stateKey), writeJson(serializedStates));
   }
 
   @Override
   public <T extends State> Optional<T> get(
       String agentId, String sessionId, String stateKey, Class<T> stateType) {
-    String value = redisTemplate.opsForValue().get(key(agentId, sessionId, stateKey)).block();
+    String value = redisTemplate.opsForValue().get(key(agentId, sessionId, stateKey));
     if (value == null) {
       return Optional.empty();
     }
@@ -50,7 +50,7 @@ class RedisAgentStateStore implements AgentStateStore {
   @Override
   public <T extends State> List<T> getList(
       String agentId, String sessionId, String stateKey, Class<T> stateType) {
-    String value = redisTemplate.opsForValue().get(key(agentId, sessionId, stateKey)).block();
+    String value = redisTemplate.opsForValue().get(key(agentId, sessionId, stateKey));
     if (value == null) {
       return List.of();
     }
@@ -67,13 +67,12 @@ class RedisAgentStateStore implements AgentStateStore {
   @Override
   public void delete(String agentId, String sessionId) {
     redisTemplate
-        .delete(reactor.core.publisher.Flux.fromIterable(keysByPrefix(sessionPrefix(agentId, sessionId))))
-        .block();
+        .delete(keysByPrefix(sessionPrefix(agentId, sessionId)));
   }
 
   @Override
   public void delete(String agentId, String sessionId, String stateKey) {
-    redisTemplate.delete(key(agentId, sessionId, stateKey)).block();
+    redisTemplate.delete(key(agentId, sessionId, stateKey));
   }
 
   @Override
@@ -94,7 +93,8 @@ class RedisAgentStateStore implements AgentStateStore {
   }
 
   private List<String> keysByPrefix(String prefix) {
-    return redisTemplate.scan().filter(key -> key.startsWith(prefix)).collectList().block();
+    Set<String> keys = redisTemplate.keys(prefix + "*");
+    return keys == null ? List.of() : List.copyOf(keys);
   }
 
   private String serializeState(State state) {

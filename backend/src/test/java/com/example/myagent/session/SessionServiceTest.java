@@ -3,10 +3,12 @@ package com.example.myagent.session;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.myagent.auth.CurrentUser;
+import com.example.myagent.chat.ChatMessageMapper;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,13 +28,14 @@ class SessionServiceTest {
   private static final CurrentUser USER_A = new CurrentUser(1L, "alice", "USER");
 
   @Mock private ChatSessionMapper chatSessionMapper;
+  @Mock private ChatMessageMapper chatMessageMapper;
   @Mock private SessionExecutionCoordinator sessionExecutionCoordinator;
 
   private SessionService sessionService;
 
   @BeforeEach
   void setUp() {
-    sessionService = new SessionService(chatSessionMapper, sessionExecutionCoordinator);
+    sessionService = new SessionService(chatSessionMapper, chatMessageMapper, sessionExecutionCoordinator);
   }
 
   @Test
@@ -96,6 +99,7 @@ class SessionServiceTest {
     sessionService.deleteSession(USER_A, "s_a").block();
 
     verify(sessionExecutionCoordinator).cancelAndAwait(USER_A.id(), "s_a");
+    verify(chatMessageMapper).deleteByOwnedSession(USER_A.id(), "s_a");
     verify(chatSessionMapper).deleteOwnedById(USER_A.id(), "s_a");
   }
 
@@ -131,5 +135,57 @@ class SessionServiceTest {
 
     verify(chatSessionMapper, org.mockito.Mockito.never())
         .deleteOwnedById(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString());
+  }
+
+  @Test
+  void renameSessionUpdatesOnlyCurrentUsersSession() {
+    LocalDateTime createdAt = LocalDateTime.parse("2026-07-18T09:30:00");
+    ChatSessionEntity existing =
+        new ChatSessionEntity("s_a", USER_A.id(), "Old title", createdAt, createdAt);
+    when(chatSessionMapper.findOwnedById(USER_A.id(), "s_a")).thenReturn(existing);
+    when(chatSessionMapper.updateTitleOwnedById(eq(USER_A.id()), eq("s_a"), eq("New title"), any()))
+        .thenReturn(1);
+    when(chatSessionMapper.findOwnedById(USER_A.id(), "s_a"))
+        .thenReturn(existing)
+        .thenReturn(new ChatSessionEntity("s_a", USER_A.id(), "New title", createdAt, createdAt.plusMinutes(1)));
+
+    ChatSessionEntity renamed = sessionService.renameSession(USER_A, "s_a", " New title ");
+
+    assertThat(renamed.getTitle()).isEqualTo("New title");
+    verify(chatSessionMapper).updateTitleOwnedById(eq(USER_A.id()), eq("s_a"), eq("New title"), any());
+  }
+
+  @Test
+  void renameSessionUsesDefaultTitleForBlankInput() {
+    ChatSessionEntity existing =
+        new ChatSessionEntity("s_a", USER_A.id(), "Old title", LocalDateTime.now(), LocalDateTime.now());
+    when(chatSessionMapper.findOwnedById(USER_A.id(), "s_a")).thenReturn(existing);
+    when(chatSessionMapper.updateTitleOwnedById(eq(USER_A.id()), eq("s_a"), eq("\u65b0\u4f1a\u8bdd"), any()))
+        .thenReturn(1);
+    when(chatSessionMapper.findOwnedById(USER_A.id(), "s_a"))
+        .thenReturn(existing)
+        .thenReturn(new ChatSessionEntity("s_a", USER_A.id(), "\u65b0\u4f1a\u8bdd", existing.getCreatedAt(), LocalDateTime.now()));
+
+    ChatSessionEntity renamed = sessionService.renameSession(USER_A, "s_a", "   ");
+
+    assertThat(renamed.getTitle()).isEqualTo("\u65b0\u4f1a\u8bdd");
+  }
+
+  @Test
+  void renameSessionRejectsOtherUsersSession() {
+    when(chatSessionMapper.findOwnedById(USER_A.id(), "s_b")).thenReturn(null);
+
+    assertThatThrownBy(() -> sessionService.renameSession(USER_A, "s_b", "New title"))
+        .isInstanceOf(ResponseStatusException.class)
+        .satisfies(
+            error ->
+                assertThat(((ResponseStatusException) error).getStatusCode())
+                    .isEqualTo(HttpStatus.NOT_FOUND));
+    verify(chatSessionMapper, org.mockito.Mockito.never())
+        .updateTitleOwnedById(
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.any());
   }
 }

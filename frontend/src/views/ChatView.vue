@@ -28,6 +28,9 @@ watch(
   (sessionId) => {
     if (sessionId) {
       chat.useSession(sessionId)
+      chat.loadMessages(sessionId).catch(() => {
+        // The chat store exposes the load error in the page-level error banner.
+      })
     }
   },
   { immediate: true }
@@ -62,6 +65,10 @@ async function deleteSession(sessionId: string) {
   }
 }
 
+async function renameSession(sessionId: string, title: string) {
+  await sessions.renameSession(sessionId, title)
+}
+
 async function sendMessage(message: string) {
   let sessionId = currentSessionId.value
 
@@ -88,9 +95,6 @@ async function logout() {
         <span>{{ auth.user?.username }}</span>
       </div>
       <div class="chat-topbar__actions">
-        <span v-if="sessions.currentSession" class="chat-topbar__session">
-          {{ sessions.currentSession.title || '新会话' }}
-        </span>
         <el-button @click="logout">退出登录</el-button>
       </div>
     </header>
@@ -101,10 +105,12 @@ async function logout() {
         :current-session-id="currentSessionId"
         :loading="sessions.loading"
         :deleting-session-id="sessions.deletingSessionId"
+        :renaming-session-id="sessions.renamingSessionId"
         :cancelling-session-ids="chat.cancellingSessionIds"
         @create="createSession"
         @select="selectSession"
         @delete="deleteSession"
+        @rename="renameSession"
       />
 
       <div class="chat-main">

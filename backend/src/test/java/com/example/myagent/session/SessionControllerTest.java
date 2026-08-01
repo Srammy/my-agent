@@ -189,6 +189,50 @@ class SessionControllerTest {
     verify(sessionService).deleteSession(USER, "s_123");
   }
 
+  @Test
+  void putSessionRenamesCurrentUsersSessionAndReturnsDto() {
+    ChatSessionEntity renamed =
+        new ChatSessionEntity("s_123", USER.id(), "Renamed", CREATED_AT, UPDATED_AT.plusMinutes(1));
+    when(sessionService.renameSession(USER, "s_123", "Renamed")).thenReturn(renamed);
+
+    authenticatedClient()
+        .put()
+        .uri("/api/chat/sessions/s_123")
+        .contentType(MediaType.APPLICATION_JSON)
+        .bodyValue("{\"title\":\"Renamed\",\"userId\":999}")
+        .exchange()
+        .expectStatus()
+        .isOk()
+        .expectHeader()
+        .contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+        .expectBody()
+        .jsonPath("$.id")
+        .isEqualTo("s_123")
+        .jsonPath("$.title")
+        .isEqualTo("Renamed")
+        .jsonPath("$.userId")
+        .doesNotExist();
+
+    verify(sessionService).renameSession(USER, "s_123", "Renamed");
+  }
+
+  @Test
+  void putSessionMapsMissingTo404() {
+    when(sessionService.renameSession(USER, "missing", "Renamed"))
+        .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"));
+
+    authenticatedClient()
+        .put()
+        .uri("/api/chat/sessions/missing")
+        .contentType(MediaType.APPLICATION_JSON)
+        .bodyValue("{\"title\":\"Renamed\"}")
+        .exchange()
+        .expectStatus()
+        .isNotFound();
+
+    verify(sessionService).renameSession(USER, "missing", "Renamed");
+  }
+
   private WebTestClient authenticatedClient() {
     return webTestClient.mutateWith(
         mockAuthentication(new TestingAuthenticationToken(USER, null, "ROLE_USER")));

@@ -60,6 +60,7 @@ class ChatControllerTest {
   @MockBean private PermissionService permissionService;
   @MockBean private ToolConfirmationService toolConfirmationService;
   @MockBean private SessionExecutionCoordinator sessionExecutionCoordinator;
+  @MockBean private ChatMessageService chatMessageService;
 
   @BeforeEach
   @SuppressWarnings("unchecked")
@@ -74,6 +75,62 @@ class ChatControllerTest {
           Supplier<Flux<StreamEventDto>> source = invocation.getArgument(3);
           return Mono.defer(preflight).thenMany(Flux.defer(source));
         });
+    when(chatMessageService.createMessage(
+            anyLong(),
+            anyString(),
+            anyString(),
+            anyString(),
+            org.mockito.ArgumentMatchers.anyBoolean()))
+        .thenAnswer(invocation -> new ChatMessageEntity(
+            "assistant".equals(invocation.getArgument(2)) ? "m_assistant" : "m_user",
+            invocation.getArgument(1),
+            invocation.getArgument(0),
+            invocation.getArgument(2),
+            invocation.getArgument(3),
+            "[]",
+            invocation.getArgument(4),
+            CREATED_AT,
+            UPDATED_AT));
+  }
+
+  @Test
+  void getMessagesReturnsOwnedSessionMessages() {
+    when(chatMessageService.listMessages(USER, "s_123"))
+        .thenReturn(List.of(new ChatMessageDto(
+            "m_1", "user", "hello", List.of(), false, CREATED_AT, UPDATED_AT)));
+
+    authenticatedClient()
+        .get()
+        .uri("/api/chat/sessions/s_123/messages")
+        .exchange()
+        .expectStatus()
+        .isOk()
+        .expectBody()
+        .jsonPath("$[0].id")
+        .isEqualTo("m_1")
+        .jsonPath("$[0].role")
+        .isEqualTo("user")
+        .jsonPath("$[0].content")
+        .isEqualTo("hello")
+        .jsonPath("$[0].events")
+        .isArray()
+        .jsonPath("$[0].loading")
+        .isEqualTo(false);
+
+    verify(chatMessageService).listMessages(USER, "s_123");
+  }
+
+  @Test
+  void getMessagesMapsMissingSessionTo404() {
+    when(chatMessageService.listMessages(USER, "missing"))
+        .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"));
+
+    authenticatedClient()
+        .get()
+        .uri("/api/chat/sessions/missing/messages")
+        .exchange()
+        .expectStatus()
+        .isNotFound();
   }
 
   @Test

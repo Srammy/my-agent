@@ -10,7 +10,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import java.util.Set;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 
 class RedisBaseStore implements BaseStore {
@@ -37,17 +38,17 @@ class RedisBaseStore implements BaseStore {
           """,
           Long.class);
 
-  private final ReactiveStringRedisTemplate redisTemplate;
+  private final StringRedisTemplate redisTemplate;
   private final String keyPrefix;
 
-  RedisBaseStore(ReactiveStringRedisTemplate redisTemplate, String keyPrefix) {
+  RedisBaseStore(StringRedisTemplate redisTemplate, String keyPrefix) {
     this.redisTemplate = redisTemplate;
     this.keyPrefix = keyPrefix;
   }
 
   @Override
   public StoreItem get(List<String> namespace, String key) {
-    String value = redisTemplate.opsForValue().get(redisKey(namespace, key)).block();
+    String value = redisTemplate.opsForValue().get(redisKey(namespace, key));
     if (value == null) {
       return null;
     }
@@ -59,27 +60,25 @@ class RedisBaseStore implements BaseStore {
   public void put(List<String> namespace, String key, Map<String, Object> value) {
     StoreItem current = get(namespace, key);
     long nextVersion = current == null ? 1 : current.version() + 1;
-    redisTemplate.opsForValue().set(redisKey(namespace, key), writeJson(new StoredItem(value, nextVersion))).block();
+    redisTemplate.opsForValue().set(redisKey(namespace, key), writeJson(new StoredItem(value, nextVersion)));
   }
 
   @Override
   public boolean putIfVersion(
       List<String> namespace, String key, Map<String, Object> value, long version) {
     Long result =
-        redisTemplate
-            .execute(
-                PUT_IF_VERSION_SCRIPT,
-                List.of(redisKey(namespace, key)),
-                List.of(String.valueOf(version), writeJson(new StoredItem(value, version + 1))))
-            .single(0L)
-            .block();
+        redisTemplate.execute(
+            PUT_IF_VERSION_SCRIPT,
+            List.of(redisKey(namespace, key)),
+            String.valueOf(version),
+            writeJson(new StoredItem(value, version + 1)));
     return Long.valueOf(1L).equals(result);
   }
 
   @Override
   public List<StoreItem> search(List<String> namespace, int limit, int offset) {
-    List<String> keys =
-        redisTemplate.keys(namespacePrefix(namespace) + "*").collectList().block();
+    Set<String> redisKeys = redisTemplate.keys(namespacePrefix(namespace) + "*");
+    List<String> keys = redisKeys == null ? List.of() : List.copyOf(redisKeys);
     if (keys == null || keys.isEmpty()) {
       return List.of();
     }
@@ -94,11 +93,11 @@ class RedisBaseStore implements BaseStore {
 
   @Override
   public void delete(List<String> namespace, String key) {
-    redisTemplate.delete(redisKey(namespace, key)).block();
+    redisTemplate.delete(redisKey(namespace, key));
   }
 
   private StoreItem toStoreItem(String redisKey) {
-    String value = redisTemplate.opsForValue().get(redisKey).block();
+    String value = redisTemplate.opsForValue().get(redisKey);
     if (value == null) {
       return null;
     }

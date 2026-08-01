@@ -1,7 +1,7 @@
 package com.example.myagent.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -16,17 +16,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
-import org.springframework.data.redis.core.ReactiveValueOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 @ExtendWith(MockitoExtension.class)
 class RedisBaseStoreTest {
 
-  @Mock private ReactiveStringRedisTemplate redisTemplate;
-  @Mock private ReactiveValueOperations<String, String> valueOperations;
+  @Mock private StringRedisTemplate redisTemplate;
+  @Mock private ValueOperations<String, String> valueOperations;
 
   @Test
   void searchTreatsSecondArgumentAsLimitAndThirdArgumentAsOffset() {
@@ -37,11 +35,11 @@ class RedisBaseStoreTest {
     String keyC = namespacePrefix + encode("c.txt");
 
     when(redisTemplate.keys(namespacePrefix + "*"))
-        .thenReturn(Flux.just(keyC, keyA, keyB));
+        .thenReturn(java.util.Set.of(keyC, keyA, keyB));
     when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-    when(valueOperations.get(keyA)).thenReturn(Mono.just(itemJson("A", 1)));
-    when(valueOperations.get(keyB)).thenReturn(Mono.just(itemJson("B", 2)));
-    when(valueOperations.get(keyC)).thenReturn(Mono.just(itemJson("C", 3)));
+    when(valueOperations.get(keyA)).thenReturn(itemJson("A", 1));
+    when(valueOperations.get(keyB)).thenReturn(itemJson("B", 2));
+    when(valueOperations.get(keyC)).thenReturn(itemJson("C", 3));
 
     List<StoreItem> result = store.search(List.of("workspace"), 2, 1);
 
@@ -57,10 +55,10 @@ class RedisBaseStoreTest {
     String deletedKey = namespacePrefix + encode("deleted.txt");
 
     when(redisTemplate.keys(namespacePrefix + "*"))
-        .thenReturn(Flux.just(existingKey, deletedKey));
+        .thenReturn(java.util.Set.of(existingKey, deletedKey));
     when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-    when(valueOperations.get(existingKey)).thenReturn(Mono.just(itemJson("existing", 1)));
-    when(valueOperations.get(deletedKey)).thenReturn(Mono.empty());
+    when(valueOperations.get(existingKey)).thenReturn(itemJson("existing", 1));
+    when(valueOperations.get(deletedKey)).thenReturn(null);
 
     List<StoreItem> result = store.search(List.of("workspace"), 10, 0);
 
@@ -73,21 +71,21 @@ class RedisBaseStoreTest {
     when(redisTemplate.execute(
             org.mockito.ArgumentMatchers.<RedisScript<Long>>any(),
             eq(List.of("prefix:" + encode("workspace") + ":" + encode("new.txt"))),
-            anyList()))
-        .thenReturn(Flux.just(1L));
+            eq("0"),
+            any(String.class)))
+        .thenReturn(1L);
 
     boolean updated = store.putIfVersion(List.of("workspace"), "new.txt", Map.of("body", "hello"), 0);
 
     assertThat(updated).isTrue();
-    @SuppressWarnings("unchecked")
-    ArgumentCaptor<List<Object>> argsCaptor = ArgumentCaptor.forClass(List.class);
+    ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
     verify(redisTemplate)
         .execute(
             org.mockito.ArgumentMatchers.<RedisScript<Long>>any(),
             eq(List.of("prefix:" + encode("workspace") + ":" + encode("new.txt"))),
-            argsCaptor.capture());
-    assertThat(argsCaptor.getValue().get(0)).isEqualTo("0");
-    assertThat((String) argsCaptor.getValue().get(1)).contains("\"version\":1");
+            eq("0"),
+            payloadCaptor.capture());
+    assertThat(payloadCaptor.getValue()).contains("\"version\":1");
   }
 
   @Test
@@ -96,8 +94,9 @@ class RedisBaseStoreTest {
     when(redisTemplate.execute(
             org.mockito.ArgumentMatchers.<RedisScript<Long>>any(),
             eq(List.of("prefix:" + encode("workspace") + ":" + encode("new.txt"))),
-            anyList()))
-        .thenReturn(Flux.just(0L));
+            eq("7"),
+            any(String.class)))
+        .thenReturn(0L);
 
     boolean updated = store.putIfVersion(List.of("workspace"), "new.txt", Map.of("body", "hello"), 7);
 

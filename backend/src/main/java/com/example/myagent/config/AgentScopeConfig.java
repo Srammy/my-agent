@@ -50,7 +50,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
@@ -111,7 +111,7 @@ public class AgentScopeConfig {
   AgentScopeStreamExecutor agentScopeStreamExecutor(
       Model agentScopeModel,
       AgentProperties agentProperties,
-      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider,
+      ObjectProvider<StringRedisTemplate> redisTemplateProvider,
       UserScopedFilesystemFactory filesystemFactory,
       WebApprovalGate webApprovalGate) {
     return new AgentScopeStreamExecutor() {
@@ -295,7 +295,7 @@ public class AgentScopeConfig {
   @Bean
   BaseStore workspaceBaseStore(
       AgentProperties agentProperties,
-      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
+      ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
     return buildBaseStore(agentProperties, redisTemplateProvider);
   }
 
@@ -381,7 +381,7 @@ public class AgentScopeConfig {
   HarnessAgent buildHarnessAgent(
       Model agentScopeModel,
       AgentProperties agentProperties,
-      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider,
+      ObjectProvider<StringRedisTemplate> redisTemplateProvider,
       AgentRequestScope requestScope,
       UserScopedFilesystemFactory filesystemFactory,
       WebApprovalGate webApprovalGate) {
@@ -460,7 +460,7 @@ public class AgentScopeConfig {
   void applyDistributedStore(
       HarnessAgent.Builder builder,
       AgentProperties agentProperties,
-      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
+      ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
     builder.distributedStore(DistributedStore.builder()
             .agentStateStore(buildAgentStateStore(agentProperties, redisTemplateProvider))
             .baseStore(buildBaseStore(agentProperties, redisTemplateProvider))
@@ -524,8 +524,8 @@ public class AgentScopeConfig {
 
   AgentStateStore buildAgentStateStore(
       AgentProperties agentProperties,
-      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
-    ReactiveStringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
+      ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+    StringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
     if (redisTemplate == null || !"redis".equalsIgnoreCase(agentProperties.stateStore().type())) {
       throw new IllegalStateException(
           "Distributed deployment requires agent.state-store.type=redis and a Redis bean");
@@ -535,8 +535,8 @@ public class AgentScopeConfig {
 
   BaseStore buildBaseStore(
       AgentProperties agentProperties,
-      ObjectProvider<ReactiveStringRedisTemplate> redisTemplateProvider) {
-    ReactiveStringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
+      ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+    StringRedisTemplate redisTemplate = redisTemplateProvider.getIfAvailable();
     if (redisTemplate == null || !"redis".equalsIgnoreCase(agentProperties.stateStore().type())) {
       throw new IllegalStateException(
           "Distributed deployment requires agent.state-store.type=redis and a Redis bean");
@@ -583,9 +583,9 @@ public class AgentScopeConfig {
     String configuredName = modelProperties.name();
     String providerPrefix = modelProperties.provider().toLowerCase(Locale.ROOT) + ":";
     if (configuredName.toLowerCase(Locale.ROOT).startsWith(providerPrefix)) {
-      return configuredName;
+      return configuredName.substring(providerPrefix.length());
     }
-    return modelProperties.provider() + ":" + configuredName;
+    return configuredName;
   }
 
   record AgentToolPolicy(

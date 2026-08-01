@@ -22,6 +22,7 @@ const session: chatApi.ChatSession = {
 
 async function mountView() {
   vi.spyOn(chatApi, 'listSessions').mockResolvedValue([])
+  vi.spyOn(chatApi, 'listMessages').mockResolvedValue([])
   const wrapper = shallowMount(ChatView, {
     global: {
       stubs: {
@@ -196,6 +197,51 @@ describe('ChatView cross-session sending', () => {
   })
 })
 
+describe('ChatView persisted messages', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('loads messages when a current session becomes active', async () => {
+    const wrapper = await mountView()
+    const sessions = useSessionsStore()
+    const listMessages = vi.mocked(chatApi.listMessages)
+    listMessages.mockResolvedValue([
+      {
+        id: 'm1',
+        role: 'user',
+        content: 'hello again',
+        events: [],
+        loading: false,
+        createdAt: '2026-07-18T00:00:00Z',
+        updatedAt: '2026-07-18T00:00:00Z'
+      }
+    ])
+
+    sessions.currentSessionId = 's1'
+    await wrapper.vm.$nextTick()
+
+    await vi.waitFor(() => expect(listMessages).toHaveBeenCalledWith('s1'))
+    expect(useChatStore().messages('s1')[0].content).toBe('hello again')
+  })
+
+  it('loads messages when switching sessions', async () => {
+    const wrapper = await mountView()
+    const sessions = useSessionsStore()
+    const listMessages = vi.mocked(chatApi.listMessages)
+
+    sessions.currentSessionId = 's1'
+    await wrapper.vm.$nextTick()
+    await vi.waitFor(() => expect(listMessages).toHaveBeenCalledWith('s1'))
+
+    sessions.currentSessionId = 's2'
+    await wrapper.vm.$nextTick()
+
+    await vi.waitFor(() => expect(listMessages).toHaveBeenCalledWith('s2'))
+  })
+})
+
 describe('SessionSidebar deletion controls', () => {
   it('disables every delete button while one session is being deleted', () => {
     const wrapper = shallowMount(SessionSidebar, {
@@ -207,6 +253,7 @@ describe('SessionSidebar deletion controls', () => {
         currentSessionId: 's1',
         loading: false,
         deletingSessionId: 's1',
+        renamingSessionId: '',
         cancellingSessionIds: {}
       },
       global: {
@@ -221,7 +268,7 @@ describe('SessionSidebar deletion controls', () => {
     })
 
     const deleteButtons = wrapper.findAllComponents({ name: 'ElButton' })
-    expect(deleteButtons).toHaveLength(3)
+    expect(deleteButtons).toHaveLength(5)
     expect(deleteButtons.slice(1).every((button) => button.props('disabled') === true)).toBe(true)
   })
 })

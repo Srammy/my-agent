@@ -670,3 +670,72 @@ describe('chat confirmation streams', () => {
     expect(store.isCancellingSession('s1')).toBe(false)
   })
 })
+
+describe('chat persisted messages', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  it('loads persisted messages into the session state', async () => {
+    vi.spyOn(chatApi, 'listMessages').mockResolvedValue([
+      {
+        id: 'm_user',
+        role: 'user',
+        content: 'hello',
+        events: [],
+        loading: false,
+        createdAt: '2026-07-18T00:00:00Z',
+        updatedAt: '2026-07-18T00:00:00Z'
+      },
+      {
+        id: 'm_assistant',
+        role: 'assistant',
+        content: 'hi',
+        events: [{ id: 'event_1', type: 'tool_call', tool: 'read_file' }],
+        loading: false,
+        createdAt: '2026-07-18T00:00:01Z',
+        updatedAt: '2026-07-18T00:00:01Z'
+      }
+    ])
+    const store = useChatStore()
+
+    await store.loadMessages('s1')
+
+    expect(chatApi.listMessages).toHaveBeenCalledWith('s1')
+    expect(store.messages('s1')).toMatchObject([
+      { id: 'm_user', role: 'user', content: 'hello', events: [] },
+      {
+        id: 'm_assistant',
+        role: 'assistant',
+        content: 'hi',
+        events: [{ id: 'event_1', type: 'tool_call', tool: 'read_file' }]
+      }
+    ])
+    expect(store.loadedMessagesBySession.s1).toBe(true)
+  })
+
+  it('keeps existing messages and exposes an error when loading fails', async () => {
+    vi.spyOn(chatApi, 'listMessages').mockRejectedValue(new Error('Session not found'))
+    const store = useChatStore()
+    store.messagesBySession.s1 = [{ id: 'local', role: 'user', content: 'draft', events: [] }]
+
+    await store.loadMessages('s2').catch(() => undefined)
+
+    expect(store.messages('s1')).toEqual([{ id: 'local', role: 'user', content: 'draft', events: [] }])
+    expect(store.error).toBe('Session not found')
+    expect(store.loadingMessagesBySession.s2).toBeUndefined()
+  })
+
+  it('does not reload a session that already has in-memory messages', async () => {
+    const listMessagesMock = vi.spyOn(chatApi, 'listMessages')
+    const store = useChatStore()
+    store.messagesBySession.s1 = [{ id: 'local', role: 'user', content: 'draft', events: [] }]
+
+    await store.loadMessages('s1')
+
+    expect(listMessagesMock).not.toHaveBeenCalled()
+    expect(store.messages('s1')).toEqual([{ id: 'local', role: 'user', content: 'draft', events: [] }])
+  })
+})

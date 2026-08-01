@@ -4,6 +4,7 @@ import com.example.myagent.auth.CurrentUser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
+import java.util.List;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -22,11 +23,20 @@ public class ChatController {
   private static final MediaType NDJSON = MediaType.parseMediaType("application/x-ndjson");
 
   private final ChatService chatService;
+  private final ChatMessageService chatMessageService;
   private final ObjectMapper objectMapper;
 
-  public ChatController(ChatService chatService, ObjectMapper objectMapper) {
+  public ChatController(
+      ChatService chatService, ChatMessageService chatMessageService, ObjectMapper objectMapper) {
     this.chatService = chatService;
+    this.chatMessageService = chatMessageService;
     this.objectMapper = objectMapper;
+  }
+
+  @org.springframework.web.bind.annotation.GetMapping("/{sessionId}/messages")
+  public List<ChatMessageDto> messages(
+      @AuthenticationPrincipal CurrentUser currentUser, @PathVariable String sessionId) {
+    return chatMessageService.listMessages(currentUser, sessionId);
   }
 
   @PostMapping(path = "/{sessionId}/stream", produces = "application/x-ndjson")

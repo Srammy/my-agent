@@ -1,8 +1,26 @@
-import { apiDelete, apiGet, apiPost, TOKEN_KEY } from './client'
+import { apiDelete, apiGet, apiPost, apiPut, TOKEN_KEY } from './client'
 
 export interface ChatSession {
   id: string
   title: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type ChatRole = 'user' | 'assistant' | 'system' | 'tool'
+
+export interface PersistedToolEvent {
+  id: string
+  type: string
+  [key: string]: unknown
+}
+
+export interface PersistedChatMessage {
+  id: string
+  role: ChatRole
+  content: string
+  events: PersistedToolEvent[]
+  loading: boolean
   createdAt: string
   updatedAt: string
 }
@@ -67,6 +85,16 @@ export function createSession(title?: string) {
 
 export function deleteSession(sessionId: string) {
   return apiDelete<null>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`)
+}
+
+export function renameSession(sessionId: string, title: string) {
+  return apiPut<ChatSession>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { title })
+}
+
+export function listMessages(sessionId: string) {
+  return apiGet<PersistedChatMessage[]>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`
+  )
 }
 
 export function createNdjsonParser(onEvent: (event: StreamEvent) => void) {

@@ -1,9 +1,11 @@
 package com.example.myagent.session;
 
 import com.example.myagent.auth.CurrentUser;
+import com.example.myagent.chat.ChatMessageMapper;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -18,12 +20,22 @@ public class SessionService {
   private static final int TITLE_MAX_LENGTH = 120;
 
   private final ChatSessionMapper chatSessionMapper;
+  private final ChatMessageMapper chatMessageMapper;
   private final SessionExecutionCoordinator sessionExecutionCoordinator;
 
   public SessionService(
       ChatSessionMapper chatSessionMapper,
       SessionExecutionCoordinator sessionExecutionCoordinator) {
+    this(chatSessionMapper, null, sessionExecutionCoordinator);
+  }
+
+  @Autowired
+  public SessionService(
+      ChatSessionMapper chatSessionMapper,
+      ChatMessageMapper chatMessageMapper,
+      SessionExecutionCoordinator sessionExecutionCoordinator) {
     this.chatSessionMapper = chatSessionMapper;
+    this.chatMessageMapper = chatMessageMapper;
     this.sessionExecutionCoordinator = sessionExecutionCoordinator;
   }
 
@@ -51,6 +63,17 @@ public class SessionService {
     return session;
   }
 
+  public ChatSessionEntity renameSession(CurrentUser currentUser, String sessionId, String title) {
+    requireOwnedSession(currentUser, sessionId);
+    int updated =
+        chatSessionMapper.updateTitleOwnedById(
+            currentUser.id(), sessionId, normalizeTitle(title), LocalDateTime.now());
+    if (updated == 0) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found");
+    }
+    return requireOwnedSession(currentUser, sessionId);
+  }
+
   public Mono<Void> deleteSession(CurrentUser currentUser, String sessionId) {
     return Mono.fromCallable(() -> requireOwnedSession(currentUser, sessionId))
         .subscribeOn(Schedulers.boundedElastic())
@@ -58,6 +81,9 @@ public class SessionService {
             () -> sessionExecutionCoordinator.cancelAndAwait(currentUser.id(), sessionId)))
         .then(Mono.fromCallable(
                 () -> {
+                  if (chatMessageMapper != null) {
+                    chatMessageMapper.deleteByOwnedSession(currentUser.id(), sessionId);
+                  }
                   int deleted = chatSessionMapper.deleteOwnedById(currentUser.id(), sessionId);
                   if (deleted == 0) {
                     throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found");

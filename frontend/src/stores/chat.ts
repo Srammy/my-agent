@@ -2,14 +2,15 @@ import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import {
   confirmToolCall,
+  listMessages,
   StreamRequestError,
   streamChat,
+  type ChatRole,
   type ConfirmationToolCall,
+  type PersistedToolEvent,
   type StreamEvent,
   type ToolConfirmationDecision
 } from '../api/chat'
-
-export type ChatRole = 'user' | 'assistant' | 'system' | 'tool'
 
 export type ToolEventType =
   | 'tool_call'
@@ -46,6 +47,8 @@ export interface ChatMessage {
 
 interface ChatState {
   messagesBySession: Record<string, ChatMessage[]>
+  loadedMessagesBySession: Record<string, true>
+  loadingMessagesBySession: Record<string, true>
   controllersBySession: Record<string, AbortController>
   cancellingSessionIds: Record<string, true>
   loadingSessionId: string
@@ -113,6 +116,8 @@ function toToolEvent(event: StreamEvent): ToolEvent | null {
 export const useChatStore = defineStore('chat', {
   state: (): ChatState => ({
     messagesBySession: {},
+    loadedMessagesBySession: {},
+    loadingMessagesBySession: {},
     controllersBySession: {},
     cancellingSessionIds: {},
     loadingSessionId: '',
@@ -150,6 +155,36 @@ export const useChatStore = defineStore('chat', {
     useSession(sessionId: string) {
       if (sessionId && !this.messagesBySession[sessionId]) {
         this.messagesBySession[sessionId] = []
+      }
+    },
+    async loadMessages(sessionId: string) {
+      if (
+        !sessionId ||
+        this.loadedMessagesBySession[sessionId] ||
+        Boolean(this.messagesBySession[sessionId]?.length) ||
+        this.loadingMessagesBySession[sessionId]
+      ) {
+        return
+      }
+
+      this.error = ''
+      this.loadingMessagesBySession[sessionId] = true
+
+      try {
+        const messages = await listMessages(sessionId)
+        this.messagesBySession[sessionId] = messages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          events: message.events.map(toLoadedToolEvent),
+          loading: message.loading
+        }))
+        this.loadedMessagesBySession[sessionId] = true
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      } finally {
+        delete this.loadingMessagesBySession[sessionId]
       }
     },
     appendEvent(sessionId: string, messageId: string, event: ToolEvent) {
@@ -338,6 +373,16 @@ export const useChatStore = defineStore('chat', {
     clearSession(sessionId: string) {
       this.finishSessionCancellation(sessionId)
       delete this.messagesBySession[sessionId]
+      delete this.loadedMessagesBySession[sessionId]
+      delete this.loadingMessagesBySession[sessionId]
     }
   }
 })
+
+function toLoadedToolEvent(event: PersistedToolEvent): ToolEvent {
+  return {
+    ...event,
+    id: event.id,
+    type: event.type as ToolEventType
+  }
+}

@@ -3,6 +3,7 @@ import {
   createSession as createSessionApi,
   deleteSession as deleteSessionApi,
   listSessions,
+  renameSession as renameSessionApi,
   type ChatSession
 } from '../api/chat'
 import { ApiError } from '../api/client'
@@ -12,6 +13,7 @@ interface SessionsState {
   currentSessionId: string
   loading: boolean
   deletingSessionId: string
+  renamingSessionId: string
   error: string
 }
 
@@ -25,6 +27,7 @@ export const useSessionsStore = defineStore('sessions', {
     currentSessionId: '',
     loading: false,
     deletingSessionId: '',
+    renamingSessionId: '',
     error: ''
   }),
   getters: {
@@ -62,6 +65,41 @@ export const useSessionsStore = defineStore('sessions', {
       } catch (error) {
         this.error = errorMessage(error)
         throw error
+      }
+    },
+    async renameSession(sessionId: string, title: string) {
+      if (this.renamingSessionId) {
+        const error = new Error('Session rename is already in progress')
+        this.error = error.message
+        throw error
+      }
+
+      this.error = ''
+      this.renamingSessionId = sessionId
+
+      try {
+        const session = await renameSessionApi(sessionId, title)
+        this.sessions = [
+          session,
+          ...this.sessions.filter((item) => item.id !== session.id)
+        ].sort((left, right) => {
+          const updatedAt =
+            new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+
+          if (updatedAt !== 0) {
+            return updatedAt
+          }
+
+          return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+        })
+        return session
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      } finally {
+        if (this.renamingSessionId === sessionId) {
+          this.renamingSessionId = ''
+        }
       }
     },
     async deleteSession(sessionId: string) {

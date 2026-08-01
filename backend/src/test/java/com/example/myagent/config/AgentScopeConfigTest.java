@@ -53,7 +53,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
-import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.mock.env.MockEnvironment;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
@@ -215,7 +215,7 @@ class AgentScopeConfigTest {
             .agentScopeModel(properties);
 
     assertThat(model).isInstanceOf(DashScopeChatModel.class);
-    assertThat(model.getModelName()).isEqualTo("dashscope:qwen-plus");
+    assertThat(model.getModelName()).isEqualTo("qwen-plus");
   }
 
   @Test
@@ -477,7 +477,7 @@ class AgentScopeConfigTest {
   void confirmationExecutorResumesGroupedDecisionsWithOneMessageAndRequestScope() {
     HarnessAgent.Builder builder = mock(HarnessAgent.Builder.class, Answers.RETURNS_SELF);
     HarnessAgent agent = mock(HarnessAgent.class);
-    ReactiveStringRedisTemplate redisTemplate = mock(ReactiveStringRedisTemplate.class);
+    StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
     io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore workspaceStore =
         new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore();
     UserScopedFilesystemFactory filesystemFactory =
@@ -503,7 +503,7 @@ class AgentScopeConfigTest {
           config.agentScopeStreamExecutor(
               mock(Model.class),
               properties(false, false, false, false),
-              beanFactory.getBeanProvider(ReactiveStringRedisTemplate.class),
+              beanFactory.getBeanProvider(StringRedisTemplate.class),
               filesystemFactory,
               mock(WebApprovalGate.class));
 
@@ -734,10 +734,10 @@ class AgentScopeConfigTest {
         java.util.List.of(new com.example.myagent.chat.ToolCallDecision(snapshot, confirmed)));
   }
 
-  private org.springframework.beans.factory.ObjectProvider<ReactiveStringRedisTemplate>
+  private org.springframework.beans.factory.ObjectProvider<StringRedisTemplate>
       emptyRedisProvider() {
     return new org.springframework.beans.factory.support.DefaultListableBeanFactory()
-        .getBeanProvider(ReactiveStringRedisTemplate.class);
+        .getBeanProvider(StringRedisTemplate.class);
   }
 
   private boolean booleanField(Object target, String fieldName) throws Exception {
@@ -778,8 +778,8 @@ class AgentScopeConfigTest {
   static class AgentScopeGatewayContextConfiguration {
 
     @org.springframework.context.annotation.Bean
-    ReactiveStringRedisTemplate reactiveStringRedisTemplate() {
-      return org.mockito.Mockito.mock(ReactiveStringRedisTemplate.class);
+    StringRedisTemplate stringRedisTemplate() {
+      return org.mockito.Mockito.mock(StringRedisTemplate.class);
     }
   }
 }

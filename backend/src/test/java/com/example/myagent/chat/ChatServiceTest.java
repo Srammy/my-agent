@@ -5,6 +5,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -26,6 +28,7 @@ import com.example.myagent.toolconfirmation.ToolConfirmationStatus;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
@@ -55,6 +58,7 @@ class ChatServiceTest {
   @Mock private PermissionService permissionService;
   @Mock private ToolConfirmationService toolConfirmationService;
   @Mock private SessionExecutionCoordinator sessionExecutionCoordinator;
+  @Mock private ChatMessageService chatMessageService;
 
   @BeforeEach
   @SuppressWarnings("unchecked")
@@ -86,6 +90,29 @@ class ChatServiceTest {
           Supplier<Mono<Void>> preflight = invocation.getArgument(2);
           Supplier<Flux<StreamEventDto>> source = invocation.getArgument(3);
           return Mono.defer(preflight).thenMany(Flux.defer(source));
+        });
+    org.mockito.Mockito.lenient()
+        .when(chatMessageService.createMessage(
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.anyBoolean()))
+        .thenAnswer(invocation -> new ChatMessageEntity(
+            "assistant".equals(invocation.getArgument(2)) ? "m_assistant" : "m_user",
+            invocation.getArgument(1),
+            invocation.getArgument(0),
+            invocation.getArgument(2),
+            invocation.getArgument(3),
+            "[]",
+            invocation.getArgument(4),
+            CREATED_AT,
+            UPDATED_AT));
+    org.mockito.Mockito.lenient()
+        .when(chatMessageService.toPersistedEvent(org.mockito.ArgumentMatchers.any()))
+        .thenAnswer(invocation -> {
+          StreamEventDto event = invocation.getArgument(0);
+          return Map.<String, Object>of("id", "event_" + event.type(), "type", event.type());
         });
   }
 
@@ -127,6 +154,30 @@ class ChatServiceTest {
   }
 
   @Test
+  void streamPersistsUserAssistantContentEventsAndCompletion() {
+    when(sessionService.requireOwnedSession(USER, "s_123"))
+        .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
+    when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
+    when(chatAgentGateway.stream(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(Flux.just(
+            StreamEventDto.replyStart(),
+            StreamEventDto.textDelta("hi"),
+            StreamEventDto.toolCall("read_file", Map.of("path", "a.md")),
+            StreamEventDto.done()));
+
+    List<StreamEventDto> events = newChatService().stream(USER, "s_123", " hello ").collectList().block();
+
+    assertThat(events).extracting(StreamEventDto::type)
+        .containsExactly("reply_start", "text_delta", "tool_call", "done");
+    verify(chatMessageService).createMessage(USER.id(), "s_123", "user", "hello", false);
+    verify(chatMessageService).createMessage(USER.id(), "s_123", "assistant", "", true);
+    verify(chatMessageService)
+        .toPersistedEvent(argThat(event -> "tool_call".equals(event.type())));
+    verify(chatMessageService)
+        .updateAssistant(eq(USER.id()), eq("m_assistant"), eq("hi"), anyList(), eq(false));
+  }
+
+  @Test
   void confirmConstructsGatewayBeforeConsumingClaimedRecordAndSubscribingEvents() {
     ToolConfirmationClaim claim = claim("reply_123", "tool_123");
     when(sessionService.requireOwnedSession(USER, "s_123"))
@@ -161,6 +212,35 @@ class ChatServiceTest {
     assertThat(requestCaptor.getValue()).isEqualTo(new ChatToolConfirmationRequest(
         USER.id(), "s_123", PermissionMode.ACCEPT_EDITS,
         List.of(new ToolCallDecision(claim.record().toolCalls().getFirst(), true))));
+  }
+
+  @Test
+  void confirmPersistsTextDeltaToLatestAssistantMessage() {
+    ToolConfirmationClaim claim = claim("reply_123", "tool_123");
+    ChatMessageEntity assistant = new ChatMessageEntity(
+        "m_assistant",
+        "s_123",
+        USER.id(),
+        "assistant",
+        "Before ",
+        "[]",
+        true,
+        CREATED_AT,
+        UPDATED_AT);
+    when(sessionService.requireOwnedSession(USER, "s_123"))
+        .thenReturn(new ChatSessionEntity("s_123", USER.id(), "Sprint planning", CREATED_AT, UPDATED_AT));
+    when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
+    when(toolConfirmationService.claim(USER.id(), "s_123", "confirm_123")).thenReturn(Mono.just(claim));
+    when(toolConfirmationService.consume("confirm_123", claim.processingToken(), persisted(true))).thenReturn(Mono.empty());
+    when(chatMessageService.latestAssistant(USER.id(), "s_123")).thenReturn(assistant);
+    when(chatMessageService.readEvents(assistant)).thenReturn(List.of());
+    when(chatAgentGateway.confirm(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(Flux.just(StreamEventDto.textDelta("Done"), StreamEventDto.done()));
+
+    newChatService().confirm(USER, "s_123", "confirm_123", requested(true)).collectList().block();
+
+    verify(chatMessageService)
+        .updateAssistant(eq(USER.id()), eq("m_assistant"), eq("Before Done"), anyList(), eq(false));
   }
 
   @Test
@@ -519,7 +599,8 @@ class ChatServiceTest {
         chatAgentGateway,
         permissionService,
         toolConfirmationService,
-        sessionExecutionCoordinator);
+        sessionExecutionCoordinator,
+        chatMessageService);
     assertThat(service.stream(USER, "s_123", "hello").collectList().block())
         .containsExactly(StreamEventDto.done());
 
@@ -543,6 +624,7 @@ class ChatServiceTest {
         chatAgentGateway,
         permissionService,
         toolConfirmationService,
-        sessionExecutionCoordinator);
+        sessionExecutionCoordinator,
+        chatMessageService);
   }
 }

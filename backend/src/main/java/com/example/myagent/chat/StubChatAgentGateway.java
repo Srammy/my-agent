@@ -2,12 +2,16 @@ package com.example.myagent.chat;
 
 import com.example.myagent.agent.AgentExecution;
 import org.springframework.stereotype.Component;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
 @Component
-@ConditionalOnMissingBean(ChatAgentGateway.class)
+@ConditionalOnProperty(
+    prefix = "agent.agent-scope",
+    name = "enabled",
+    havingValue = "false",
+    matchIfMissing = true)
 public class StubChatAgentGateway implements ChatAgentGateway {
 
   @Override

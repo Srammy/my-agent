@@ -69,3 +69,61 @@ describe('sessions store deletion', () => {
     expect(store.deletingSessionId).toBe('')
   })
 })
+
+describe('sessions store renaming', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('updates and resorts a session after a successful rename', async () => {
+    vi.spyOn(chatApi, 'renameSession').mockResolvedValue({
+      ...session('s1'),
+      title: 'Renamed',
+      updatedAt: '2026-07-18T01:00:00Z'
+    })
+    const store = useSessionsStore()
+    store.sessions = [
+      { ...session('s2'), updatedAt: '2026-07-18T00:30:00Z' },
+      session('s1')
+    ]
+
+    await store.renameSession('s1', 'Renamed')
+
+    expect(chatApi.renameSession).toHaveBeenCalledWith('s1', 'Renamed')
+    expect(store.sessions.map((item) => item.id)).toEqual(['s1', 's2'])
+    expect(store.sessions[0].title).toBe('Renamed')
+    expect(store.renamingSessionId).toBe('')
+  })
+
+  it('keeps the old title and exposes the error when renaming fails', async () => {
+    vi.spyOn(chatApi, 'renameSession').mockRejectedValue(new ApiError('Session not found', 404, null))
+    const store = useSessionsStore()
+    store.sessions = [session('s1')]
+
+    await expect(store.renameSession('s1', 'Renamed')).rejects.toThrow('Session not found')
+
+    expect(store.sessions).toEqual([session('s1')])
+    expect(store.error).toBe('Session not found')
+    expect(store.renamingSessionId).toBe('')
+  })
+
+  it('blocks duplicate renames while one is in progress', async () => {
+    let resolveRename: ((session: chatApi.ChatSession) => void) | undefined
+    vi.spyOn(chatApi, 'renameSession').mockImplementation(
+      () => new Promise<chatApi.ChatSession>((resolve) => { resolveRename = resolve })
+    )
+    const store = useSessionsStore()
+    store.sessions = [session('s1')]
+
+    const first = store.renameSession('s1', 'One')
+    expect(store.renamingSessionId).toBe('s1')
+
+    await expect(store.renameSession('s1', 'Two')).rejects.toThrow('Session rename is already in progress')
+    expect(chatApi.renameSession).toHaveBeenCalledTimes(1)
+
+    resolveRename?.({ ...session('s1'), title: 'One' })
+    await first
+    expect(store.renamingSessionId).toBe('')
+  })
+})

@@ -89,8 +89,10 @@ textarea {
 .chat-page {
   display: flex;
   flex-direction: column;
+  height: 100vh;
   min-height: 100%;
   background: #f6f8fb;
+  overflow: hidden;
 }
 
 .chat-topbar {
@@ -109,15 +111,6 @@ textarea {
   min-width: 0;
   align-items: center;
   gap: 12px;
-}
-
-.chat-topbar__session {
-  overflow: hidden;
-  max-width: 260px;
-  color: #475569;
-  font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chat-brand {
@@ -144,6 +137,7 @@ textarea {
   display: grid;
   flex: 1;
   grid-template-columns: 280px minmax(0, 1fr) 360px;
+  height: 100%;
   min-height: 0;
 }
 
@@ -244,14 +238,33 @@ textarea {
   font-size: 12px;
 }
 
+.session-item__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-item__rename,
 .session-item__delete {
   flex: 0 0 auto;
+}
+
+.session-item__rename-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  color: #0f172a;
+  font: inherit;
+  padding: 4px 6px;
 }
 
 .chat-main {
   display: flex;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   flex-direction: column;
 }
 
@@ -443,6 +456,7 @@ textarea {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 24px;
 }
 
