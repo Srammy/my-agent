@@ -39,10 +39,21 @@ final class BinarySafeRemoteFilesystem extends RemoteFilesystem {
     List<FileUploadResponse> responses = new ArrayList<>();
     for (Map.Entry<String, byte[]> file : files) {
       FileData fileData = toFileData(file.getValue());
-      store.put(namespace, file.getKey(), toStoreValue(fileData));
+      store.put(namespace, normalizePath(file.getKey()), toStoreValue(fileData));
       responses.add(FileUploadResponse.success(file.getKey()));
     }
     return responses;
+  }
+
+  private static String normalizePath(String path) {
+    if (path == null || path.isBlank()) {
+      return "/";
+    }
+    String normalized = path.startsWith("/") ? path : "/" + path;
+    while (normalized.length() > 1 && normalized.endsWith("/")) {
+      normalized = normalized.substring(0, normalized.length() - 1);
+    }
+    return normalized;
   }
 
   private static FileData toFileData(byte[] bytes) {

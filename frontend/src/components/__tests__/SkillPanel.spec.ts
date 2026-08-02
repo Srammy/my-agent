@@ -29,6 +29,24 @@ describe('SkillPanel', () => {
     expect(input.attributes('webkitdirectory')).toBeDefined()
   })
 
+  it('renders skill name and description as separate fields', async () => {
+    vi.mocked(skillsApi.listMySkills).mockResolvedValueOnce([
+      {
+        name: 'code-reviewer',
+        description: 'Use this agent when you need to conduct comprehensive code reviews'
+      }
+    ])
+    const wrapper = mount(SkillPanel, { global: { plugins: [ElementPlus] } })
+
+    await vi.waitFor(() => expect(wrapper.find('.skill-list-item').exists()).toBe(true))
+
+    const item = wrapper.get('.skill-list-item')
+    expect(item.find('.skill-info').exists()).toBe(true)
+    expect(item.get('.skill-name').text()).toBe('code-reviewer')
+    expect(item.get('.skill-description').text())
+      .toBe('Use this agent when you need to conduct comprehensive code reviews')
+  })
+
   it('clears the directory input after an upload failure', async () => {
     vi.mocked(skillsApi.uploadSkill).mockRejectedValueOnce(new Error('upload failed'))
     const errorHandler = vi.fn()

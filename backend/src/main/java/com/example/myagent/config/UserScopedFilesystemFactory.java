@@ -17,6 +17,7 @@ public final class UserScopedFilesystemFactory {
   private final SkillDraftLock draftLock;
   private final SkillPromotionGuard promotionGuard;
   private final ConcurrentMap<String, AbstractFilesystem> filesystems = new ConcurrentHashMap<>();
+  private final ConcurrentMap<String, AbstractFilesystem> workspaceApiFilesystems = new ConcurrentHashMap<>();
   private final ConcurrentMap<String, SkillUsageStore> usageStores = new ConcurrentHashMap<>();
 
   public UserScopedFilesystemFactory(
@@ -38,6 +39,13 @@ public final class UserScopedFilesystemFactory {
                 id,
                 draftLock,
                 promotionGuard));
+  }
+
+  public AbstractFilesystem createWorkspaceApiFilesystem(String userId) {
+    validateUserId(userId);
+    return workspaceApiFilesystems.computeIfAbsent(
+        userId,
+        id -> new BinarySafeRemoteFilesystem(store, ignored -> List.of(id)));
   }
 
   public SkillUsageStore usageStore(String userId) {

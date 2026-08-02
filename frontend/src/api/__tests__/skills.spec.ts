@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../client'
 import { uploadSkill } from '../skills'
 
 function directoryFile(path: string, content = ''): File {
@@ -6,6 +7,10 @@ function directoryFile(path: string, content = ''): File {
   const file = new File([content], name)
   Object.defineProperty(file, 'webkitRelativePath', { value: path })
   return file
+}
+
+function skillDirectory() {
+  return [directoryFile('java-helper/SKILL.md', '---\nname: java-helper\ndescription: Java helper\n---\n')]
 }
 
 describe('uploadSkill', () => {
@@ -38,6 +43,31 @@ describe('uploadSkill', () => {
         ['scripts/run.sh', 'scripts/run.sh'],
         ['assets/icon.png', 'assets/icon.png']
       ])
+  })
+
+  it('uses backend message, error, or detail when upload fails', async () => {
+    for (const key of ['message', 'error', 'detail'] as const) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ [key]: `${key} reason` }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      ))
+
+      await expect(uploadSkill(skillDirectory())).rejects.toMatchObject({
+        name: 'ApiError',
+        message: `${key} reason`,
+        status: 400
+      } satisfies Partial<ApiError>)
+    }
+  })
+
+  it('falls back to a generic upload error when response has no structured message', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('plain failure', { status: 500 })
+    ))
+
+    await expect(uploadSkill(skillDirectory())).rejects.toThrow('上传失败，请稍后重试')
   })
 
   it('rejects files that were not selected as a directory', async () => {

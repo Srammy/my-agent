@@ -80,6 +80,47 @@ class UserScopedFilesystemFactoryTest {
     assertThat(factory.usageStore("101")).isNotSameAs(factory.usageStore("102"));
   }
 
+  @Test
+  void agentFilesystemRejectsFormalSkillWritesButWorkspaceApiFilesystemAllowsThem() {
+    InMemoryStore store = new InMemoryStore();
+    AbstractFilesystem sharedFilesystem =
+        new RemoteFilesystem(store, IsolationScope.USER.toNamespaceFactory());
+    UserScopedFilesystemFactory factory = factory(store, new SkillReviewDecisionStore(sharedFilesystem));
+    AbstractFilesystem agentFilesystem = factory.create("101");
+    AbstractFilesystem apiFilesystem = factory.createWorkspaceApiFilesystem("101");
+    AbstractFilesystem bobApiFilesystem = factory.createWorkspaceApiFilesystem("102");
+    RuntimeContext empty = RuntimeContext.empty();
+
+    assertThat(
+            agentFilesystem
+                .uploadFiles(
+                    empty,
+                    java.util.List.of(
+                        java.util.Map.entry(
+                            "skills/manual/SKILL.md",
+                            "---\nname: manual\ndescription: Manual\n---\n".getBytes(
+                                java.nio.charset.StandardCharsets.UTF_8))))
+                .get(0)
+                .isSuccess())
+        .isFalse();
+
+    assertThat(
+            apiFilesystem
+                .uploadFiles(
+                    empty,
+                    java.util.List.of(
+                        java.util.Map.entry(
+                            "skills/manual/SKILL.md",
+                            "---\nname: manual\ndescription: Manual\n---\n".getBytes(
+                                java.nio.charset.StandardCharsets.UTF_8))))
+                .get(0)
+                .isSuccess())
+        .isTrue();
+
+    assertThat(apiFilesystem.exists(empty, "skills/manual/SKILL.md")).isTrue();
+    assertThat(bobApiFilesystem.exists(empty, "skills/manual/SKILL.md")).isFalse();
+  }
+
   private static RuntimeContext context(String userId, String sessionId) {
     return RuntimeContext.builder().userId(userId).sessionId(sessionId).build();
   }

@@ -1,6 +1,7 @@
 package com.example.myagent.skill;
 
 import com.example.myagent.auth.CurrentUser;
+import com.example.myagent.config.UserScopedFilesystemFactory;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.skill.AgentSkill;
 import io.agentscope.core.skill.util.SkillUtil;
@@ -16,12 +17,14 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.http.codec.multipart.Part;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
@@ -36,14 +39,23 @@ public class AgentScopeWorkspaceService {
   static final int MAX_IN_MEMORY_SIZE = 64 * 1024;
   private static final long MAX_TOTAL_SIZE = 5L * 1024 * 1024;
 
-  private final AbstractFilesystem filesystem;
+  private final Function<String, AbstractFilesystem> filesystemFactory;
 
-  public AgentScopeWorkspaceService(AbstractFilesystem filesystem) {
-    this.filesystem = filesystem;
+  @Autowired
+  public AgentScopeWorkspaceService(UserScopedFilesystemFactory filesystemFactory) {
+    this(userId -> filesystemFactory.createWorkspaceApiFilesystem(userId));
+  }
+
+  AgentScopeWorkspaceService(AbstractFilesystem filesystem) {
+    this(ignored -> filesystem);
+  }
+
+  AgentScopeWorkspaceService(Function<String, AbstractFilesystem> filesystemFactory) {
+    this.filesystemFactory = filesystemFactory;
   }
 
   public List<SkillDto> listSkills(CurrentUser user) {
-    return repoFor(user).getAllSkills().stream()
+    return repoFor(user, filesystem(user)).getAllSkills().stream()
         .map(skill -> new SkillDto(skill.getName(), skill.getDescription()))
         .sorted(Comparator.comparing(SkillDto::name))
         .toList();
@@ -69,7 +81,8 @@ public class AgentScopeWorkspaceService {
     }
     String name = validateSkillName(skill.getName());
 
-    WorkspaceSkillRepository repo = repoFor(user);
+    AbstractFilesystem filesystem = filesystem(user);
+    WorkspaceSkillRepository repo = repoFor(user, filesystem);
     if (repo.skillExists(name)) {
       throw new ResponseStatusException(HttpStatus.CONFLICT, "Skill already exists: " + name);
     }
@@ -95,7 +108,7 @@ public class AgentScopeWorkspaceService {
 
   public void deleteSkill(CurrentUser user, String skillName) {
     String name = validateSkillName(skillName);
-    WorkspaceSkillRepository repo = repoFor(user);
+    WorkspaceSkillRepository repo = repoFor(user, filesystem(user));
     if (!repo.skillExists(name)) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Skill not found");
     }
@@ -105,12 +118,15 @@ public class AgentScopeWorkspaceService {
   /**
    * Creates a writable WorkspaceSkillRepository scoped to the given user.
    * The 4-arg constructor sets writable=true, enabling save() and delete().
-   * User isolation is provided by the workspaceFilesystem bean's NamespaceFactory,
-   * which prefixes all paths with the userId from RuntimeContext.
+   * User isolation is provided by UserScopedFilesystemFactory before this repository is built.
    */
-  private WorkspaceSkillRepository repoFor(CurrentUser user) {
+  private WorkspaceSkillRepository repoFor(CurrentUser user, AbstractFilesystem filesystem) {
     return new WorkspaceSkillRepository(
         filesystem, SKILLS_DIR, () -> runtimeContext(user), WORKSPACE_SOURCE);
+  }
+
+  private AbstractFilesystem filesystem(CurrentUser user) {
+    return filesystemFactory.apply(user.id().toString());
   }
 
   private RuntimeContext runtimeContext(CurrentUser user) {

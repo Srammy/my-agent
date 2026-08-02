@@ -14,6 +14,38 @@ interface SkillUploadEntry {
   path: string
 }
 
+function resolveUploadErrorMessage(data: unknown, fallback: string) {
+  if (data && typeof data === 'object') {
+    const record = data as Record<string, unknown>
+    const message = record.message ?? record.error ?? record.detail
+    if (typeof message === 'string' && message.trim()) {
+      return message
+    }
+  }
+  return fallback
+}
+
+async function parseUploadResponse(response: Response) {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json')) {
+    try {
+      return await response.json()
+    } catch {
+      return null
+    }
+  }
+
+  const text = await response.text()
+  if (!text) {
+    return null
+  }
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
 function prepareSkillUpload(files: File[]): SkillUploadEntry[] {
   let rootDirectory = ''
 
@@ -50,12 +82,9 @@ export async function uploadSkill(files: File[]): Promise<Skill> {
     headers.set('Authorization', `Bearer ${token}`)
   }
   const response = await fetch('/api/skills/mine', { method: 'POST', headers, body: formData })
-  const data = await response.json()
+  const data = await parseUploadResponse(response)
   if (!response.ok) {
-    const message =
-      data && typeof data === 'object' && 'message' in data
-        ? String((data as { message?: unknown }).message)
-        : '上传失败，请稍后重试'
+    const message = resolveUploadErrorMessage(data, '上传失败，请稍后重试')
     throw new ApiError(message, response.status, data)
   }
   return data as Skill
