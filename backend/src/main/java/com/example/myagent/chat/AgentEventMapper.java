@@ -48,10 +48,8 @@ public class AgentEventMapper {
     if (agentEvent instanceof RequireUserConfirmEvent) {
       return null;
     }
-    if (agentEvent instanceof ExceedMaxItersEvent exceedMaxItersEvent) {
-      return StreamEventDto.error(
-          "Agent iteration limit reached (%d/%d)"
-              .formatted(exceedMaxItersEvent.getCurrentIter(), exceedMaxItersEvent.getMaxIters()));
+    if (agentEvent instanceof ExceedMaxItersEvent) {
+      return StreamEventDto.done();
     }
     if (agentEvent instanceof RequestStopEvent) {
       return StreamEventDto.done();

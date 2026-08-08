@@ -250,6 +250,33 @@ class SkillApprovalGuardedFilesystemTest {
     verify(handle).close();
   }
 
+  @Test
+  void allowsOnlyOneDraftSkillPerRuntimeContext() {
+    RuntimeContext requestContext = context("101");
+    String secondDraftPath = "skills/_drafts/analyst/SKILL.md";
+
+    assertThat(aliceFilesystem.write(requestContext, DRAFT_PATH + "/SKILL.md", ORIGINAL_SKILL_MD)
+            .isSuccess())
+        .isTrue();
+
+    WriteResult secondDraft =
+        aliceFilesystem.write(
+            requestContext,
+            secondDraftPath,
+            "---\nname: analyst\ndescription: Analyze data\n---\n");
+
+    assertThat(secondDraft.isSuccess()).isFalse();
+    assertThat(aliceFilesystem.exists(requestContext, secondDraftPath)).isFalse();
+    assertThat(
+            aliceFilesystem
+                .write(
+                    context("101"),
+                    secondDraftPath,
+                    "---\nname: analyst\ndescription: Analyze data\n---\n")
+                .isSuccess())
+        .isTrue();
+  }
+
   private AbstractFilesystem guardedFilesystem(String userId) {
     AbstractFilesystem delegate = new RemoteFilesystem(store, List.of(userId));
     return new SkillApprovalGuardedFilesystem(

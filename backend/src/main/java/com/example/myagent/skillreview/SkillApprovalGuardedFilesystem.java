@@ -20,8 +20,12 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
 
   private static final String DRAFTS_DIR = "skills/_drafts";
   private static final String SKILLS_DIR = "skills";
+  private static final String DRAFT_SKILL_NAME_CONTEXT_KEY =
+      SkillApprovalGuardedFilesystem.class.getName() + ".draftSkillName";
   private static final String FORMAL_SKILL_WRITE_ERROR =
       "Agent cannot modify formal skills directly; use the draft approval flow";
+  private static final String MULTIPLE_DRAFT_SKILLS_ERROR =
+      "Only one skill draft can be created per agent request";
 
   private final AbstractFilesystem delegate;
   private final String userId;
@@ -65,6 +69,11 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
   public WriteResult write(RuntimeContext context, String path, String content) {
     if (affectsFormalSkills(path)) {
       return WriteResult.fail(FORMAL_SKILL_WRITE_ERROR);
+    }
+    Optional<String> draftSkillName = draftSkillName(path);
+    if (draftSkillName.isPresent()) {
+      return withDraftLock(
+          () -> writeDraft(context, path, content, draftSkillName.get()));
     }
     return withDraftLockIfNeeded(path, () -> delegate.write(context, path, content));
   }
@@ -165,9 +174,40 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
     }
   }
 
+  private WriteResult writeDraft(
+      RuntimeContext context, String path, String content, String draftSkillName) {
+    String existingDraftSkillName = context.get(DRAFT_SKILL_NAME_CONTEXT_KEY);
+    if (existingDraftSkillName != null && !existingDraftSkillName.equals(draftSkillName)) {
+      return WriteResult.fail(MULTIPLE_DRAFT_SKILLS_ERROR);
+    }
+    WriteResult result = delegate.write(context, path, content);
+    if (result.isSuccess() && existingDraftSkillName == null) {
+      context.put(DRAFT_SKILL_NAME_CONTEXT_KEY, draftSkillName);
+    }
+    return result;
+  }
+
   private static boolean affectsDraft(String path) {
     String normalized = normalize(path);
     return normalized.equals(DRAFTS_DIR) || normalized.startsWith(DRAFTS_DIR + "/");
+  }
+
+  private static Optional<String> draftSkillName(String path) {
+    String normalized = normalize(path);
+    String prefix = DRAFTS_DIR + "/";
+    if (!normalized.startsWith(prefix)) {
+      return Optional.empty();
+    }
+    String remainingPath = normalized.substring(prefix.length());
+    int separator = remainingPath.indexOf('/');
+    if (separator <= 0) {
+      return Optional.empty();
+    }
+    try {
+      return Optional.of(SkillPathValidator.validateSkillName(remainingPath.substring(0, separator)));
+    } catch (IllegalArgumentException exception) {
+      return Optional.empty();
+    }
   }
 
   private static boolean affectsFormalSkills(String path) {

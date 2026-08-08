@@ -78,12 +78,11 @@ class AgentEventMapperTest {
   }
 
   @Test
-  void mapsExceedMaxItersToErrorEvent() {
+  void mapsExceedMaxItersToDoneEvent() {
     StreamEventDto event = mapper.map(new ExceedMaxItersEvent("reply-1", 8, 8));
 
-    assertThat(event.type()).isEqualTo("error");
-    assertThat(event.payload())
-        .containsEntry("message", "Agent iteration limit reached (8/8)");
+    assertThat(event.type()).isEqualTo("done");
+    assertThat(event.payload()).isEmpty();
   }
 
   @Test
