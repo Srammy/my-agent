@@ -216,13 +216,16 @@ describe('ChatView assistant tabs', () => {
     vi.restoreAllMocks()
   })
 
-  it('keeps permission selection out of the assistant tabs', async () => {
+  it('groups skill list and review under one Skill tab', async () => {
     const wrapper = await mountView(true)
 
     expect(wrapper.find('[data-tab-label="Model"]').exists()).toBe(false)
     expect(wrapper.find('[data-tab-label="Permission"]').exists()).toBe(false)
-    expect(wrapper.find('[data-tab-label="Skill"]').exists()).toBe(true)
-    expect(wrapper.find('[data-tab-label="Skill 审核"]').exists()).toBe(true)
+    const skillTab = wrapper.get('[data-tab-label="Skill"]')
+    expect(wrapper.findAll('[data-tab-label="Skill"]')).toHaveLength(1)
+    expect(wrapper.find('[data-tab-label="Skill 审核"]').exists()).toBe(false)
+    expect(skillTab.find('[data-tab-label="我的skill"]').exists()).toBe(true)
+    expect(skillTab.find('[data-tab-label="自进化skill审核"]').exists()).toBe(true)
   })
 })
 
