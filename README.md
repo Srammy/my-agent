@@ -80,7 +80,7 @@ npm run dev
 
 Docker Compose 会启动 MySQL 8.4 和 Redis 7，并配置健康检查。`docker/mysql/init.sql` 只创建 `myagent` 数据库并设置 UTF-8 默认值。应用表结构由后端 Flyway 迁移管理，位置在 `backend/src/main/resources/db/migration`；不要在 Docker 初始化脚本中重复编写表 DDL。
 
-Compose 会将 MySQL 数据持久化到 `mysql_data` volume。如果要重置本地 Docker 数据，请停止服务并显式删除 volume：
+Compose 会将 MySQL 数据持久化到 `mysql_data` volume，并将 Redis 数据（包括 Skill 文件和 Agent 状态）持久化到 `redis_data` volume。如果要重置本地 Docker 数据，请停止服务并显式删除 volume：
 
 ```bash
 docker compose down -v

@@ -25,6 +25,17 @@ class DockerComposeSecurityTest {
   }
 
   @Test
+  void composePersistsRedisDataAcrossContainerRecreation() throws IOException {
+    String compose = Files.readString(projectRoot().resolve("docker-compose.yml"));
+
+    assertThat(compose)
+        .contains("redis-server --requirepass")
+        .contains("--appendonly yes")
+        .contains("redis_data:/data")
+        .contains("redis_data:");
+  }
+
+  @Test
   void exampleEnvironmentDoesNotProvideUsableSecrets() throws IOException {
     Path examplePath = projectRoot().resolve(".env.example");
     List<String> lines = Files.readAllLines(examplePath);
