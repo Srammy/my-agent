@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ChatTranscript from '../components/ChatTranscript.vue'
 import Composer from '../components/Composer.vue'
-import ModelInfoPanel from '../components/ModelInfoPanel.vue'
 import PermissionPanel from '../components/PermissionPanel.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
 import SkillPanel from '../components/SkillPanel.vue'
@@ -312,9 +311,6 @@ async function logout() {
 
       <aside class="assistant-panel">
         <el-tabs class="assistant-tabs" stretch>
-          <el-tab-pane label="Model">
-            <ModelInfoPanel />
-          </el-tab-pane>
           <el-tab-pane label="Permission">
             <PermissionPanel :session-id="currentSessionId" />
           </el-tab-pane>

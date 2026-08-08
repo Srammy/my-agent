@@ -22,15 +22,20 @@ const session: chatApi.ChatSession = {
   updatedAt: '2026-07-18T00:00:00Z'
 }
 
-async function mountView() {
+async function mountView(renderTabs = false) {
   vi.spyOn(chatApi, 'listSessions').mockResolvedValue([])
   vi.spyOn(chatApi, 'listMessages').mockResolvedValue([])
   const wrapper = shallowMount(ChatView, {
     global: {
       stubs: {
         ElButton: true,
-        ElTabPane: true,
-        ElTabs: true
+        ElTabPane: renderTabs
+          ? {
+              props: ['label'],
+              template: '<div :data-tab-label="label"><slot /></div>'
+            }
+          : true,
+        ElTabs: renderTabs ? { template: '<div><slot /></div>' } : true
       }
     }
   })
@@ -202,6 +207,22 @@ describe('ChatView header', () => {
 
     expect(wrapper.find('.chat-brand span').exists()).toBe(false)
     expect(wrapper.find('.chat-topbar__actions').text()).toContain('haha')
+  })
+})
+
+describe('ChatView assistant tabs', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('does not render the Model tab', async () => {
+    const wrapper = await mountView(true)
+
+    expect(wrapper.find('[data-tab-label="Model"]').exists()).toBe(false)
+    expect(wrapper.find('[data-tab-label="Permission"]').exists()).toBe(true)
+    expect(wrapper.find('[data-tab-label="Skill"]').exists()).toBe(true)
+    expect(wrapper.find('[data-tab-label="Skill 审核"]').exists()).toBe(true)
   })
 })
 
