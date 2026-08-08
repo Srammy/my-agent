@@ -216,11 +216,11 @@ describe('ChatView assistant tabs', () => {
     vi.restoreAllMocks()
   })
 
-  it('does not render the Model tab', async () => {
+  it('keeps permission selection out of the assistant tabs', async () => {
     const wrapper = await mountView(true)
 
     expect(wrapper.find('[data-tab-label="Model"]').exists()).toBe(false)
-    expect(wrapper.find('[data-tab-label="Permission"]').exists()).toBe(true)
+    expect(wrapper.find('[data-tab-label="Permission"]').exists()).toBe(false)
     expect(wrapper.find('[data-tab-label="Skill"]').exists()).toBe(true)
     expect(wrapper.find('[data-tab-label="Skill 审核"]').exists()).toBe(true)
   })

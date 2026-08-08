@@ -9,6 +9,7 @@ import {
 
 const props = defineProps<{
   sessionId: string
+  compact?: boolean
 }>()
 
 const mode = ref<PermissionMode>('DEFAULT')
@@ -67,8 +68,8 @@ async function saveMode(nextMode: PermissionMode) {
 </script>
 
 <template>
-  <section class="assistant-panel-section">
-    <div class="panel-row">
+  <section :class="['assistant-panel-section', { 'permission-panel--compact': compact }]">
+    <div v-if="!compact" class="panel-row">
       <div>
         <strong>权限模式</strong>
         <p>控制当前会话执行工具和编辑时的确认策略。</p>
@@ -77,7 +78,7 @@ async function saveMode(nextMode: PermissionMode) {
 
     <el-select
       v-model="mode"
-      class="panel-control"
+      :class="compact ? 'composer__permission-select' : 'panel-control'"
       :disabled="!sessionId || loading || saving"
       :loading="loading || saving"
       @change="saveMode"
@@ -90,7 +91,7 @@ async function saveMode(nextMode: PermissionMode) {
       />
     </el-select>
 
-    <p v-if="!sessionId" class="panel-muted">选择或创建会话后可调整权限。</p>
+    <p v-if="!compact && !sessionId" class="panel-muted">选择或创建会话后可调整权限。</p>
     <p v-if="error" class="panel-error">{{ error }}</p>
   </section>
 </template>

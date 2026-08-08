@@ -654,7 +654,8 @@ body.chat-resizing * {
 
 .composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 190px) auto;
+  align-items: end;
   gap: 12px;
   border-top: 1px solid #dbe3ee;
   background: #ffffff;
@@ -663,6 +664,15 @@ body.chat-resizing * {
 
 .composer__input {
   min-width: 0;
+}
+
+.composer__permission {
+  min-width: 0;
+  width: 100%;
+}
+
+.composer__permission-select {
+  width: 100%;
 }
 
 .composer__send {
@@ -726,6 +736,10 @@ body.chat-resizing * {
   .composer {
     grid-template-columns: 1fr;
     padding: 12px;
+  }
+
+  .composer__permission {
+    width: 100%;
   }
 
   .composer__send {

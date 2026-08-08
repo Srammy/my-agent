@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import PermissionPanel from './PermissionPanel.vue'
 
 defineProps<{
   disabled: boolean
   hasSession: boolean
+  sessionId: string
 }>()
 
 const emit = defineEmits<{
@@ -44,6 +46,11 @@ function onKeydown(event: KeyboardEvent) {
       :placeholder="hasSession ? '输入消息，Enter 发送，Shift+Enter 换行' : '请先创建或选择会话'"
       resize="none"
       @keydown="onKeydown"
+    />
+    <PermissionPanel
+      class="composer__permission"
+      :session-id="sessionId"
+      :compact="true"
     />
     <el-button
       class="composer__send"
