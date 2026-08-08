@@ -28,7 +28,7 @@ public class AgentEventMapper {
       return StreamEventDto.error(errorMessage(throwable));
     }
     if (agentEvent instanceof TextBlockDeltaEvent textBlockDeltaEvent) {
-      return StreamEventDto.textDelta(textBlockDeltaEvent.getDelta());
+      return StreamEventDto.textDelta(InternalPathRedactor.redact(textBlockDeltaEvent.getDelta()));
     }
     if (agentEvent instanceof ToolCallStartEvent toolCallStartEvent) {
       return StreamEventDto.toolCall(toolCallStartEvent.getToolCallName(), Map.of());

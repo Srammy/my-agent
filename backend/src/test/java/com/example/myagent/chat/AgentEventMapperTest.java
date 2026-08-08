@@ -38,6 +38,14 @@ class AgentEventMapperTest {
   }
 
   @Test
+  void mapsTextDeltaWithoutExposingInternalPaths() {
+    StreamEventDto event =
+        mapper.map(new TextBlockDeltaEvent("reply-1", "block-1", "草稿目录：skills/_drafts/"));
+
+    assertThat(event.payload()).containsEntry("delta", "草稿目录：草稿区域");
+  }
+
+  @Test
   void mapsToolCallStartToToolCallEvent() {
     StreamEventDto event = mapper.map(new ToolCallStartEvent("reply-1", "call-1", "shell_command"));
 

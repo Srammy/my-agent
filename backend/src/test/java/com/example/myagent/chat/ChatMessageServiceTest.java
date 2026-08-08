@@ -98,6 +98,17 @@ class ChatMessageServiceTest {
         .containsEntry("input", Map.of("path", "a.md"));
   }
 
+  @Test
+  void toDtoRedactsAssistantPathsButKeepsUserPaths() {
+    ChatMessageDto assistant =
+        service.toDto(message("m_1", "assistant", "草稿目录：skills/_drafts/", "[]", CREATED_AT));
+    ChatMessageDto user =
+        service.toDto(message("m_2", "user", "请读取 skills/_drafts/example", "[]", CREATED_AT));
+
+    assertThat(assistant.content()).isEqualTo("草稿目录：草稿区域");
+    assertThat(user.content()).isEqualTo("请读取 skills/_drafts/example");
+  }
+
   private ChatMessageEntity message(
       String id, String role, String content, String eventsJson, LocalDateTime createdAt) {
     return new ChatMessageEntity(

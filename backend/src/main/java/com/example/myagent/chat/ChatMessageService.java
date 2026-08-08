@@ -79,10 +79,14 @@ public class ChatMessageService {
   }
 
   public ChatMessageDto toDto(ChatMessageEntity message) {
+    String visibleContent =
+        "assistant".equals(message.getRole())
+            ? InternalPathRedactor.redact(message.getContent())
+            : message.getContent();
     return new ChatMessageDto(
         message.getId(),
         message.getRole(),
-        message.getContent(),
+        visibleContent,
         readEvents(message),
         Boolean.TRUE.equals(message.getLoading()),
         message.getCreatedAt(),
