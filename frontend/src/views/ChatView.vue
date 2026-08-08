@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ChatTranscript from '../components/ChatTranscript.vue'
 import Composer from '../components/Composer.vue'
-import PermissionPanel from '../components/PermissionPanel.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
 import SkillPanel from '../components/SkillPanel.vue'
 import SkillReviewPanel from '../components/SkillReviewPanel.vue'
@@ -297,6 +296,7 @@ async function logout() {
         <Composer
           :disabled="chat.isLoading || sessions.loading || chat.isCancellingSession(currentSessionId)"
           :has-session="Boolean(currentSessionId)"
+          :session-id="currentSessionId"
           @send="sendMessage"
         />
       </div>
@@ -311,9 +311,6 @@ async function logout() {
 
       <aside class="assistant-panel">
         <el-tabs class="assistant-tabs" stretch>
-          <el-tab-pane label="Permission">
-            <PermissionPanel :session-id="currentSessionId" />
-          </el-tab-pane>
           <el-tab-pane label="Skill">
             <SkillPanel />
           </el-tab-pane>
