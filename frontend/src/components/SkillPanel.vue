@@ -29,7 +29,19 @@ async function handleFiles(event: Event) {
   <section class="assistant-panel-section" v-loading="skills.loading">
     <div class="panel-row">
       <strong>我的 Skill</strong>
-      <el-button size="small" @click="triggerUpload">上传</el-button>
+      <el-tooltip placement="top" effect="light">
+        <template #content>
+          <div class="skill-upload-tooltip">
+            <div>请确认目录结构类似：</div>
+            <pre>my-skill/
+├─ SKILL.md
+├─ references/
+├─ scripts/
+└─ assets/</pre>
+          </div>
+        </template>
+        <el-button size="small" @click="triggerUpload">上传</el-button>
+      </el-tooltip>
       <input
         ref="fileInput"
         type="file"

@@ -298,6 +298,17 @@ textarea {
   gap: 10px;
 }
 
+.skill-upload-tooltip {
+  line-height: 1.5;
+}
+
+.skill-upload-tooltip pre {
+  margin: 4px 0 0;
+  color: inherit;
+  font: inherit;
+  white-space: pre;
+}
+
 .panel-row strong,
 .panel-block strong,
 .skill-item strong,

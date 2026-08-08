@@ -29,6 +29,24 @@ describe('SkillPanel', () => {
     expect(input.attributes('webkitdirectory')).toBeDefined()
   })
 
+  it('shows the required Skill directory structure in the upload tooltip', async () => {
+    const wrapper = mount(SkillPanel, { global: { plugins: [ElementPlus] } })
+    const tooltip = wrapper.findComponent({ name: 'ElTooltip' })
+
+    expect(tooltip.exists()).toBe(true)
+
+    await wrapper.get('button').trigger('mouseenter')
+    await vi.waitFor(() => expect(document.body.querySelector('.skill-upload-tooltip')).not.toBeNull())
+
+    const content = document.body.querySelector<HTMLElement>('.skill-upload-tooltip')
+    expect(content?.textContent).toContain('请确认目录结构类似：')
+    expect(content?.textContent).toContain('my-skill/')
+    expect(content?.textContent).toContain('├─ SKILL.md')
+    expect(content?.textContent).toContain('└─ assets/')
+
+    wrapper.unmount()
+  })
+
   it('renders skill name and description as separate fields', async () => {
     vi.mocked(skillsApi.listMySkills).mockResolvedValueOnce([
       {
