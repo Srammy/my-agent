@@ -136,9 +136,36 @@ textarea {
 .chat-workspace {
   display: grid;
   flex: 1;
-  grid-template-columns: 280px minmax(0, 1fr) 360px;
+  grid-template-columns:
+    var(--session-sidebar-width, 280px)
+    8px
+    minmax(420px, 1fr)
+    8px
+    var(--assistant-panel-width, 360px);
   height: 100%;
   min-height: 0;
+}
+
+.chat-resizer {
+  z-index: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  padding: 0;
+  touch-action: none;
+}
+
+.chat-resizer:hover,
+.chat-resizer:focus-visible {
+  background: #dbeafe;
+  outline: none;
+}
+
+body.chat-resizing,
+body.chat-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .session-sidebar {
@@ -667,6 +694,10 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .chat-resizer {
+    display: none;
+  }
+
   .session-sidebar {
     max-height: 220px;
     border-right: 0;
@@ -705,6 +736,10 @@ textarea {
 @media (min-width: 521px) and (max-width: 1180px) {
   .chat-workspace {
     grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .chat-resizer {
+    display: none;
   }
 
   .assistant-panel {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ChatTranscript from '../components/ChatTranscript.vue'
 import Composer from '../components/Composer.vue'
@@ -16,6 +16,34 @@ const auth = useAuthStore()
 const chat = useChatStore()
 const router = useRouter()
 const sessions = useSessionsStore()
+
+const SESSION_SIDEBAR_WIDTH_KEY = 'myagent.chat.sessionSidebarWidth'
+const ASSISTANT_PANEL_WIDTH_KEY = 'myagent.chat.assistantPanelWidth'
+const SESSION_SIDEBAR_DEFAULT_WIDTH = 280
+const ASSISTANT_PANEL_DEFAULT_WIDTH = 360
+const SESSION_SIDEBAR_MIN_WIDTH = 220
+const SESSION_SIDEBAR_MAX_WIDTH = 420
+const ASSISTANT_PANEL_MIN_WIDTH = 280
+const ASSISTANT_PANEL_MAX_WIDTH = 500
+const MAIN_MIN_WIDTH = 420
+const RESIZER_WIDTH = 8
+
+type Sidebar = 'session' | 'assistant'
+
+const workspace = ref<HTMLElement>()
+const activeResizer = ref<Sidebar>()
+const activePointerId = ref<number>()
+const activeResizerElement = ref<HTMLElement>()
+const sessionSidebarWidth = ref(
+  readSavedWidth(SESSION_SIDEBAR_WIDTH_KEY, SESSION_SIDEBAR_DEFAULT_WIDTH, SESSION_SIDEBAR_MIN_WIDTH, SESSION_SIDEBAR_MAX_WIDTH)
+)
+const assistantPanelWidth = ref(
+  readSavedWidth(ASSISTANT_PANEL_WIDTH_KEY, ASSISTANT_PANEL_DEFAULT_WIDTH, ASSISTANT_PANEL_MIN_WIDTH, ASSISTANT_PANEL_MAX_WIDTH)
+)
+const workspaceStyle = computed(() => ({
+  '--session-sidebar-width': `${sessionSidebarWidth.value}px`,
+  '--assistant-panel-width': `${assistantPanelWidth.value}px`
+}))
 
 const currentSessionId = computed(() => sessions.currentSessionId)
 const currentMessages = computed(() =>
@@ -37,8 +65,139 @@ watch(
 )
 
 onMounted(async () => {
+  clampSavedSidebarWidths()
+  window.addEventListener('resize', clampSavedSidebarWidths)
   await sessions.loadSessions()
 })
+
+onBeforeUnmount(() => {
+  finishResize(undefined, false)
+  window.removeEventListener('resize', clampSavedSidebarWidths)
+})
+
+function readSavedWidth(key: string, defaultWidth: number, minWidth: number, maxWidth: number) {
+  const rawWidth = window.localStorage.getItem(key)
+  const width = rawWidth === null || rawWidth.trim() === '' ? Number.NaN : Number(rawWidth)
+
+  if (!Number.isFinite(width) || width < minWidth || width > maxWidth) {
+    return defaultWidth
+  }
+
+  return width
+}
+
+function isDesktopLayout() {
+  return window.innerWidth > 1180
+}
+
+function boundsFor(sidebar: Sidebar) {
+  return sidebar === 'session'
+    ? [SESSION_SIDEBAR_MIN_WIDTH, SESSION_SIDEBAR_MAX_WIDTH]
+    : [ASSISTANT_PANEL_MIN_WIDTH, ASSISTANT_PANEL_MAX_WIDTH]
+}
+
+function constrainSidebarWidth(sidebar: Sidebar, width: number, workspaceWidth: number) {
+  const [minWidth, maxWidth] = boundsFor(sidebar)
+  const oppositeWidth = sidebar === 'session' ? assistantPanelWidth.value : sessionSidebarWidth.value
+  const maxWidthWithMain = workspaceWidth - (RESIZER_WIDTH * 2) - MAIN_MIN_WIDTH - oppositeWidth
+  const constrainedMaxWidth = Math.max(minWidth, Math.min(maxWidth, maxWidthWithMain))
+
+  return Math.min(Math.max(width, minWidth), constrainedMaxWidth)
+}
+
+function setSidebarWidth(sidebar: Sidebar, width: number, workspaceWidth: number) {
+  const constrainedWidth = constrainSidebarWidth(sidebar, width, workspaceWidth)
+
+  if (sidebar === 'session') {
+    sessionSidebarWidth.value = constrainedWidth
+  } else {
+    assistantPanelWidth.value = constrainedWidth
+  }
+}
+
+function clampSavedSidebarWidths() {
+  if (!isDesktopLayout() || !workspace.value) {
+    return
+  }
+
+  const workspaceWidth = workspace.value.getBoundingClientRect().width
+  if (workspaceWidth <= 0) {
+    return
+  }
+
+  setSidebarWidth('session', sessionSidebarWidth.value, workspaceWidth)
+  setSidebarWidth('assistant', assistantPanelWidth.value, workspaceWidth)
+}
+
+function startResize(sidebar: Sidebar, event: PointerEvent) {
+  if (!isDesktopLayout() || activePointerId.value !== undefined) {
+    return
+  }
+
+  event.preventDefault()
+  const resizer = event.currentTarget as HTMLElement
+  activeResizer.value = sidebar
+  activePointerId.value = event.pointerId
+  activeResizerElement.value = resizer
+  resizer.setPointerCapture?.(event.pointerId)
+  document.body.classList.add('chat-resizing')
+  window.addEventListener('pointermove', handleResize)
+  window.addEventListener('pointerup', finishResize)
+  window.addEventListener('pointercancel', finishResize)
+}
+
+function handleResize(event: PointerEvent) {
+  if (
+    !activeResizer.value
+    || !workspace.value
+    || !isDesktopLayout()
+    || event.pointerId !== activePointerId.value
+  ) {
+    return
+  }
+
+  const workspaceBounds = workspace.value.getBoundingClientRect()
+  const width = activeResizer.value === 'session'
+    ? event.clientX - workspaceBounds.left
+    : workspaceBounds.right - event.clientX
+
+  setSidebarWidth(activeResizer.value, width, workspaceBounds.width)
+}
+
+function finishResize(event?: PointerEvent, persist = true) {
+  if (event && event.pointerId !== activePointerId.value) {
+    return
+  }
+
+  const sidebar = activeResizer.value
+  const pointerId = activePointerId.value
+  const resizer = activeResizerElement.value
+  activeResizer.value = undefined
+  activePointerId.value = undefined
+  activeResizerElement.value = undefined
+  document.body.classList.remove('chat-resizing')
+  window.removeEventListener('pointermove', handleResize)
+  window.removeEventListener('pointerup', finishResize)
+  window.removeEventListener('pointercancel', finishResize)
+
+  if (pointerId !== undefined && resizer) {
+    try {
+      resizer.releasePointerCapture?.(pointerId)
+    } catch {
+      // The pointer may already have been released by the browser.
+    }
+  }
+
+  if (!persist) {
+    return
+  }
+
+  if (sidebar === 'session') {
+    window.localStorage.setItem(SESSION_SIDEBAR_WIDTH_KEY, String(sessionSidebarWidth.value))
+  } else if (sidebar === 'assistant') {
+    window.localStorage.setItem(ASSISTANT_PANEL_WIDTH_KEY, String(assistantPanelWidth.value))
+  }
+}
 
 async function createSession() {
   const session = await sessions.createSession()
@@ -99,7 +258,12 @@ async function logout() {
       </div>
     </header>
 
-    <section class="chat-workspace">
+    <section
+      ref="workspace"
+      class="chat-workspace"
+      :class="{ 'chat-workspace--resizing': activeResizer }"
+      :style="workspaceStyle"
+    >
       <SessionSidebar
         :sessions="sessions.sessions"
         :current-session-id="currentSessionId"
@@ -111,6 +275,14 @@ async function logout() {
         @select="selectSession"
         @delete="deleteSession"
         @rename="renameSession"
+      />
+
+      <button
+        type="button"
+        class="chat-resizer chat-resizer--session"
+        data-testid="session-sidebar-resizer"
+        aria-label="拖动调整会话栏宽度"
+        @pointerdown="startResize('session', $event)"
       />
 
       <div class="chat-main">
@@ -129,6 +301,14 @@ async function logout() {
           @send="sendMessage"
         />
       </div>
+
+      <button
+        type="button"
+        class="chat-resizer chat-resizer--assistant"
+        data-testid="assistant-panel-resizer"
+        aria-label="拖动调整辅助面板宽度"
+        @pointerdown="startResize('assistant', $event)"
+      />
 
       <aside class="assistant-panel">
         <el-tabs class="assistant-tabs" stretch>

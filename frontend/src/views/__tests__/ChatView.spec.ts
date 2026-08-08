@@ -38,6 +38,19 @@ async function mountView() {
   return wrapper
 }
 
+function setDesktopViewportWidth(width: number) {
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    value: width
+  })
+}
+
+function pointerEvent(type: string, pointerId: number, clientX = 0) {
+  const event = new MouseEvent(type, { bubbles: true, clientX })
+  Object.defineProperty(event, 'pointerId', { value: pointerId })
+  return event
+}
+
 describe('ChatView session deletion', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -189,6 +202,213 @@ describe('ChatView header', () => {
 
     expect(wrapper.find('.chat-brand span').exists()).toBe(false)
     expect(wrapper.find('.chat-topbar__actions').text()).toContain('haha')
+  })
+})
+
+describe('ChatView sidebars resizing', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+    localStorage.clear()
+    setDesktopViewportWidth(1400)
+  })
+
+  it('restores saved sidebar widths on the desktop workspace', async () => {
+    localStorage.setItem('myagent.chat.sessionSidebarWidth', '340')
+    localStorage.setItem('myagent.chat.assistantPanelWidth', '420')
+
+    const wrapper = await mountView()
+    const workspace = wrapper.find('.chat-workspace')
+
+    expect(workspace.attributes('style')).toContain('--session-sidebar-width: 340px')
+    expect(workspace.attributes('style')).toContain('--assistant-panel-width: 420px')
+  })
+
+  it('falls back to default widths when saved values are invalid', async () => {
+    localStorage.setItem('myagent.chat.sessionSidebarWidth', '')
+    localStorage.setItem('myagent.chat.assistantPanelWidth', 'not-a-number')
+
+    const wrapper = await mountView()
+    const workspace = wrapper.find('.chat-workspace')
+
+    expect(workspace.attributes('style')).toContain('--session-sidebar-width: 280px')
+    expect(workspace.attributes('style')).toContain('--assistant-panel-width: 360px')
+  })
+
+  it('falls back to default widths when saved values are out of range', async () => {
+    localStorage.setItem('myagent.chat.sessionSidebarWidth', '421')
+    localStorage.setItem('myagent.chat.assistantPanelWidth', '501')
+
+    const wrapper = await mountView()
+    const workspace = wrapper.find('.chat-workspace')
+
+    expect(workspace.attributes('style')).toContain('--session-sidebar-width: 280px')
+    expect(workspace.attributes('style')).toContain('--assistant-panel-width: 360px')
+  })
+
+  it('keeps the main chat area at least 420px wide when the desktop workspace narrows', async () => {
+    localStorage.setItem('myagent.chat.sessionSidebarWidth', '420')
+    localStorage.setItem('myagent.chat.assistantPanelWidth', '500')
+    setDesktopViewportWidth(1181)
+
+    const wrapper = await mountView()
+    const workspace = wrapper.find('.chat-workspace').element as HTMLElement
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 0,
+      right: 1181,
+      top: 0,
+      width: 1181,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+
+    window.dispatchEvent(new Event('resize'))
+    await nextTick()
+
+    const leftWidth = Number.parseFloat(workspace.style.getPropertyValue('--session-sidebar-width'))
+    const rightWidth = Number.parseFloat(workspace.style.getPropertyValue('--assistant-panel-width'))
+    expect(1181 - leftWidth - rightWidth - 16).toBeGreaterThanOrEqual(420)
+  })
+
+  it('persists the left sidebar width after dragging its resizer', async () => {
+    const wrapper = await mountView()
+    const workspace = wrapper.find('.chat-workspace').element as HTMLElement
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 0,
+      right: 1400,
+      top: 0,
+      width: 1400,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+
+    await wrapper.find('[data-testid="session-sidebar-resizer"]').trigger('pointerdown', {
+      clientX: 280
+    })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 340 }))
+    window.dispatchEvent(new MouseEvent('pointerup'))
+    await nextTick()
+
+    expect(localStorage.getItem('myagent.chat.sessionSidebarWidth')).toBe('340')
+    expect(wrapper.find('.chat-workspace').attributes('style')).toContain('--session-sidebar-width: 340px')
+  })
+
+  it('persists the right sidebar width after dragging its resizer', async () => {
+    const wrapper = await mountView()
+    const workspace = wrapper.find('.chat-workspace').element as HTMLElement
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 0,
+      right: 1400,
+      top: 0,
+      width: 1400,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+
+    await wrapper.find('[data-testid="assistant-panel-resizer"]').trigger('pointerdown', {
+      clientX: 1040
+    })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 960 }))
+    window.dispatchEvent(new MouseEvent('pointerup'))
+    await nextTick()
+
+    expect(localStorage.getItem('myagent.chat.assistantPanelWidth')).toBe('440')
+    expect(wrapper.find('.chat-workspace').attributes('style')).toContain('--assistant-panel-width: 440px')
+  })
+
+  it('keeps a drag owned by its initiating pointer and persists when it is cancelled', async () => {
+    const wrapper = await mountView()
+    const workspace = wrapper.find('.chat-workspace').element as HTMLElement
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 0,
+      right: 1400,
+      top: 0,
+      width: 1400,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+    const resizer = wrapper.find('[data-testid="session-sidebar-resizer"]').element as HTMLElement
+    const setPointerCapture = vi.fn()
+    const releasePointerCapture = vi.fn()
+    Object.assign(resizer, { setPointerCapture, releasePointerCapture })
+
+    resizer.dispatchEvent(pointerEvent('pointerdown', 1, 280))
+    window.dispatchEvent(pointerEvent('pointermove', 2, 400))
+    window.dispatchEvent(pointerEvent('pointerup', 2))
+    window.dispatchEvent(pointerEvent('pointermove', 1, 340))
+    window.dispatchEvent(pointerEvent('pointercancel', 1))
+    await nextTick()
+
+    expect(setPointerCapture).toHaveBeenCalledWith(1)
+    expect(releasePointerCapture).toHaveBeenCalledWith(1)
+    expect(wrapper.find('.chat-workspace').attributes('style')).toContain('--session-sidebar-width: 340px')
+    expect(localStorage.getItem('myagent.chat.sessionSidebarWidth')).toBe('340')
+    expect(document.body.classList.contains('chat-resizing')).toBe(false)
+  })
+
+  it('cleans up an active drag when the component unmounts', async () => {
+    const wrapper = await mountView()
+    const resizer = wrapper.find('[data-testid="session-sidebar-resizer"]').element as HTMLElement
+    Object.assign(resizer, { setPointerCapture: vi.fn(), releasePointerCapture: vi.fn() })
+
+    resizer.dispatchEvent(pointerEvent('pointerdown', 1, 280))
+    wrapper.unmount()
+    window.dispatchEvent(pointerEvent('pointerup', 1))
+
+    expect(document.body.classList.contains('chat-resizing')).toBe(false)
+    expect(localStorage.getItem('myagent.chat.sessionSidebarWidth')).toBeNull()
+  })
+
+  it('does not start resizing from a resizer at the responsive breakpoint', async () => {
+    setDesktopViewportWidth(1180)
+    const wrapper = await mountView()
+    const resizer = wrapper.find('[data-testid="session-sidebar-resizer"]').element as HTMLElement
+    Object.assign(resizer, { setPointerCapture: vi.fn(), releasePointerCapture: vi.fn() })
+
+    resizer.dispatchEvent(pointerEvent('pointerdown', 1, 280))
+    window.dispatchEvent(pointerEvent('pointermove', 1, 340))
+    window.dispatchEvent(pointerEvent('pointerup', 1))
+
+    expect(document.body.classList.contains('chat-resizing')).toBe(false)
+    expect(localStorage.getItem('myagent.chat.sessionSidebarWidth')).toBeNull()
+  })
+
+  it('limits the left sidebar to its minimum width while dragging', async () => {
+    const wrapper = await mountView()
+    const workspace = wrapper.find('.chat-workspace').element as HTMLElement
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 0,
+      right: 1400,
+      top: 0,
+      width: 1400,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    })
+    const resizer = wrapper.find('[data-testid="session-sidebar-resizer"]').element as HTMLElement
+    Object.assign(resizer, { setPointerCapture: vi.fn(), releasePointerCapture: vi.fn() })
+
+    resizer.dispatchEvent(pointerEvent('pointerdown', 1, 280))
+    window.dispatchEvent(pointerEvent('pointermove', 1, 10))
+    window.dispatchEvent(pointerEvent('pointerup', 1))
+    await nextTick()
+
+    expect(localStorage.getItem('myagent.chat.sessionSidebarWidth')).toBe('220')
+    expect(wrapper.find('.chat-workspace').attributes('style')).toContain('--session-sidebar-width: 220px')
   })
 })
 
