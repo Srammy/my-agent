@@ -56,7 +56,7 @@ async function handleFiles(event: Event) {
       <li v-for="skill in skills.mySkills" :key="skill.name" class="skill-list-item">
         <div class="skill-info">
           <span class="skill-name">{{ skill.name }}</span>
-          <el-tooltip placement="top" effect="light">
+          <el-tooltip placement="bottom" effect="light">
             <template #content>
               <div class="skill-description-tooltip">{{ skill.description }}</div>
             </template>

@@ -84,6 +84,24 @@ describe('SkillPanel', () => {
     wrapper.unmount()
   })
 
+  it('prefers displaying a Skill description tooltip below its trigger', async () => {
+    vi.mocked(skillsApi.listMySkills).mockResolvedValueOnce([
+      {
+        name: 'code-reviewer',
+        description: 'Review pull requests thoroughly.'
+      }
+    ])
+    const wrapper = mount(SkillPanel, { global: { plugins: [ElementPlus] } })
+
+    await vi.waitFor(() => expect(wrapper.find('.skill-description').exists()).toBe(true))
+
+    const tooltip = wrapper.findAllComponents({ name: 'ElTooltip' })
+      .find((component) => component.find('.skill-description').exists())
+    expect(tooltip?.props('placement')).toBe('bottom')
+
+    wrapper.unmount()
+  })
+
   it('clears the directory input after an upload failure', async () => {
     vi.mocked(skillsApi.uploadSkill).mockRejectedValueOnce(new Error('upload failed'))
     const errorHandler = vi.fn()
