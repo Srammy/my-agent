@@ -67,6 +67,23 @@ describe('ChatTranscript auto scroll', () => {
     expect(wrapper.find('.chat-transcript__status').exists()).toBe(false)
   })
 
+  it('hides internal paths from assistant content already held in memory', () => {
+    const wrapper = mount(ChatTranscript, {
+      props: {
+        messages: [message('m1', '草稿目录（`skills/_drafts/`）为空。')],
+        loading: false,
+        hasSession: true,
+        sessionId: 's1'
+      },
+      global: { stubs: { ToolEventCard: true } }
+    })
+
+    const content = wrapper.get('.message-bubble__content').text()
+
+    expect(content).toContain('草稿区域')
+    expect(content).not.toContain('skills/_drafts/')
+  })
+
   it('does not force scroll when the user has scrolled up', async () => {
     const wrapper = mount(ChatTranscript, {
       props: { messages: [message('m1', 'hello')], loading: false, hasSession: true, sessionId: 's1' },

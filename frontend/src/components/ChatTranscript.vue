@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import type { ChatMessage } from '../stores/chat'
 import ToolEventCard from './ToolEventCard.vue'
+import { redactInternalPaths } from '../utils/redactInternalPaths'
 
 const NEAR_BOTTOM_THRESHOLD = 80
 
@@ -40,6 +41,10 @@ function roleLabel(role: ChatMessage['role']) {
   }
 
   return '系统'
+}
+
+function visibleContent(message: ChatMessage) {
+  return message.role === 'assistant' ? redactInternalPaths(message.content) : message.content
 }
 
 function updateNearBottom() {
@@ -114,7 +119,7 @@ watch(
     >
       <div class="message-bubble">
         <div class="message-bubble__meta">{{ roleLabel(message.role) }}</div>
-        <div v-if="message.content" class="message-bubble__content">{{ message.content }}</div>
+        <div v-if="visibleContent(message)" class="message-bubble__content">{{ visibleContent(message) }}</div>
         <div v-else-if="message.loading" class="message-bubble__content message-bubble__muted">
           正在思考...
         </div>
