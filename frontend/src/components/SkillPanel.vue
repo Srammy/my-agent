@@ -56,7 +56,12 @@ async function handleFiles(event: Event) {
       <li v-for="skill in skills.mySkills" :key="skill.name" class="skill-list-item">
         <div class="skill-info">
           <span class="skill-name">{{ skill.name }}</span>
-          <span class="skill-description panel-muted">{{ skill.description }}</span>
+          <el-tooltip placement="top" effect="light">
+            <template #content>
+              <div class="skill-description-tooltip">{{ skill.description }}</div>
+            </template>
+            <span class="skill-description panel-muted">{{ skill.description }}</span>
+          </el-tooltip>
         </div>
         <el-button size="small" type="danger" @click="skills.deleteSkill(skill.name)">
           删除

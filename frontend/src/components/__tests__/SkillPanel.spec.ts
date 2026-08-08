@@ -65,6 +65,25 @@ describe('SkillPanel', () => {
       .toBe('Use this agent when you need to conduct comprehensive code reviews')
   })
 
+  it('shows the complete multiline description when hovering a Skill description', async () => {
+    vi.mocked(skillsApi.listMySkills).mockResolvedValueOnce([
+      {
+        name: 'code-reviewer',
+        description: 'Review pull requests thoroughly.\nPreserve this second line.'
+      }
+    ])
+    const wrapper = mount(SkillPanel, { global: { plugins: [ElementPlus] } })
+
+    await vi.waitFor(() => expect(wrapper.find('.skill-description').exists()).toBe(true))
+    await wrapper.get('.skill-description').trigger('mouseenter')
+    await vi.waitFor(() => expect(document.body.querySelector('.skill-description-tooltip')).not.toBeNull())
+
+    const content = document.body.querySelector<HTMLElement>('.skill-description-tooltip')
+    expect(content?.textContent).toBe('Review pull requests thoroughly.\nPreserve this second line.')
+
+    wrapper.unmount()
+  })
+
   it('clears the directory input after an upload failure', async () => {
     vi.mocked(skillsApi.uploadSkill).mockRejectedValueOnce(new Error('upload failed'))
     const errorHandler = vi.fn()

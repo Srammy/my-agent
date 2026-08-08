@@ -466,6 +466,12 @@ textarea {
   white-space: nowrap;
 }
 
+.skill-description-tooltip {
+  max-width: 360px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .skill-name {
   color: #0f172a;
   font-weight: 600;
