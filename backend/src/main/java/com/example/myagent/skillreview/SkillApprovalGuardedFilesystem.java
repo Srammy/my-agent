@@ -24,19 +24,19 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
       SkillApprovalGuardedFilesystem.class.getName() + ".draftSkillName";
   private static final String FORMAL_SKILL_WRITE_ERROR =
       "Agent cannot modify formal skills directly; use the draft approval flow";
+  private static final String HUMAN_PROMOTION_ERROR =
+      "Skill promotion requires human approval action";
   private static final String MULTIPLE_DRAFT_SKILLS_ERROR =
       "Only one skill draft can be created per agent request";
 
   private final AbstractFilesystem delegate;
   private final String userId;
   private final SkillDraftLock draftLock;
-  private final SkillPromotionGuard promotionGuard;
 
   public SkillApprovalGuardedFilesystem(
       AbstractFilesystem delegate,
       String userId,
-      SkillDraftLock draftLock,
-      SkillPromotionGuard promotionGuard) {
+      SkillDraftLock draftLock) {
     if (delegate == null) {
       throw new IllegalArgumentException("delegate is required");
     }
@@ -46,13 +46,9 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
     if (draftLock == null) {
       throw new IllegalArgumentException("draftLock is required");
     }
-    if (promotionGuard == null) {
-      throw new IllegalArgumentException("promotionGuard is required");
-    }
     this.delegate = delegate;
     this.userId = userId;
     this.draftLock = draftLock;
-    this.promotionGuard = promotionGuard;
   }
 
   @Override
@@ -134,17 +130,8 @@ public final class SkillApprovalGuardedFilesystem implements AbstractFilesystem 
 
   @Override
   public WriteResult move(RuntimeContext context, String source, String target) {
-    Optional<String> promotedSkill = promotedSkillName(source, target);
-    if (promotedSkill.isPresent()) {
-      return withDraftLock(
-          handle ->
-              promotionGuard.moveApprovedDraft(
-                  userId,
-                  promotedSkill.get(),
-                  delegate,
-                  context,
-                  handle,
-                  () -> delegate.move(context, source, target)));
+    if (promotedSkillName(source, target).isPresent()) {
+      return WriteResult.fail(HUMAN_PROMOTION_ERROR);
     }
     if (affectsFormalSkills(source) || affectsFormalSkills(target)) {
       return WriteResult.fail(FORMAL_SKILL_WRITE_ERROR);

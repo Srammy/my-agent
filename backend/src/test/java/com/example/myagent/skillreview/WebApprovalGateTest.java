@@ -42,7 +42,7 @@ class WebApprovalGateTest {
   }
 
   @Test
-  void reviewApprovesWhenDecisionIsApproved() {
+  void reviewDefersWhenDecisionIsApprovedBecausePromotionIsManual() {
     SkillCandidate candidate = buildCandidate("my-skill");
     Instant now = Instant.now();
     SkillReviewDecision storedDecision =
@@ -54,12 +54,7 @@ class WebApprovalGateTest {
     SkillPromotionGate.PromotionDecision decision =
         gate.review(candidate, ctx).block();
 
-    assertThat(decision).isInstanceOf(SkillPromotionGate.PromotionDecision.Approve.class);
-    SkillPromotionGate.PromotionDecision.Approve approve =
-        (SkillPromotionGate.PromotionDecision.Approve) decision;
-    assertThat(approve.reviewerId()).isEqualTo("reviewer1");
-    assertThat(approve.targetEnvironments()).containsExactly("prod");
-    assertThat(approve.decidedAt()).isEqualTo(now);
+    assertThat(decision).isInstanceOf(SkillPromotionGate.PromotionDecision.Defer.class);
   }
 
   @Test

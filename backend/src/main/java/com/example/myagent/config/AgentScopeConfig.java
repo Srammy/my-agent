@@ -313,13 +313,13 @@ public class AgentScopeConfig {
 
   @Bean
   UserScopedFilesystemFactory userScopedFilesystemFactory(
-      BaseStore workspaceBaseStore,
-      SkillDraftLock skillDraftLock,
-      SkillReviewDecisionStore decisionStore) {
-    return new UserScopedFilesystemFactory(
-        workspaceBaseStore,
-        skillDraftLock,
-        new SkillPromotionGuard(decisionStore));
+      BaseStore workspaceBaseStore, SkillDraftLock skillDraftLock) {
+    return new UserScopedFilesystemFactory(workspaceBaseStore, skillDraftLock);
+  }
+
+  @Bean
+  SkillPromotionGuard skillPromotionGuard(SkillReviewDecisionStore decisionStore) {
+    return new SkillPromotionGuard(decisionStore);
   }
 
   AgentToolPolicy toolPolicy(AgentProperties agentProperties) {

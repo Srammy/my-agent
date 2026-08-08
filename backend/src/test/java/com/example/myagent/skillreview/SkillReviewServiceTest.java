@@ -68,11 +68,10 @@ class SkillReviewServiceTest {
     filesystemFactory =
         new UserScopedFilesystemFactory(
             new io.agentscope.harness.agent.filesystem.remote.store.InMemoryStore(),
-            draftLock,
-            promotionGuard);
+            draftLock);
     service =
         new SkillReviewService(
-            filesystem, decisionStore, filesystemFactory, fingerprint, draftLock);
+            filesystem, decisionStore, filesystemFactory, promotionGuard, fingerprint, draftLock);
   }
 
   @Test
@@ -95,12 +94,13 @@ class SkillReviewServiceTest {
         new RemoteFilesystem(store, IsolationScope.USER.toNamespaceFactory());
     SkillDraftLock scopedDraftLock = mock(SkillDraftLock.class);
     UserScopedFilesystemFactory scopedFactory =
-        new UserScopedFilesystemFactory(store, scopedDraftLock, mock(SkillPromotionGuard.class));
+        new UserScopedFilesystemFactory(store, scopedDraftLock);
     SkillReviewService reviewService =
         new SkillReviewService(
             sharedFilesystem,
             new SkillReviewDecisionStore(sharedFilesystem),
             scopedFactory,
+            mock(SkillPromotionGuard.class),
             mock(SkillDraftFingerprint.class),
             scopedDraftLock);
 
@@ -128,12 +128,13 @@ class SkillReviewServiceTest {
         new RemoteFilesystem(store, IsolationScope.USER.toNamespaceFactory());
     SkillDraftLock scopedDraftLock = mock(SkillDraftLock.class);
     UserScopedFilesystemFactory scopedFactory =
-        new UserScopedFilesystemFactory(store, scopedDraftLock, mock(SkillPromotionGuard.class));
+        new UserScopedFilesystemFactory(store, scopedDraftLock);
     SkillReviewService reviewService =
         new SkillReviewService(
             sharedFilesystem,
             new SkillReviewDecisionStore(sharedFilesystem),
             scopedFactory,
+            mock(SkillPromotionGuard.class),
             mock(SkillDraftFingerprint.class),
             scopedDraftLock);
 
@@ -313,12 +314,13 @@ class SkillReviewServiceTest {
     SkillDraftLock realDraftLock = new BaseStoreSkillDraftLock(store);
     UserScopedFilesystemFactory scopedFactory =
         new UserScopedFilesystemFactory(
-            store, realDraftLock, new SkillPromotionGuard(realDecisionStore));
+            store, realDraftLock);
     SkillReviewService reviewService =
         new SkillReviewService(
             sharedFilesystem,
             realDecisionStore,
             scopedFactory,
+            new SkillPromotionGuard(realDecisionStore),
             new SkillDraftFingerprint(sharedFilesystem),
             realDraftLock);
 
@@ -363,7 +365,7 @@ class SkillReviewServiceTest {
   }
 
   @Test
-  void listRepairsAnAlreadyApprovedDraftForTheRequestedUser() {
+  void listDoesNotPromoteAnAlreadyApprovedDraftForTheRequestedUser() {
     InMemoryStore store = new InMemoryStore();
     AbstractFilesystem sharedFilesystem =
         new RemoteFilesystem(store, IsolationScope.USER.toNamespaceFactory());
@@ -371,13 +373,14 @@ class SkillReviewServiceTest {
     SkillDraftLock realDraftLock = new BaseStoreSkillDraftLock(store);
     UserScopedFilesystemFactory scopedFactory =
         new UserScopedFilesystemFactory(
-            store, realDraftLock, new SkillPromotionGuard(realDecisionStore));
+            store, realDraftLock);
     SkillDraftFingerprint realFingerprint = new SkillDraftFingerprint(sharedFilesystem);
     SkillReviewService reviewService =
         new SkillReviewService(
             sharedFilesystem,
             realDecisionStore,
             scopedFactory,
+            new SkillPromotionGuard(realDecisionStore),
             realFingerprint,
             realDraftLock);
 
@@ -401,12 +404,14 @@ class SkillReviewServiceTest {
         .extracting(SkillReviewDto::status)
         .containsExactly("APPROVED");
     assertThat(
-            scopedFactory
-                .createWorkspaceApiFilesystem("1")
+            sharedFilesystem
                 .exists(
-                    RuntimeContext.empty(),
+                    RuntimeContext.builder().userId("1").sessionId("skill-review").build(),
                     "skills/tv-show-recommender/SKILL.md"))
-        .isTrue();
+        .isFalse();
+    assertThat(reviewService.list("1"))
+        .extracting(SkillReviewDto::skillName)
+        .containsExactly("tv-show-recommender");
   }
 
   @Test

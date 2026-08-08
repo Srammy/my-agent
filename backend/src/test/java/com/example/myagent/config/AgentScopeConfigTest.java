@@ -483,12 +483,7 @@ class AgentScopeConfigTest {
     UserScopedFilesystemFactory filesystemFactory =
         new UserScopedFilesystemFactory(
             workspaceStore,
-            new BaseStoreSkillDraftLock(workspaceStore),
-            new SkillPromotionGuard(
-                new SkillReviewDecisionStore(
-                    new io.agentscope.harness.agent.filesystem.remote.RemoteFilesystem(
-                        workspaceStore,
-                        io.agentscope.harness.agent.IsolationScope.USER.toNamespaceFactory()))));
+            new BaseStoreSkillDraftLock(workspaceStore));
     org.springframework.beans.factory.support.DefaultListableBeanFactory beanFactory =
         new org.springframework.beans.factory.support.DefaultListableBeanFactory();
     beanFactory.registerSingleton("redisTemplate", redisTemplate);

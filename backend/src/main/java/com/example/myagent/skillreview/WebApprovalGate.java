@@ -64,10 +64,8 @@ public class WebApprovalGate implements SkillPromotionGate {
               }
               return switch (decision.status()) {
                 case "APPROVED" ->
-                    new PromotionDecision.Approve(
-                        decision.reviewerId(),
-                        decision.environments() != null ? decision.environments() : java.util.List.of(),
-                        decision.decidedAt());
+                    new PromotionDecision.Defer(
+                        RETRY_AFTER, "Promotion requires explicit human approval action");
                 case "REJECTED" ->
                     new PromotionDecision.Reject(
                         decision.reason() != null ? decision.reason() : "",

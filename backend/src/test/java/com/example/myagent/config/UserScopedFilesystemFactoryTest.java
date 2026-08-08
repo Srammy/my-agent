@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.myagent.skillreview.BaseStoreSkillDraftLock;
 import com.example.myagent.skillreview.SkillDraftFingerprint;
-import com.example.myagent.skillreview.SkillPromotionGuard;
 import com.example.myagent.skillreview.SkillReviewDecisionStore;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.harness.agent.IsolationScope;
@@ -22,7 +21,7 @@ class UserScopedFilesystemFactoryTest {
     AbstractFilesystem sharedFilesystem =
         new RemoteFilesystem(store, IsolationScope.USER.toNamespaceFactory());
     SkillReviewDecisionStore decisionStore = new SkillReviewDecisionStore(sharedFilesystem);
-    UserScopedFilesystemFactory factory = factory(store, decisionStore);
+    UserScopedFilesystemFactory factory = factory(store);
     AbstractFilesystem aliceFilesystem = factory.create("101");
     RuntimeContext empty = RuntimeContext.empty();
     RuntimeContext aliceSessionOne = context("101", "s-1");
@@ -42,8 +41,9 @@ class UserScopedFilesystemFactoryTest {
             .computeDraftHash(aliceSessionOne, "reviewer");
     decisionStore.approve("reviewer", "admin", java.util.List.of("prod"), draftHash, "101");
     assertThat(
-            aliceFilesystem
-                .move(empty, "skills/_drafts/reviewer", "skills/reviewer")
+            factory
+                .createWorkspaceApiFilesystem("101")
+                .move(aliceSessionOne, "skills/_drafts/reviewer", "skills/reviewer")
                 .isSuccess())
         .isTrue();
 
@@ -55,11 +55,7 @@ class UserScopedFilesystemFactoryTest {
   @Test
   void rejectsBlankUserId() {
     InMemoryStore store = new InMemoryStore();
-    UserScopedFilesystemFactory factory =
-        factory(
-            store,
-            new SkillReviewDecisionStore(
-                new RemoteFilesystem(store, IsolationScope.USER.toNamespaceFactory())));
+    UserScopedFilesystemFactory factory = factory(store);
 
     assertThatThrownBy(() -> factory.create(" "))
         .isInstanceOf(IllegalArgumentException.class)
@@ -69,11 +65,7 @@ class UserScopedFilesystemFactoryTest {
   @Test
   void reusesFilesystemAndUsageStoreWithinTheSameUser() {
     InMemoryStore store = new InMemoryStore();
-    UserScopedFilesystemFactory factory =
-        factory(
-            store,
-            new SkillReviewDecisionStore(
-                new RemoteFilesystem(store, IsolationScope.USER.toNamespaceFactory())));
+    UserScopedFilesystemFactory factory = factory(store);
 
     assertThat(factory.create("101")).isSameAs(factory.create("101"));
     assertThat(factory.usageStore("101")).isSameAs(factory.usageStore("101"));
@@ -85,7 +77,7 @@ class UserScopedFilesystemFactoryTest {
     InMemoryStore store = new InMemoryStore();
     AbstractFilesystem sharedFilesystem =
         new RemoteFilesystem(store, IsolationScope.USER.toNamespaceFactory());
-    UserScopedFilesystemFactory factory = factory(store, new SkillReviewDecisionStore(sharedFilesystem));
+    UserScopedFilesystemFactory factory = factory(store);
     AbstractFilesystem agentFilesystem = factory.create("101");
     AbstractFilesystem apiFilesystem = factory.createWorkspaceApiFilesystem("101");
     AbstractFilesystem bobApiFilesystem = factory.createWorkspaceApiFilesystem("102");
@@ -125,11 +117,7 @@ class UserScopedFilesystemFactoryTest {
     return RuntimeContext.builder().userId(userId).sessionId(sessionId).build();
   }
 
-  private static UserScopedFilesystemFactory factory(
-      InMemoryStore store, SkillReviewDecisionStore decisionStore) {
-    return new UserScopedFilesystemFactory(
-        store,
-        new BaseStoreSkillDraftLock(store),
-        new SkillPromotionGuard(decisionStore));
+  private static UserScopedFilesystemFactory factory(InMemoryStore store) {
+    return new UserScopedFilesystemFactory(store, new BaseStoreSkillDraftLock(store));
   }
 }

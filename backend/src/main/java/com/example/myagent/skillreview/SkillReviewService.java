@@ -27,6 +27,7 @@ public class SkillReviewService {
   private final AbstractFilesystem filesystem;
   private final SkillReviewDecisionStore decisionStore;
   private final UserScopedFilesystemFactory filesystemFactory;
+  private final SkillPromotionGuard promotionGuard;
   private final SkillDraftFingerprint fingerprint;
   private final SkillDraftLock draftLock;
 
@@ -34,11 +35,13 @@ public class SkillReviewService {
       AbstractFilesystem filesystem,
       SkillReviewDecisionStore decisionStore,
       UserScopedFilesystemFactory filesystemFactory,
+      SkillPromotionGuard promotionGuard,
       SkillDraftFingerprint fingerprint,
       SkillDraftLock draftLock) {
     this.filesystem = filesystem;
     this.decisionStore = decisionStore;
     this.filesystemFactory = filesystemFactory;
+    this.promotionGuard = promotionGuard;
     this.fingerprint = fingerprint;
     this.draftLock = draftLock;
   }
@@ -81,8 +84,8 @@ public class SkillReviewService {
       requireRenewed(handle, userId);
       decision =
           decisionStore.approve(skillName, reviewerId, environments, draftHash, userId);
+      promoteApprovedDraft(ctx, skillName, userId, handle);
     }
-    promoteApprovedDraft(ctx, skillName, userId);
     return toDto(ctx, skillName, decision, usageStore(userId));
   }
 
@@ -121,9 +124,6 @@ public class SkillReviewService {
 
     Optional<SkillReviewDecision> maybeDecision = decisionStore.find(skillName, userId);
     String status = effectiveStatus(ctx, skillName, maybeDecision);
-    if ("APPROVED".equals(status)) {
-      promoteApprovedDraft(ctx, skillName, userId);
-    }
 
     Optional<SkillUsageRecord> maybeUsage = usageStore.get(skillName);
     long useCount = maybeUsage.map(SkillUsageRecord::useCount).orElse(0L);
@@ -244,11 +244,19 @@ public class SkillReviewService {
     }
   }
 
-  private void promoteApprovedDraft(RuntimeContext ctx, String skillName, String userId) {
+  private void promoteApprovedDraft(
+      RuntimeContext ctx, String skillName, String userId, SkillDraftLock.Handle lockHandle) {
+    AbstractFilesystem promotionFilesystem = filesystemFactory.createWorkspaceApiFilesystem(userId);
     WriteResult result =
-        filesystemFactory
-            .create(userId)
-            .move(ctx, DRAFTS_DIR + "/" + skillName, "skills/" + skillName);
+        promotionGuard.moveApprovedDraft(
+            userId,
+            skillName,
+            promotionFilesystem,
+            ctx,
+            lockHandle,
+            () ->
+                promotionFilesystem.move(
+                    ctx, DRAFTS_DIR + "/" + skillName, "skills/" + skillName));
     if (result == null || !result.isSuccess()) {
       String reason = result != null ? result.error() : "empty promotion result";
       throw new ResponseStatusException(

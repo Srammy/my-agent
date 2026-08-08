@@ -54,7 +54,7 @@ class SkillApprovalGuardedFilesystemTest {
     writeDraft(aliceFilesystem, ORIGINAL_SKILL_MD);
     approveCurrentDraft("101");
     assertThat(gate.review(candidate(), aliceContext).block())
-        .isInstanceOf(SkillPromotionGate.PromotionDecision.Approve.class);
+        .isInstanceOf(SkillPromotionGate.PromotionDecision.Defer.class);
 
     assertThat(
             aliceFilesystem
@@ -75,16 +75,16 @@ class SkillApprovalGuardedFilesystemTest {
   }
 
   @Test
-  void movesTheExactApprovedDraft() {
+  void refusesTheExactApprovedDraftMoveFromAgent() {
     writeDraft(aliceFilesystem, ORIGINAL_SKILL_MD);
     approveCurrentDraft("101");
 
     WriteResult result =
         aliceFilesystem.move(RuntimeContext.empty(), DRAFT_PATH, SKILL_PATH);
 
-    assertThat(result.isSuccess()).isTrue();
-    assertThat(sharedFilesystem.exists(aliceContext, DRAFT_PATH + "/SKILL.md")).isFalse();
-    assertThat(sharedFilesystem.exists(aliceContext, SKILL_PATH + "/SKILL.md")).isTrue();
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(result.error()).contains("human approval");
+    assertThat(aliceFilesystem.exists(RuntimeContext.empty(), SKILL_PATH + "/SKILL.md")).isFalse();
   }
 
   @Test
@@ -113,7 +113,7 @@ class SkillApprovalGuardedFilesystemTest {
   void refusesEditingAndDeletingFormalSkills() {
     writeDraft(aliceFilesystem, ORIGINAL_SKILL_MD);
     approveCurrentDraft("101");
-    assertThat(aliceFilesystem.move(RuntimeContext.empty(), DRAFT_PATH, SKILL_PATH).isSuccess())
+    assertThat(sharedFilesystem.move(aliceContext, DRAFT_PATH, SKILL_PATH).isSuccess())
         .isTrue();
 
     assertThat(
@@ -214,9 +214,8 @@ class SkillApprovalGuardedFilesystemTest {
   void ordinaryWritesDoNotAcquireTheDraftLock() {
     AbstractFilesystem delegate = mock(AbstractFilesystem.class);
     SkillDraftLock lock = mock(SkillDraftLock.class);
-    SkillPromotionGuard promotionGuard = mock(SkillPromotionGuard.class);
     AbstractFilesystem filesystem =
-        new SkillApprovalGuardedFilesystem(delegate, "101", lock, promotionGuard);
+        new SkillApprovalGuardedFilesystem(delegate, "101", lock);
     RuntimeContext context = RuntimeContext.empty();
     when(delegate.write(context, "notes/readme.md", "content"))
         .thenReturn(WriteResult.ok("notes/readme.md"));
@@ -232,9 +231,8 @@ class SkillApprovalGuardedFilesystemTest {
     AbstractFilesystem delegate = mock(AbstractFilesystem.class);
     SkillDraftLock lock = mock(SkillDraftLock.class);
     SkillDraftLock.Handle handle = mock(SkillDraftLock.Handle.class);
-    SkillPromotionGuard promotionGuard = mock(SkillPromotionGuard.class);
     AbstractFilesystem filesystem =
-        new SkillApprovalGuardedFilesystem(delegate, "101", lock, promotionGuard);
+        new SkillApprovalGuardedFilesystem(delegate, "101", lock);
     RuntimeContext context = RuntimeContext.empty();
     when(lock.acquire("101")).thenReturn(handle);
     when(delegate.write(context, DRAFT_PATH + "/SKILL.md", ORIGINAL_SKILL_MD))
@@ -282,8 +280,7 @@ class SkillApprovalGuardedFilesystemTest {
     return new SkillApprovalGuardedFilesystem(
         delegate,
         userId,
-        new BaseStoreSkillDraftLock(store),
-        new SkillPromotionGuard(decisionStore));
+        new BaseStoreSkillDraftLock(store));
   }
 
   private void writeDraft(AbstractFilesystem filesystem, String content) {
