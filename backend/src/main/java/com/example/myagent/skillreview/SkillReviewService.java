@@ -6,8 +6,10 @@ import com.example.myagent.skill.SkillValidator;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.harness.agent.filesystem.AbstractFilesystem;
 import io.agentscope.harness.agent.filesystem.model.FileInfo;
+import io.agentscope.harness.agent.filesystem.model.GlobResult;
 import io.agentscope.harness.agent.filesystem.model.LsResult;
 import io.agentscope.harness.agent.filesystem.model.ReadResult;
+import io.agentscope.harness.agent.filesystem.model.WriteResult;
 import io.agentscope.harness.agent.skill.curator.SkillUsageRecord;
 import io.agentscope.harness.agent.skill.curator.SkillUsageStore;
 import java.util.List;
@@ -44,21 +46,27 @@ public class SkillReviewService {
   public List<SkillReviewDto> list(String userId) {
     RuntimeContext ctx = userContext(userId);
     SkillUsageStore usageStore = usageStore(userId);
-    if (!filesystem.exists(ctx, DRAFTS_DIR)) {
-      return List.of();
-    }
-    LsResult result = filesystem.ls(ctx, DRAFTS_DIR);
-    if (!result.isSuccess()) {
-      return List.of();
-    }
-    return result.entries().stream()
-        .filter(FileInfo::isDirectory)
+    return draftEntries(ctx).stream()
         .map(FileInfo::path)
+        .map(SkillReviewService::draftEntryPath)
         .map(SkillReviewService::draftSkillName)
         .flatMap(Optional::stream)
         .sorted()
         .map(skillName -> buildDto(ctx, skillName, userId, usageStore))
         .toList();
+  }
+
+  private List<FileInfo> draftEntries(RuntimeContext ctx) {
+    GlobResult globResult = filesystem.glob(ctx, "SKILL.md", DRAFTS_DIR);
+    if (globResult != null
+        && globResult.isSuccess()
+        && globResult.matches() != null
+        && !globResult.matches().isEmpty()) {
+      return globResult.matches();
+    }
+
+    LsResult result = filesystem.ls(ctx, DRAFTS_DIR);
+    return result.isSuccess() && result.entries() != null ? result.entries() : List.of();
   }
 
   public SkillReviewDto approve(
@@ -74,6 +82,7 @@ public class SkillReviewService {
       decision =
           decisionStore.approve(skillName, reviewerId, environments, draftHash, userId);
     }
+    promoteApprovedDraft(ctx, skillName, userId);
     return toDto(ctx, skillName, decision, usageStore(userId));
   }
 
@@ -112,6 +121,9 @@ public class SkillReviewService {
 
     Optional<SkillReviewDecision> maybeDecision = decisionStore.find(skillName, userId);
     String status = effectiveStatus(ctx, skillName, maybeDecision);
+    if ("APPROVED".equals(status)) {
+      promoteApprovedDraft(ctx, skillName, userId);
+    }
 
     Optional<SkillUsageRecord> maybeUsage = usageStore.get(skillName);
     long useCount = maybeUsage.map(SkillUsageRecord::useCount).orElse(0L);
@@ -132,16 +144,17 @@ public class SkillReviewService {
   private String draftDescription(RuntimeContext ctx, String skillName) {
     String skillMdPath = DRAFTS_DIR + "/" + skillName + "/SKILL.md";
     String description = "";
-    if (filesystem.exists(ctx, skillMdPath)) {
-      ReadResult readResult = filesystem.read(ctx, skillMdPath, 0, READ_LIMIT);
-      if (readResult.isSuccess()) {
-        try {
-          SkillValidator.SkillMarkdownMetadata meta =
-              SkillValidator.validateSkillMarkdown(readResult.fileData().content());
-          description = meta.description();
-        } catch (Exception ignored) {
-          // non-fatal: use empty description if SKILL.md is malformed
-        }
+    ReadResult readResult = filesystem.read(ctx, skillMdPath, 0, READ_LIMIT);
+    if (readResult != null
+        && readResult.isSuccess()
+        && readResult.fileData() != null
+        && readResult.fileData().content() != null) {
+      try {
+        SkillValidator.SkillMarkdownMetadata meta =
+            SkillValidator.validateSkillMarkdown(readResult.fileData().content());
+        description = meta.description();
+      } catch (Exception ignored) {
+        // non-fatal: use empty description if SKILL.md is malformed
       }
     }
     return description;
@@ -229,6 +242,30 @@ public class SkillReviewService {
     } catch (IllegalArgumentException exception) {
       return Optional.empty();
     }
+  }
+
+  private void promoteApprovedDraft(RuntimeContext ctx, String skillName, String userId) {
+    WriteResult result =
+        filesystemFactory
+            .create(userId)
+            .move(ctx, DRAFTS_DIR + "/" + skillName, "skills/" + skillName);
+    if (result == null || !result.isSuccess()) {
+      String reason = result != null ? result.error() : "empty promotion result";
+      throw new ResponseStatusException(
+          HttpStatus.INTERNAL_SERVER_ERROR,
+          "Failed to promote approved Skill: " + skillName + " (" + reason + ")");
+    }
+  }
+
+  private static String draftEntryPath(String path) {
+    if (path == null) {
+      return null;
+    }
+    String normalized = path.trim().replace('\\', '/');
+    String marker = "/SKILL.md";
+    return normalized.endsWith(marker)
+        ? normalized.substring(0, normalized.length() - marker.length())
+        : normalized;
   }
 
   private static void validateSkillName(String skillName) {

@@ -92,9 +92,9 @@ async function logout() {
     <header class="chat-topbar">
       <div class="chat-brand">
         <strong>MyAgent</strong>
-        <span>{{ auth.user?.username }}</span>
       </div>
       <div class="chat-topbar__actions">
+        <span class="chat-topbar__username">{{ auth.user?.username }}</span>
         <el-button @click="logout">退出登录</el-button>
       </div>
     </header>

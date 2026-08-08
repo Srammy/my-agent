@@ -42,16 +42,20 @@
 import { onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useSkillReviewsStore } from '../stores/skillReviews'
+import { useSkillsStore } from '../stores/skills'
 
 const reviews = useSkillReviewsStore()
+const skills = useSkillsStore()
 
-onMounted(() => {
-  reviews.loadReviews()
+onMounted(async () => {
+  await reviews.loadReviews()
+  await skills.loadSkills()
 })
 
 async function handleApprove(skillName: string) {
   try {
     await reviews.approve(skillName, ['prod'])
+    await skills.loadSkills()
     ElMessage.success(`已批准 ${skillName}`)
   } catch (e) {
     ElMessage.error(`批准失败: ${e instanceof Error ? e.message : String(e)}`)

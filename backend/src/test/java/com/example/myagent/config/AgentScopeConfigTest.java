@@ -308,7 +308,7 @@ class AgentScopeConfigTest {
     config.applyToolPolicy(builder, config.toolPolicy(properties(false, false, true, false)));
 
     assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
-    assertThat(toolsConfig(builder).getAllow()).containsExactly("http_fetch", "web_fetch");
+    assertThat(toolsConfig(builder).getAllow()).isNullOrEmpty();
     assertThat(toolsConfig(builder).getDeny()).isNullOrEmpty();
     assertThat(toolsConfig(builder).getMcpServers()).isEmpty();
   }
@@ -335,7 +335,7 @@ class AgentScopeConfigTest {
     assertThat(booleanField(builder, "disableFilesystemTools")).isTrue();
     assertThat(booleanField(builder, "disableShellTool")).isTrue();
     assertThat(booleanField(builder, "disableToolsConfig")).isFalse();
-    assertThat(toolsConfig(builder).getAllow()).containsExactly("http_fetch", "web_fetch");
+    assertThat(toolsConfig(builder).getAllow()).isNullOrEmpty();
     assertThat(toolsConfig(builder).getMcpServers()).isNull();
     assertThat((List<?>) objectField(objectField(builder, "inner"), "middlewares"))
         .anyMatch(MiddlewareBase.class::isInstance);
@@ -539,6 +539,8 @@ class AgentScopeConfigTest {
     }
 
     verify(builder).build();
+    verify(agent).setPermissionMode(
+        "7", "s_123", io.agentscope.core.permission.PermissionMode.ACCEPT_EDITS);
     verify(agent).streamEvents(any(UserMessage.class), any(RuntimeContext.class));
     verify(agent).close();
     ArgumentCaptor<io.agentscope.harness.agent.filesystem.AbstractFilesystem> filesystemCaptor =

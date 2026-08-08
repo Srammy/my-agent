@@ -68,6 +68,12 @@ function handleScroll() {
   updateNearBottom()
 }
 
+function visibleEvents(message: ChatMessage) {
+  return message.events.filter(
+    (event) => event.type !== 'tool_call' && event.type !== 'tool_result'
+  )
+}
+
 watch(
   () => props.sessionId,
   () => {
@@ -112,9 +118,9 @@ watch(
         <div v-else-if="message.loading" class="message-bubble__content message-bubble__muted">
           正在思考...
         </div>
-        <div v-if="message.events.length" class="message-events">
+        <div v-if="visibleEvents(message).length" class="message-events">
           <ToolEventCard
-            v-for="event in message.events"
+            v-for="event in visibleEvents(message)"
             :key="event.id"
             :event="event"
             :session-id="sessionId"

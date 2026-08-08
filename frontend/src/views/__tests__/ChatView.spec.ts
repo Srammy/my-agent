@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { shallowMount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import * as chatApi from '../../api/chat'
 import { ApiError } from '../../api/client'
 import SessionSidebar from '../../components/SessionSidebar.vue'
 import ToolEventCard from '../../components/ToolEventCard.vue'
 import { useChatStore } from '../../stores/chat'
+import { useAuthStore } from '../../stores/auth'
 import { useSessionsStore } from '../../stores/sessions'
 import ChatView from '../ChatView.vue'
 
@@ -171,6 +173,22 @@ describe('ChatView session deletion', () => {
     const buttons = wrapper.findAllComponents({ name: 'ElButton' })
     expect(buttons).toHaveLength(3)
     expect(buttons.every((button) => button.props('disabled') === true)).toBe(true)
+  })
+})
+
+describe('ChatView header', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('places the username beside the logout action', async () => {
+    const wrapper = await mountView()
+    useAuthStore().user = { id: 1, username: 'haha', role: 'USER' }
+    await nextTick()
+
+    expect(wrapper.find('.chat-brand span').exists()).toBe(false)
+    expect(wrapper.find('.chat-topbar__actions').text()).toContain('haha')
   })
 })
 

@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(deep-research)",
+      "WebSearch",
+      "WebFetch(domain:java.agentscope.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:central.sonatype.com)",
+      "WebFetch(domain:docs.agentscope.io)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "PowerShell(mvn test *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git rm *)",
+      "PowerShell(mvn dependency:build-classpath *)",
+      "PowerShell(Select-String *)",
+      "PowerShell(mvn compile *)",
+      "Bash(cd /tmp)",
+      "Bash(jar tf *)",
+      "Bash(jar xf *)",
+      "Bash(javap -p io/agentscope/harness/agent/skill/WorkspaceSkillRepository.class)",
+      "Bash(javap -p io/agentscope/core/skill/AgentSkill.class)",
+      "Bash(javap -p 'io/agentscope/core/skill/AgentSkill$Builder.class')",
+      "Bash(javap -c -p io/agentscope/harness/agent/skill/WorkspaceSkillRepository.class)",
+      "Bash(javap -c io/agentscope/harness/agent/skill/WorkspaceSkillRepository.class)",
+      "Bash(javap -c -verbose io/agentscope/harness/agent/skill/WorkspaceSkillRepository.class)",
+      "Bash(awk '/public java.util.List.*getAllSkills\\\\\\(\\\\\\)/,/^  public/')",
+      "Bash(javap -p io/agentscope/harness/agent/filesystem/remote/store/InMemoryStore.class)",
+      "Bash(javap -c io/agentscope/harness/agent/filesystem/remote/RemoteFilesystem.class)",
+      "Bash(awk '/public boolean skillExists/,/^  public/')",
+      "PowerShell(mvn *)",
+      "PowerShell(Remove-Item *)",
+      "Bash(javap -p -c io/agentscope/harness/agent/memory/MemoryConfig.class)",
+      "Bash(javap -p -verbose io/agentscope/harness/agent/memory/MemoryConfig.class)",
+      "Bash(javap -p -c -verbose io/agentscope/harness/agent/memory/MemoryConfig.class)",
+      "Workflow(deep-research)",
+      "Bash(grep \"\\\\.class$\")",
+      "Bash(grep -v \"\\\\$\")",
+      "Bash(javap -p \"io/agentscope/harness/agent/memory/compaction/CompactionConfig.class\")"
+    ]
+  }
+}

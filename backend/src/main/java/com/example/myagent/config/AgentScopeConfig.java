@@ -98,7 +98,8 @@ public class AgentScopeConfig {
     String apiKey = resolveRequiredSecret(modelProperties.apiKeyEnv());
 
     return switch (modelProperties.provider()) {
-      case "dashscope" -> buildDashScopeModel(modelProperties, apiKey);
+      case "dashscope" ->
+          buildDashScopeModel(modelProperties, apiKey, agentProperties.tools().httpFetchEnabled());
       case "openai-compatible" -> buildOpenAiCompatibleModel(modelProperties, apiKey);
       default ->
           throw new IllegalArgumentException(
@@ -336,7 +337,7 @@ public class AgentScopeConfig {
    *
    * <p>第二步：toolsConfig（细粒度网络和 MCP 配置）
    * <ul>
-   *   <li>httpFetchEnabled=true  → allow ["http_fetch","web_fetch"]
+   *   <li>httpFetchEnabled=true  → 不设置全局 allow，保留其他内置工具并允许联网工具
    *   <li>httpFetchEnabled=false → deny  ["http_fetch","web_fetch"]
    *   <li>mcpEnabled=false       → mcpServers={}，不挂载任何 MCP server
    * </ul>
@@ -394,7 +395,12 @@ public class AgentScopeConfig {
     applyFilesystem(builder, agentProperties, userFilesystem);
     applySkillLearning(
         builder, agentProperties, filesystemFactory.usageStore(userId), webApprovalGate);
-    return builder.build();
+    HarnessAgent harnessAgent = builder.build();
+    harnessAgent.setPermissionMode(
+        userId,
+        requestScope.sessionId(),
+        PermissionMode.valueOf(requestScope.permissionMode().name()));
+    return harnessAgent;
   }
 
   void applyRequestScope(HarnessAgent.Builder builder, ChatAgentRequest request) {
@@ -545,12 +551,14 @@ public class AgentScopeConfig {
         redisTemplate, agentProperties.stateStore().redis().keyPrefix() + "base:");
   }
 
-  private Model buildDashScopeModel(AgentProperties.Model modelProperties, String apiKey) {
+  private Model buildDashScopeModel(
+      AgentProperties.Model modelProperties, String apiKey, boolean enableSearch) {
     DashScopeChatModel.Builder builder =
         DashScopeChatModel.builder()
             .apiKey(apiKey)
             .modelName(resolveDashScopeModelName(modelProperties))
-            .stream(true);
+            .stream(true)
+            .enableSearch(enableSearch);
     if (!modelProperties.baseUrl().isBlank()) {
       builder.baseUrl(modelProperties.baseUrl());
     }
@@ -648,9 +656,7 @@ public class AgentScopeConfig {
 
     ToolsConfig toolsConfig() {
       ToolsConfig toolsConfig = new ToolsConfig();
-      if (httpFetchEnabled) {
-        toolsConfig.setAllow(HTTP_FETCH_TOOL_NAMES);
-      } else {
+      if (!httpFetchEnabled) {
         toolsConfig.setDeny(HTTP_FETCH_TOOL_NAMES);
       }
       if (!mcpEnabled) {
