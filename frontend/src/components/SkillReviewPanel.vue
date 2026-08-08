@@ -24,7 +24,6 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="useCount" label="调用次数" width="80" />
       <el-table-column label="操作" width="140" fixed="right">
         <template #default="{ row }">
           <template v-if="row.status === 'PENDING'">

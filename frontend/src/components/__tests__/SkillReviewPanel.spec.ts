@@ -66,4 +66,12 @@ describe('SkillReviewPanel', () => {
 
     await vi.waitFor(() => expect(skillsApi.listMySkills).toHaveBeenCalledOnce())
   })
+
+  it('does not display the use count column', async () => {
+    const wrapper = mount(SkillReviewPanel, { global: { plugins: [ElementPlus] } })
+
+    await vi.waitFor(() => expect(wrapper.find('.el-table').exists()).toBe(true))
+
+    expect(wrapper.findAll('th').every((header) => !header.text().includes('调用次数'))).toBe(true)
+  })
 })
