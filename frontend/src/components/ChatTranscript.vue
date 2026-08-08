@@ -130,6 +130,5 @@ watch(
       </div>
     </article>
 
-    <div v-if="loading" class="chat-transcript__status">响应生成中</div>
   </section>
 </template>

@@ -58,6 +58,15 @@ describe('ChatTranscript auto scroll', () => {
     expect(transcript.scrollTop).toBe(300)
   })
 
+  it('does not show a response status label while loading', () => {
+    const wrapper = mount(ChatTranscript, {
+      props: { messages: [message('m1', 'hello')], loading: true, hasSession: true, sessionId: 's1' },
+      global: { stubs: { ToolEventCard: true } }
+    })
+
+    expect(wrapper.find('.chat-transcript__status').exists()).toBe(false)
+  })
+
   it('does not force scroll when the user has scrolled up', async () => {
     const wrapper = mount(ChatTranscript, {
       props: { messages: [message('m1', 'hello')], loading: false, hasSession: true, sessionId: 's1' },

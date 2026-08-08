@@ -15,6 +15,13 @@ const mode = ref<PermissionMode>('DEFAULT')
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
+const permissionModeLabels: Record<PermissionMode, string> = {
+  DEFAULT: '默认',
+  EXPLORE: '探索',
+  ACCEPT_EDITS: '接受编辑',
+  DONT_ASK: '不再询问',
+  BYPASS: '绕过确认'
+}
 
 watch(
   () => props.sessionId,
@@ -75,7 +82,12 @@ async function saveMode(nextMode: PermissionMode) {
       :loading="loading || saving"
       @change="saveMode"
     >
-      <el-option v-for="item in permissionModes" :key="item" :label="item" :value="item" />
+      <el-option
+        v-for="item in permissionModes"
+        :key="item"
+        :label="`${item}（${permissionModeLabels[item]}）`"
+        :value="item"
+      />
     </el-select>
 
     <p v-if="!sessionId" class="panel-muted">选择或创建会话后可调整权限。</p>
