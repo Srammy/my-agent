@@ -1,6 +1,8 @@
 .worktrees/
 .superpowers/
 .claude/
+docs/
+.env
 backend/target/
 .idea/
 frontend/dist/

@@ -116,6 +116,15 @@ AGENT_SCOPE_ENABLED=true
 
 权限模式同样重要。`DEFAULT`、`EXPLORE` 和 `ACCEPT_EDITS` 是相对更安全的交互模式。`DONT_ASK`，尤其是 `BYPASS`，会降低或移除确认边界，只应在可信沙箱中配合可丢弃的凭证和数据使用。
 
+## Web 界面操作
+
+聊天页右侧辅助面板中的 Skill 功能分为两级：
+
+- 顶层标签为 `Skill`，内部包含 `我的skill` 和 `自进化skill审核` 两个子标签。
+- `我的skill` 用于查看、上传和删除正式 Skill。
+- `自进化skill审核` 用于人工审核 Agent 生成的 Skill 草稿，可批准或拒绝；只有人工批准后，草稿才会晋升为正式 Skill。
+- 当前会话的权限模式位于消息输入框右侧，可在发送消息时直接查看和调整。
+
 ## AgentScope 原生记忆与 Skill 体系
 
 ### 记忆
