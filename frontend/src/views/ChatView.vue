@@ -312,10 +312,14 @@ async function logout() {
       <aside class="assistant-panel">
         <el-tabs class="assistant-tabs" stretch>
           <el-tab-pane label="Skill">
-            <SkillPanel />
-          </el-tab-pane>
-          <el-tab-pane label="Skill 审核" name="skillReview">
-            <SkillReviewPanel />
+            <el-tabs class="skill-tabs" stretch>
+              <el-tab-pane label="我的skill">
+                <SkillPanel />
+              </el-tab-pane>
+              <el-tab-pane label="自进化skill审核" name="skillReview">
+                <SkillReviewPanel />
+              </el-tab-pane>
+            </el-tabs>
           </el-tab-pane>
         </el-tabs>
       </aside>
