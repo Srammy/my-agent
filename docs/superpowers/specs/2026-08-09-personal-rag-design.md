@@ -144,8 +144,8 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 1. 接口校验文件类型和 20 MB 大小限制，将文件写入 `knowledge_data/{userId}/{documentId}/source`，并在同一个 MySQL 事务中创建 `PROCESSING` 文档记录和 `PENDING` Outbox 记录。
 2. 接口返回 202 和 `PROCESSING` 状态；Outbox Relay 定期批量读取 `PENDING` 记录，通过 `KafkaTemplate` 发布到 `myagent.knowledge.document.process`，成功后标记 `SENT`。
 3. Kafka Consumer 使用消费组 `myagent-knowledge-etl` 接收消息，重新从 MySQL 校验文档归属和状态，使用 `storage_key` 读取原文件，执行 Spring AI ETL、EmbeddingModel 批处理和 Elasticsearch bulk 写入。
-4. 写入前按 `userId + documentId` 清理该文档的旧父子索引数据；写入失败时抛出异常，让 Kafka 重试机制重新投递，避免半成品被检索。
-5. 全部写入成功后更新父子计数并将文档置为 `READY`，删除原文件；重试耗尽进入 DLT 后，将文档置为 `FAILED` 并保存可读错误信息。
+4. 每次写入前按 `userId + documentId` 清理该文档的旧父子索引数据；处理过程发生异常时，在重新抛出异常触发 Kafka 重试前，再按同样条件删除父、子索引中的半成品，确保重试期间也不会被检索。
+5. 全部写入成功后更新父子计数并将文档置为 `READY`，删除原文件；重试耗尽进入 DLT 后再次执行清理，将文档置为 `FAILED` 并保存可读错误信息。原文件在 `FAILED` 状态下保留。
 6. Consumer 使用确定性的父子 ID和清理后重建保证重复消费幂等；Outbox Relay 在应用重启后继续发送 `PENDING` 任务。
 
 `GET /api/knowledge/documents` 返回实时状态，前端在有 `PROCESSING` 文档时轮询列表；聊天检索只允许 `READY` 文档。
