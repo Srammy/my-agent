@@ -101,6 +101,7 @@ public class KnowledgeElasticsearchIndexManager {
         client.deleteByQuery(
         request ->
             request.index(index)
+                .ignoreUnavailable(true)
                 .query(
                     query ->
                         query.bool(
