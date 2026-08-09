@@ -12,6 +12,13 @@ spring:
       port: ${REDIS_PORT:6379}
       database: ${REDIS_DATABASE:0}
       password: ${REDIS_PASSWORD:}
+  kafka:
+    bootstrap-servers: ${KNOWLEDGE_KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
 
 server:
   port: 8080
@@ -77,5 +84,7 @@ knowledge:
     topic: ${KNOWLEDGE_KAFKA_TOPIC:myagent.knowledge.document.process}
     group: ${KNOWLEDGE_KAFKA_GROUP:myagent-knowledge-etl}
     bootstrap-servers: ${KNOWLEDGE_KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    relay-delay-ms: ${KNOWLEDGE_KAFKA_RELAY_DELAY_MS:1000}
+    max-attempts: ${KNOWLEDGE_KAFKA_MAX_ATTEMPTS:5}
   storage:
     root: ${KNOWLEDGE_STORAGE_ROOT:./.knowledge/storage}
