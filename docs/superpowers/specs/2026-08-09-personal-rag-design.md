@@ -29,6 +29,19 @@
 
 上传接口与 ETL 解耦。上传请求只保存原文件、创建 `PROCESSING` 文档记录和 Outbox 任务记录，返回 202；Outbox Relay 将任务可靠投递到 Kafka，Kafka Consumer 负责读取、父子切分、向量化和 Elasticsearch 写入。处理成功后状态变为 `READY`，失败后变为 `FAILED`。
 
+### OCR、图片和表格抽取
+
+ETL 同时处理文本、图片和表格内容：
+
+1. 对可直接解析的 PDF、DOCX、TXT 和 Markdown，优先使用 Spring AI 的文档 Reader 获取文本和已有元数据。
+2. 对扫描 PDF 页面、独立图片或文本密度不足的页面，将页面渲染为图片，通过 Spring AI 多模态 `ChatModel` 的 `Media` 输入执行 OCR 和图片内容理解。
+3. 对检测到的表格，要求多模态模型返回结构化 `TableExtraction`：表头、列定义、行数据、页码和置信说明；同时将表格转换为带表头的 Markdown 文本，供关键词和向量检索。
+4. 使用 Spring AI 结构化输出将模型结果映射为 Java record，并执行 schema 校验；无法解析的结果抛出异常交给 Kafka 重试，不能把不完整 JSON 当作成功结果。
+5. 图片描述、OCR 文本和表格 Markdown 进入父文档内容；原始表格 JSON 作为 `structuredContent` 保存到父文档，子文档继承 `contentType`、页码和来源元数据。
+6. 表格切分时保持表头与行数据在同一父文档上下文内；长表格按“表头 + 行分组”生成多个父文档，避免子文档失去列含义。
+
+多模态模型不可用时，纯文本文件仍可正常处理；包含扫描页、图片或表格的文件会进入 `FAILED`，并在文档列表中展示“多模态模型不可用”，不静默丢弃视觉内容。
+
 父子关系使用应用层 `parentId` 逻辑关联，不使用 Elasticsearch `join` 字段。这样 RRF 只在子文档索引上执行，命中后根据 `parentId` 批量读取父文档，检索和隔离逻辑更容易测试。
 
 ### Elasticsearch 索引
@@ -46,7 +59,10 @@ Docker Compose 增加 Elasticsearch 8.x 和单节点 KRaft Kafka 服务及持久
 | `userId` | `keyword` | 强制用户过滤 |
 | `status` | `keyword` | 只允许检索 `READY` 父文档 |
 | `content` | `text` | 交给 Agent 的完整父上下文 |
+| `structuredContent` | `object` | 表格的结构化 JSON |
+| `contentType` | `keyword` | `TEXT`、`OCR`、`IMAGE`、`TABLE` |
 | `sourceFilename` | `keyword` | 来源文件名 |
+| `pageNumber` | `integer` | 来源页码，无法识别时为空 |
 | `parentIndex` | `integer` | 父文档顺序 |
 
 `myagent_knowledge_children`
@@ -60,7 +76,9 @@ Docker Compose 增加 Elasticsearch 8.x 和单节点 KRaft Kafka 服务及持久
 | `status` | `keyword` | 只允许检索 `READY` 子文档 |
 | `content` | `text` | BM25 关键词检索字段 |
 | `embedding` | `dense_vector` | 向量检索字段 |
+| `contentType` | `keyword` | 内容类型 |
 | `sourceFilename` | `keyword` | UI 展示来源 |
+| `pageNumber` | `integer` | 来源页码 |
 | `chunkIndex` | `integer` | 子片段顺序 |
 
 两个索引都在初始化时创建明确 mapping；向量维度来自 EmbeddingModel 配置，不能在运行时对已存在索引静默变更。
@@ -178,6 +196,7 @@ Kafka 使用单独的处理主题、重试主题和死信主题。开发环境�
 - Spring AI 父文档组装和子文档切分测试：标题、段落、重叠、超长段落和 metadata 继承。
 - 文档服务测试：上传成功计数、失败状态和临时文件清理。
 - Kafka 异步测试：上传接口快速返回 202；Outbox 在 Kafka 不可用时保持 `PENDING`；Consumer 更新 `PROCESSING` 到 `READY` 或 `FAILED`；重试和 DLT 状态正确；重复消费不会留下重复索引。
+- OCR 和多模态 ETL 测试：扫描页能生成 OCR 文本，图片能生成描述，表格能生成合法的结构化 JSON 和带表头 Markdown；视觉模型返回非法结构时任务失败并进入重试。
 - Elasticsearch 检索请求测试：同时包含 `standard`、`knn`、RRF 和 `userId` filter。
 - 用户隔离测试：不同用户不能列表、检索或回取彼此的文档。
 - 知识库 ChatService 测试：无命中不调用 Agent；有命中时把父文档上下文传给 Agent；普通模式不触发检索。
@@ -198,11 +217,12 @@ Kafka 使用单独的处理主题、重试主题和死信主题。开发环境�
 2. 用户 A 创建知识库问答会话，询问文档中存在的问题，回答来自父文档上下文并显示来源。
 3. 用户 A 询问文档中不存在的问题，系统返回“未在知识库中找到相关内容”，不调用 Agent 自由回答。
 4. 用户 B 登录后看不到用户 A 的文档，也检索不到用户 A 的内容。
-5. 普通对话会话不访问 Elasticsearch 知识库检索，行为保持现有 Agent 流程。
+5. 用户 A 上传扫描 PDF，OCR 文本可被关键词和向量检索。
+6. 用户 A 上传包含图片和表格的文档，图片描述、表格 JSON 和 Markdown 均被保存并可用于问答。
+7. 普通对话会话不访问 Elasticsearch 知识库检索，行为保持现有 Agent 流程。
 
 ## 非目标
 
 - 本期不做原文件下载、在线预览、文档删除和重新索引按钮。
 - 本期不实现 Kafka 以外的消息队列；Kafka 使用单节点 KRaft 开发配置，生产集群扩容不在本期范围内。
-- 本期不做 OCR、图片内容理解和表格结构化抽取。
 - 本期不调整现有普通 Agent 的工具确认和权限机制。
