@@ -28,6 +28,8 @@ public record TableExtraction(
   }
 
   private static String escapeCell(String value) {
-    return value == null ? "" : value.replace("|", "\\|").replaceAll("\\s+", " ").strip();
+    return value == null
+        ? ""
+        : value.replace("\\", "\\\\").replace("|", "\\|").replaceAll("\\s+", " ").strip();
   }
 }

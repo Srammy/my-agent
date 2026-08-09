@@ -15,6 +15,7 @@ import org.springframework.ai.content.Media;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.markdown.MarkdownDocumentReader;
 import org.springframework.ai.reader.markdown.config.MarkdownDocumentReaderConfig;
+import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Component;
@@ -67,6 +68,8 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
           new MarkdownDocumentReader(
                   new FileSystemResource(source), MarkdownDocumentReaderConfig.defaultConfig())
               .get();
+    } else if (filename != null && filename.toLowerCase().endsWith(".pdf")) {
+      documents = new PagePdfDocumentReader(new FileSystemResource(source)).get();
     } else {
       documents = new TikaDocumentReader(new FileSystemResource(source)).get();
     }

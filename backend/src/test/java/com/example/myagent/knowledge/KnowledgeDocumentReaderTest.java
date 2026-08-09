@@ -13,6 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -69,5 +72,31 @@ class KnowledgeDocumentReaderTest {
         new TableExtraction(List.of("A|B"), List.of(List.of("line\none")), 1, 1.0).toMarkdown();
 
     assertThat(markdown).contains("A\\|B", "line one");
+  }
+
+  @Test
+  void readsPdfPagesWithPageMetadata() throws Exception {
+    Path source = Files.createTempFile("knowledge", ".pdf");
+    try (PDDocument pdf = new PDDocument()) {
+      PDPage page = new PDPage();
+      pdf.addPage(page);
+      try (PDPageContentStream stream = new PDPageContentStream(pdf, page)) {
+        stream.beginText();
+        stream.newLineAtOffset(72, 720);
+        stream.showText("PDF page content");
+        stream.endText();
+      }
+      pdf.save(source.toFile());
+    }
+
+    SpringAiKnowledgeDocumentReader reader =
+        new SpringAiKnowledgeDocumentReader(mock(ChatModel.class), new ObjectMapper());
+    KnowledgeDocumentContent content =
+        reader.read(source, 7L, "doc-pdf", "document.pdf", "application/pdf");
+
+    assertThat(content.parents()).singleElement().satisfies(parent -> {
+      assertThat(parent.pageNumber()).isEqualTo(1);
+      assertThat(parent.text()).contains("PDF page content");
+    });
   }
 }
