@@ -17,6 +17,7 @@ import com.example.myagent.permission.PermissionMode;
 import com.example.myagent.permission.PermissionService;
 import com.example.myagent.session.ChatSessionEntity;
 import com.example.myagent.session.SessionExecutionCoordinator;
+import com.example.myagent.session.SessionMode;
 import com.example.myagent.session.SessionService;
 import com.example.myagent.toolconfirmation.ConfirmationKind;
 import com.example.myagent.toolconfirmation.ToolCallSnapshot;
@@ -25,6 +26,8 @@ import com.example.myagent.toolconfirmation.ToolConfirmationDecision;
 import com.example.myagent.toolconfirmation.ToolConfirmationRecord;
 import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import com.example.myagent.toolconfirmation.ToolConfirmationStatus;
+import com.example.myagent.knowledge.search.KnowledgeSearchHit;
+import com.example.myagent.knowledge.search.KnowledgeSearchService;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -40,6 +43,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -59,6 +63,7 @@ class ChatServiceTest {
   @Mock private ToolConfirmationService toolConfirmationService;
   @Mock private SessionExecutionCoordinator sessionExecutionCoordinator;
   @Mock private ChatMessageService chatMessageService;
+  @Mock private KnowledgeSearchService knowledgeSearchService;
 
   @BeforeEach
   @SuppressWarnings("unchecked")
@@ -175,6 +180,27 @@ class ChatServiceTest {
         .toPersistedEvent(argThat(event -> "tool_call".equals(event.type())));
     verify(chatMessageService)
         .updateAssistant(eq(USER.id()), eq("m_assistant"), eq("hi"), anyList(), eq(false));
+  }
+
+  @Test
+  void knowledgeAnswerAppendsReferenceSourcesAsTheFinalTextEvent() {
+    when(sessionService.requireOwnedSession(USER, "s_123"))
+        .thenReturn(new ChatSessionEntity(
+            "s_123", USER.id(), "Knowledge", SessionMode.KNOWLEDGE, CREATED_AT, UPDATED_AT));
+    when(permissionService.getModeForOwnedSession("s_123")).thenReturn(PermissionMode.DEFAULT);
+    when(knowledgeSearchService.search(USER.id(), "deadline"))
+        .thenReturn(List.of(new KnowledgeSearchHit(
+            "parent-1", "doc-1", "plan.pdf", 3, "release deadline", 0.5d)));
+    when(chatAgentGateway.stream(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(Flux.just(
+            StreamEventDto.replyStart(), StreamEventDto.textDelta("回答内容"), StreamEventDto.done()));
+
+    List<StreamEventDto> events = knowledgeChatService().stream(USER, "s_123", "deadline").collectList().block();
+
+    assertThat(events).extracting(StreamEventDto::type)
+        .containsExactly("reply_start", "text_delta", "text_delta", "done");
+    assertThat(events.get(2).payload().get("delta"))
+        .isEqualTo("\n\n参考来源：\n- plan.pdf，第 3 页");
   }
 
   @Test
@@ -626,5 +652,19 @@ class ChatServiceTest {
         toolConfirmationService,
         sessionExecutionCoordinator,
         chatMessageService);
+  }
+
+  @SuppressWarnings("unchecked")
+  private ChatService knowledgeChatService() {
+    ObjectProvider<KnowledgeSearchService> provider = org.mockito.Mockito.mock(ObjectProvider.class);
+    when(provider.getIfAvailable()).thenReturn(knowledgeSearchService);
+    return new ChatService(
+        sessionService,
+        chatAgentGateway,
+        permissionService,
+        toolConfirmationService,
+        sessionExecutionCoordinator,
+        chatMessageService,
+        provider);
   }
 }

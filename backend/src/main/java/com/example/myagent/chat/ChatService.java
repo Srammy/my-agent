@@ -97,16 +97,16 @@ public class ChatService {
               var permissionMode = permissionService.getModeForOwnedSession(sessionId);
               if (session.getMode() != SessionMode.KNOWLEDGE) {
                 return new PreparedChat(
-                    new ChatAgentRequest(currentUser.id(), sessionId, message, permissionMode), false);
+                    new ChatAgentRequest(currentUser.id(), sessionId, message, permissionMode), false, List.of());
               }
               if (knowledgeSearchService == null) {
                 throw new IllegalStateException("Knowledge search is not configured");
               }
               List<KnowledgeSearchHit> hits = knowledgeSearchService.search(currentUser.id(), message);
-              if (hits.isEmpty()) return new PreparedChat(null, true);
+              if (hits.isEmpty()) return new PreparedChat(null, true, List.of());
               return new PreparedChat(
                   new ChatAgentRequest(
-                      currentUser.id(), sessionId, groundedPrompt(message, hits), permissionMode), false);
+                      currentUser.id(), sessionId, groundedPrompt(message, hits), permissionMode), false, hits);
             })
         .subscribeOn(Schedulers.boundedElastic())
         .flatMapMany(
@@ -122,6 +122,9 @@ public class ChatService {
                       Flux<StreamEventDto> tracked =
                           sessionExecutionCoordinator.track(
                               currentUser.id(), sessionId, execution::events, execution::completion);
+                      Flux<StreamEventDto> response = prepared.sources().isEmpty()
+                          ? tracked
+                          : appendReferences(tracked, prepared.sources());
                       if (chatMessageService == null) {
                         return tracked;
                       }
@@ -137,7 +140,7 @@ public class ChatService {
                       StringBuilder assistantContent = new StringBuilder();
                       List<Map<String, Object>> assistantEvents = new ArrayList<>();
                       AtomicBoolean finalized = new AtomicBoolean();
-                      return tracked.doOnNext(
+                      return response.doOnNext(
                               event ->
                                   persistAssistantEvent(
                                       currentUser.id(),
@@ -206,6 +209,24 @@ public class ChatService {
         + context
         + "\n用户问题：\n"
         + (question == null ? "" : question);
+  }
+
+  private static Flux<StreamEventDto> appendReferences(
+      Flux<StreamEventDto> response, List<KnowledgeSearchHit> hits) {
+    String references = hits.stream()
+        .map(ChatService::referenceLine)
+        .distinct()
+        .reduce("", (left, right) -> left + "\n" + right);
+    return response
+        .filter(event -> !"done".equals(event.type()))
+        .concatWith(Flux.just(
+            StreamEventDto.textDelta("\n\n参考来源：" + references),
+            StreamEventDto.done()));
+  }
+
+  private static String referenceLine(KnowledgeSearchHit hit) {
+    String filename = hit.sourceFilename() == null ? "未知文件" : hit.sourceFilename();
+    return "- " + filename + (hit.pageNumber() == null ? "" : "，第 " + hit.pageNumber() + " 页");
   }
 
   public Flux<StreamEventDto> confirm(
@@ -444,5 +465,6 @@ public class ChatService {
   private record ConfirmationContext(
       com.example.myagent.permission.PermissionMode permissionMode, ToolConfirmationClaim claim) {}
 
-  private record PreparedChat(ChatAgentRequest request, boolean noHit) {}
+  private record PreparedChat(
+      ChatAgentRequest request, boolean noHit, List<KnowledgeSearchHit> sources) {}
 }
