@@ -18,9 +18,10 @@ vi.mock('vue-router', () => ({
 const session: chatApi.ChatSession = {
   id: 's1',
   title: 'Session 1',
+  mode: 'NORMAL',
   createdAt: '2026-07-18T00:00:00Z',
   updatedAt: '2026-07-18T00:00:00Z'
-}
+} as chatApi.ChatSession
 
 async function mountView(renderTabs = false) {
   vi.spyOn(chatApi, 'listSessions').mockResolvedValue([])
@@ -226,6 +227,51 @@ describe('ChatView assistant tabs', () => {
     expect(wrapper.find('[data-tab-label="Skill 审核"]').exists()).toBe(false)
     expect(skillTab.find('[data-tab-label="我的skill"]').exists()).toBe(true)
     expect(skillTab.find('[data-tab-label="自进化skill审核"]').exists()).toBe(true)
+  })
+
+  it('adds a knowledge base top-level tab with only one child tab', async () => {
+    const wrapper = await mountView(true)
+
+    expect(wrapper.find('[data-tab-label="知识库"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-tab-label="知识库"]')).toHaveLength(2)
+    expect(wrapper.find('[data-tab-label="知识库对话"]').exists()).toBe(false)
+  })
+})
+
+describe('ChatView session modes', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('requires a mode choice before creating a session and sends it once', async () => {
+    const wrapper = await mountView()
+    const sessions = useSessionsStore()
+    const create = vi.spyOn(sessions, 'createSession').mockResolvedValue({
+      ...session,
+      id: 'knowledge-1',
+      mode: 'KNOWLEDGE'
+    } as chatApi.ChatSession)
+
+    wrapper.findComponent(SessionSidebar).vm.$emit('create')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="session-mode-dialog"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="session-mode-knowledge"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-session-mode"]').trigger('click')
+
+    expect(create).toHaveBeenCalledWith(undefined, 'KNOWLEDGE')
+    expect(wrapper.find('[data-testid="session-mode-dialog"]').exists()).toBe(false)
+  })
+
+  it('shows the selected session mode in the chat header', async () => {
+    const wrapper = await mountView()
+    const sessions = useSessionsStore()
+    sessions.sessions = [{ ...session, mode: 'KNOWLEDGE' } as chatApi.ChatSession]
+    sessions.currentSessionId = 's1'
+    await nextTick()
+
+    expect(wrapper.find('.chat-main__mode').text()).toContain('知识库问答')
   })
 })
 

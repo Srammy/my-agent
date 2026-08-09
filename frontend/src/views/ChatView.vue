@@ -6,9 +6,11 @@ import Composer from '../components/Composer.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
 import SkillPanel from '../components/SkillPanel.vue'
 import SkillReviewPanel from '../components/SkillReviewPanel.vue'
+import KnowledgePanel from '../components/KnowledgePanel.vue'
 import { useAuthStore } from '../stores/auth'
 import { useChatStore } from '../stores/chat'
 import { useSessionsStore } from '../stores/sessions'
+import type { SessionMode } from '../api/chat'
 
 const auth = useAuthStore()
 const chat = useChatStore()
@@ -48,6 +50,10 @@ const currentMessages = computed(() =>
   currentSessionId.value ? chat.messages(currentSessionId.value) : []
 )
 const isSending = computed(() => chat.loadingSessionId === currentSessionId.value)
+const currentMode = computed<SessionMode>(() => sessions.currentSession?.mode ?? 'NORMAL')
+const currentModeLabel = computed(() => currentMode.value === 'KNOWLEDGE' ? '知识库问答' : '普通对话')
+const modeDialogVisible = ref(false)
+const pendingMode = ref<SessionMode | ''>('')
 
 watch(
   currentSessionId,
@@ -198,7 +204,15 @@ function finishResize(event?: PointerEvent, persist = true) {
 }
 
 async function createSession() {
-  const session = await sessions.createSession()
+  pendingMode.value = ''
+  modeDialogVisible.value = true
+}
+
+async function confirmCreateSession() {
+  if (!pendingMode.value) return
+  const session = await sessions.createSession(undefined, pendingMode.value)
+  modeDialogVisible.value = false
+  pendingMode.value = ''
   chat.useSession(session.id)
 }
 
@@ -284,6 +298,7 @@ async function logout() {
       />
 
       <div class="chat-main">
+        <div class="chat-main__mode">当前模式：{{ currentModeLabel }}</div>
         <div v-if="sessions.error || chat.error" class="chat-error">
           {{ sessions.error || chat.error }}
         </div>
@@ -297,6 +312,7 @@ async function logout() {
           :disabled="chat.isLoading || sessions.loading || chat.isCancellingSession(currentSessionId)"
           :has-session="Boolean(currentSessionId)"
           :session-id="currentSessionId"
+          :mode="currentMode"
           @send="sendMessage"
         />
       </div>
@@ -321,8 +337,27 @@ async function logout() {
               </el-tab-pane>
             </el-tabs>
           </el-tab-pane>
+          <el-tab-pane label="知识库">
+            <el-tabs class="knowledge-tabs" stretch>
+              <el-tab-pane label="知识库">
+                <KnowledgePanel />
+              </el-tab-pane>
+            </el-tabs>
+          </el-tab-pane>
         </el-tabs>
       </aside>
     </section>
+
+    <div v-if="modeDialogVisible" class="session-mode-dialog" data-testid="session-mode-dialog">
+      <div class="session-mode-dialog__panel">
+        <h2>选择对话模式</h2>
+        <p>会话创建后模式不可修改。</p>
+        <div class="session-mode-dialog__options">
+          <button type="button" data-testid="session-mode-normal" :class="{ selected: pendingMode === 'NORMAL' }" @click="pendingMode = 'NORMAL'">普通对话</button>
+          <button type="button" data-testid="session-mode-knowledge" :class="{ selected: pendingMode === 'KNOWLEDGE' }" @click="pendingMode = 'KNOWLEDGE'">知识库问答</button>
+        </div>
+        <button type="button" data-testid="confirm-session-mode" :disabled="!pendingMode" @click="confirmCreateSession">创建会话</button>
+      </div>
+    </div>
   </main>
 </template>

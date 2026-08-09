@@ -8,10 +8,33 @@ function session(id: string): chatApi.ChatSession {
   return {
     id,
     title: id,
+    mode: 'NORMAL',
     createdAt: '2026-07-18T00:00:00Z',
     updatedAt: '2026-07-18T00:00:00Z'
   }
 }
+
+describe('sessions store creation', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('creates and selects a session with the requested mode', async () => {
+    vi.spyOn(chatApi, 'createSession').mockResolvedValue({
+      ...session('knowledge-1'),
+      title: 'Knowledge',
+      mode: 'KNOWLEDGE'
+    })
+    const store = useSessionsStore()
+
+    await store.createSession('Knowledge', 'KNOWLEDGE')
+
+    expect(chatApi.createSession).toHaveBeenCalledWith('Knowledge', 'KNOWLEDGE')
+    expect(store.currentSessionId).toBe('knowledge-1')
+    expect(store.currentSession?.mode).toBe('KNOWLEDGE')
+  })
+})
 
 describe('sessions store deletion', () => {
   beforeEach(() => {

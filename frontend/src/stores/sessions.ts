@@ -4,7 +4,8 @@ import {
   deleteSession as deleteSessionApi,
   listSessions,
   renameSession as renameSessionApi,
-  type ChatSession
+  type ChatSession,
+  type SessionMode
 } from '../api/chat'
 import { ApiError } from '../api/client'
 
@@ -55,10 +56,10 @@ export const useSessionsStore = defineStore('sessions', {
         this.loading = false
       }
     },
-    async createSession(title?: string) {
+    async createSession(title?: string, mode: SessionMode = 'NORMAL') {
       this.error = ''
       try {
-        const session = await createSessionApi(title)
+        const session = await createSessionApi(title, mode)
         this.sessions = [session, ...this.sessions.filter((item) => item.id !== session.id)]
         this.currentSessionId = session.id
         return session

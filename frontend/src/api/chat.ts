@@ -1,8 +1,11 @@
 import { apiDelete, apiGet, apiPost, apiPut, TOKEN_KEY } from './client'
 
+export type SessionMode = 'NORMAL' | 'KNOWLEDGE'
+
 export interface ChatSession {
   id: string
   title: string
+  mode?: SessionMode
   createdAt: string
   updatedAt: string
 }
@@ -78,8 +81,8 @@ export function listSessions() {
   return apiGet<ChatSession[]>('/api/chat/sessions')
 }
 
-export function createSession(title?: string) {
-  const body = title?.trim() ? { title: title.trim() } : undefined
+export function createSession(title?: string, mode: SessionMode = 'NORMAL') {
+  const body = title?.trim() ? { title: title.trim(), mode } : { mode }
   return apiPost<ChatSession>('/api/chat/sessions', body)
 }
 
