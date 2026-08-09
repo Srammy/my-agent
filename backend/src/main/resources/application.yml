@@ -1,9 +1,6 @@
 spring:
   application:
     name: myagent
-  webflux:
-    multipart:
-      max-disk-usage-per-part: 50MB
   ai:
     openai:
       api-key: ${KNOWLEDGE_EMBEDDING_API_KEY:${DASHSCOPE_API_KEY:}}
