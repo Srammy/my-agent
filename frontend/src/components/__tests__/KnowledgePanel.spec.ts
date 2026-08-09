@@ -36,6 +36,20 @@ describe('KnowledgePanel', () => {
     expect(wrapper.text()).toContain('子文档 7')
   })
 
+  it('shows unknown when the stored document size is zero', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([{ ...processing, sizeBytes: 0, status: 'READY' }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    ))
+
+    const wrapper = mount(KnowledgePanel, { global: { plugins: [ElementPlus] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('大小未知'))
+
+    expect(wrapper.text()).not.toContain('0 B')
+  })
+
   it('renders failed document errors and polls processing documents', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify([processing]), {

@@ -60,7 +60,7 @@ function statusLabel(status: string) {
 }
 
 function sizeLabel(size: number | null) {
-  if (size === null || size < 0) return '-'
+  if (size === null || size <= 0) return '大小未知'
   if (size < 1024) return `${size} B`
   return `${(size / 1024).toFixed(1)} KB`
 }
