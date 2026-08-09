@@ -79,6 +79,8 @@ security:
     secret: ${SECURITY_JWT_SECRET}
 
 knowledge:
+  retrieval:
+    min-rrf-score: ${KNOWLEDGE_RETRIEVAL_MIN_RRF_SCORE:0.02}
   embedding:
     provider: ${KNOWLEDGE_EMBEDDING_PROVIDER:dashscope}
     model: ${KNOWLEDGE_EMBEDDING_MODEL:text-embedding-v4}

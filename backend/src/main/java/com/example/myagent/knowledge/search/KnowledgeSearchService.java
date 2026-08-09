@@ -6,6 +6,7 @@ import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
+import com.example.myagent.config.KnowledgeRetrievalProperties;
 import com.example.myagent.config.KnowledgeProperties;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -13,6 +14,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -24,14 +26,25 @@ public class KnowledgeSearchService {
   private final ElasticsearchClient client;
   private final KnowledgeProperties properties;
   private final KnowledgeEmbeddingService embeddingService;
+  private final KnowledgeRetrievalProperties retrievalProperties;
 
   public KnowledgeSearchService(
       ElasticsearchClient client,
       KnowledgeProperties properties,
       KnowledgeEmbeddingService embeddingService) {
+    this(client, properties, embeddingService, new KnowledgeRetrievalProperties(0.0));
+  }
+
+  @Autowired
+  public KnowledgeSearchService(
+      ElasticsearchClient client,
+      KnowledgeProperties properties,
+      KnowledgeEmbeddingService embeddingService,
+      KnowledgeRetrievalProperties retrievalProperties) {
     this.client = client;
     this.properties = properties;
     this.embeddingService = embeddingService;
+    this.retrievalProperties = retrievalProperties;
   }
 
   public List<KnowledgeSearchHit> search(Long userId, String question) {
@@ -65,10 +78,12 @@ public class KnowledgeSearchService {
         }
       }
       if (parentScores.isEmpty()) return List.of();
-      List<Map.Entry<String, Double>> rankedParentScores =
-          parentScores.entrySet().stream()
-              .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
-              .toList();
+    List<Map.Entry<String, Double>> rankedParentScores =
+        parentScores.entrySet().stream()
+            .filter(entry -> entry.getValue() >= retrievalProperties.minRrfScore())
+            .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+            .toList();
+    if (rankedParentScores.isEmpty()) return List.of();
       SearchResponse<Map> parentResponse =
           client.search(
               buildParentRequest(

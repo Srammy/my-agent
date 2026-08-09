@@ -12,6 +12,7 @@ import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import com.example.myagent.config.KnowledgeProperties;
+import com.example.myagent.config.KnowledgeRetrievalProperties;
 import com.example.myagent.knowledge.search.KnowledgeEmbeddingService;
 import com.example.myagent.knowledge.search.KnowledgeSearchHit;
 import com.example.myagent.knowledge.search.KnowledgeSearchService;
@@ -80,6 +81,24 @@ class KnowledgeSearchServiceTest {
 
     KnowledgeSearchService service =
         new KnowledgeSearchService(client, properties(), embeddingService);
+
+    assertThat(service.search(7L, "unknown")).isEmpty();
+    verify(client, org.mockito.Mockito.times(2)).search(any(SearchRequest.class), eq(Map.class));
+  }
+
+  @Test
+  void rejectsResultsBelowConfiguredMinimumRrfScore() throws Exception {
+    ElasticsearchClient client = mock(ElasticsearchClient.class);
+    KnowledgeEmbeddingService embeddingService = mock(KnowledgeEmbeddingService.class);
+    when(embeddingService.embed("unknown")).thenReturn(new float[] {0.1f, 0.2f});
+    when(client.search(any(SearchRequest.class), eq(Map.class)))
+        .thenReturn(
+            childResponse("child-1", "parent-1", "child-2", "parent-2"),
+            childResponse("child-3", "parent-3", "child-4", "parent-4"));
+
+    KnowledgeSearchService service =
+        new KnowledgeSearchService(
+            client, properties(), embeddingService, new KnowledgeRetrievalProperties(0.02));
 
     assertThat(service.search(7L, "unknown")).isEmpty();
     verify(client, org.mockito.Mockito.times(2)).search(any(SearchRequest.class), eq(Map.class));

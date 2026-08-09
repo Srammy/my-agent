@@ -3,6 +3,7 @@ package com.example.myagent.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.myagent.config.KnowledgeProperties;
+import com.example.myagent.config.KnowledgeRetrievalProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -31,10 +32,12 @@ class KnowledgeConfigurationTest {
             "knowledge.kafka.topic=knowledge-ingest",
             "knowledge.kafka.group=knowledge-consumers",
             "knowledge.kafka.bootstrap-servers=kafka:9092",
-            "knowledge.storage.root=./.knowledge/storage")
+            "knowledge.storage.root=./.knowledge/storage",
+            "knowledge.retrieval.min-rrf-score=0.03")
         .run(
             context -> {
               KnowledgeProperties properties = context.getBean(KnowledgeProperties.class);
+              KnowledgeRetrievalProperties retrieval = context.getBean(KnowledgeRetrievalProperties.class);
               assertThat(properties.embedding().provider()).isEqualTo("openai");
               assertThat(properties.embedding().model()).isEqualTo("text-embedding-test");
               assertThat(properties.embedding().dimensions()).isEqualTo(1024);
@@ -54,6 +57,7 @@ class KnowledgeConfigurationTest {
               assertThat(properties.kafka().group()).isEqualTo("knowledge-consumers");
               assertThat(properties.kafka().bootstrapServers()).isEqualTo("kafka:9092");
               assertThat(properties.storage().root()).isEqualTo("./.knowledge/storage");
+              assertThat(retrieval.minRrfScore()).isEqualTo(0.03);
             });
   }
 
@@ -62,6 +66,7 @@ class KnowledgeConfigurationTest {
     contextRunner.run(
         context -> {
           KnowledgeProperties properties = context.getBean(KnowledgeProperties.class);
+          KnowledgeRetrievalProperties retrieval = context.getBean(KnowledgeRetrievalProperties.class);
           assertThat(properties.embedding().provider()).isEqualTo("dashscope");
           assertThat(properties.embedding().model()).isEqualTo("text-embedding-v4");
           assertThat(properties.embedding().dimensions()).isEqualTo(1024);
@@ -81,10 +86,11 @@ class KnowledgeConfigurationTest {
           assertThat(properties.kafka().group()).isEqualTo("myagent-knowledge-etl");
           assertThat(properties.kafka().bootstrapServers()).isEqualTo("kafka:9092");
           assertThat(properties.storage().root()).isEqualTo("./.knowledge/storage");
+          assertThat(retrieval.minRrfScore()).isEqualTo(0.02);
         });
   }
 
   @org.springframework.boot.test.context.TestConfiguration
-  @EnableConfigurationProperties(KnowledgeProperties.class)
+  @EnableConfigurationProperties({KnowledgeProperties.class, KnowledgeRetrievalProperties.class})
   static class KnowledgeTestConfiguration {}
 }

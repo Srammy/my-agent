@@ -28,6 +28,7 @@ cp .env.example .env
 - `AGENT_MODEL_NAME`：默认值为 `dashscope:qwen-plus`。
 - `AGENT_MODEL_BASE_URL`：OpenAI-compatible 提供方可选的 base URL。
 - `AGENT_MODEL_API_KEY_ENV`：保存模型 API key 的环境变量名。默认值为 `DASHSCOPE_API_KEY`。
+- `KNOWLEDGE_RETRIEVAL_MIN_RRF_SCORE`：知识库问答最低应用层 RRF 分数；低于该阈值时不调用 Agent。默认值为 `0.02`。
 - `VITE_API_PROXY_TARGET`：本地 Vite 开发代理目标，可选。默认值为 `http://localhost:8080`。
 
 ## Docker 启动
