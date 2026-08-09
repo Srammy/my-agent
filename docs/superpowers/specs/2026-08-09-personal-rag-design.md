@@ -27,13 +27,13 @@
 5. 为每个父文档和子文档写入以下元数据：`userId`、`documentId`、`parentId`、`chunkIndex`、`sourceFilename`、`status`。
 6. 使用 Spring AI `EmbeddingModel` 对子文档批量生成向量，只将子文档写入检索索引；父文档保留完整上下文，供命中后回取。
 
-上传接口与 ETL 解耦。上传请求只保存原文件、创建 `PROCESSING` 文档记录并提交后台处理任务，返回 202；后台任务负责读取、父子切分、向量化和 Elasticsearch 写入。处理成功后状态变为 `READY`，失败后变为 `FAILED`。
+上传接口与 ETL 解耦。上传请求只保存原文件、创建 `PROCESSING` 文档记录和 Outbox 任务记录，返回 202；Outbox Relay 将任务可靠投递到 Kafka，Kafka Consumer 负责读取、父子切分、向量化和 Elasticsearch 写入。处理成功后状态变为 `READY`，失败后变为 `FAILED`。
 
 父子关系使用应用层 `parentId` 逻辑关联，不使用 Elasticsearch `join` 字段。这样 RRF 只在子文档索引上执行，命中后根据 `parentId` 批量读取父文档，检索和隔离逻辑更容易测试。
 
 ### Elasticsearch 索引
 
-Docker Compose 增加 Elasticsearch 8.x 服务和持久化 volume，不将 Elasticsearch 端口暴露给宿主机。后端通过 Compose 网络访问它；backend 同时挂载 `knowledge_data` volume 保存异步处理期间的原文件。
+Docker Compose 增加 Elasticsearch 8.x 和单节点 KRaft Kafka 服务及持久化 volume，不将 Elasticsearch 或 Kafka 端口暴露给宿主机。后端通过 Compose 网络访问它；backend 同时挂载 `knowledge_data` volume 保存异步处理期间的原文件。
 
 使用两个索引：
 
@@ -116,6 +116,19 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 
 索引为 `(user_id, created_at)` 和 `(user_id, status)`。原文件保存到后端生成的用户隔离路径，并通过 Docker `knowledge_data` volume 持久化；处理成功后删除原文件并清空 `storage_key`，处理失败时保留原文件以支持重试。本期列表不提供原文件下载。
 
+新增 `knowledge_document_jobs` Outbox 表：
+
+- `id varchar(64) primary key`
+- `document_id varchar(64) not null unique`
+- `user_id bigint not null`
+- `status varchar(32) not null`，取值 `PENDING`、`SENT`、`FAILED`
+- `attempts int not null default 0`
+- `last_error varchar(500)`
+- `created_at datetime not null`
+- `updated_at datetime not null`
+
+文档记录和 Outbox 记录在同一个 MySQL 事务中创建。Kafka 暂不可用时，Outbox 保持 `PENDING`，不会丢失任务。
+
 新增 `chat_sessions.mode varchar(32) not null`，取值 `NORMAL`、`KNOWLEDGE`。已有会话迁移为 `NORMAL`。
 
 ### HTTP 接口
@@ -126,16 +139,18 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 - `GET /api/chat/sessions`：返回 `mode`，供左侧列表展示标签。
 - `POST /api/chat/sessions/{sessionId}/stream`：沿用现有流式接口；服务端根据会话模式选择普通 Agent 或知识库检索链路。
 
-上传处理采用异步后台任务，不阻塞上传请求：
+上传处理采用 Kafka 异步任务，不阻塞上传请求：
 
-1. 接口校验文件类型和 20 MB 大小限制，将文件写入 `knowledge_data/{userId}/{documentId}/source`，并在 MySQL 中创建 `PROCESSING` 记录。
-2. 事务提交后向有界 `ThreadPoolTaskExecutor` 提交 `KnowledgeDocumentProcessingTask(documentId)`，接口返回 202 和 `PROCESSING` 状态。
-3. 任务启动时重新从 MySQL 校验文档归属和状态，使用 `storage_key` 读取原文件，执行 Spring AI ETL、EmbeddingModel 批处理和 Elasticsearch bulk 写入。
-4. 写入前按 `userId + documentId` 清理该文档的旧父子索引数据；写入失败时再次清理，避免半成品被检索。
-5. 全部写入成功后更新父子计数并将文档置为 `READY`，删除原文件；任一步骤失败则将文档置为 `FAILED` 并保存可读错误信息。
-6. 应用启动时重新提交所有仍为 `PROCESSING` 的文档；任务使用确定性的父子 ID 和清理后重建保证重试幂等。
+1. 接口校验文件类型和 20 MB 大小限制，将文件写入 `knowledge_data/{userId}/{documentId}/source`，并在同一个 MySQL 事务中创建 `PROCESSING` 文档记录和 `PENDING` Outbox 记录。
+2. 接口返回 202 和 `PROCESSING` 状态；Outbox Relay 定期批量读取 `PENDING` 记录，通过 `KafkaTemplate` 发布到 `myagent.knowledge.document.process`，成功后标记 `SENT`。
+3. Kafka Consumer 使用消费组 `myagent-knowledge-etl` 接收消息，重新从 MySQL 校验文档归属和状态，使用 `storage_key` 读取原文件，执行 Spring AI ETL、EmbeddingModel 批处理和 Elasticsearch bulk 写入。
+4. 写入前按 `userId + documentId` 清理该文档的旧父子索引数据；写入失败时抛出异常，让 Kafka 重试机制重新投递，避免半成品被检索。
+5. 全部写入成功后更新父子计数并将文档置为 `READY`，删除原文件；重试耗尽进入 DLT 后，将文档置为 `FAILED` 并保存可读错误信息。
+6. Consumer 使用确定性的父子 ID和清理后重建保证重复消费幂等；Outbox Relay 在应用重启后继续发送 `PENDING` 任务。
 
 `GET /api/knowledge/documents` 返回实时状态，前端在有 `PROCESSING` 文档时轮询列表；聊天检索只允许 `READY` 文档。
+
+Kafka 使用单独的处理主题、重试主题和死信主题。开发环境使用单节点 KRaft 和 replication factor 1；生产部署时由 Kafka 集群配置更高副本数。Kafka Consumer 的并发数和 Outbox Relay 批量大小通过配置控制。
 
 ## 前端设计
 
@@ -162,7 +177,7 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 
 - Spring AI 父文档组装和子文档切分测试：标题、段落、重叠、超长段落和 metadata 继承。
 - 文档服务测试：上传成功计数、失败状态和临时文件清理。
-- 异步任务测试：上传接口快速返回 202，后台任务更新 `PROCESSING` 到 `READY` 或 `FAILED`，应用启动能够恢复 `PROCESSING` 任务，重复执行不会留下重复索引。
+- Kafka 异步测试：上传接口快速返回 202；Outbox 在 Kafka 不可用时保持 `PENDING`；Consumer 更新 `PROCESSING` 到 `READY` 或 `FAILED`；重试和 DLT 状态正确；重复消费不会留下重复索引。
 - Elasticsearch 检索请求测试：同时包含 `standard`、`knn`、RRF 和 `userId` filter。
 - 用户隔离测试：不同用户不能列表、检索或回取彼此的文档。
 - 知识库 ChatService 测试：无命中不调用 Agent；有命中时把父文档上下文传给 Agent；普通模式不触发检索。
@@ -188,6 +203,6 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 ## 非目标
 
 - 本期不做原文件下载、在线预览、文档删除和重新索引按钮。
-- 本期不引入跨服务消息队列；异步处理使用后端内有界线程池和 MySQL 状态恢复。
+- 本期不实现 Kafka 以外的消息队列；Kafka 使用单节点 KRaft 开发配置，生产集群扩容不在本期范围内。
 - 本期不做 OCR、图片内容理解和表格结构化抽取。
 - 本期不调整现有普通 Agent 的工具确认和权限机制。
