@@ -53,24 +53,34 @@ public class KnowledgeSearchService {
       List<Hit<Map>> vectorHits = vectorResponse.hits().hits();
       if (keywordHits.isEmpty() && vectorHits.isEmpty()) return List.of();
 
-      List<Hit<Map>> childHits = mergeChildHits(keywordHits, vectorHits, limit);
+      List<MergeScore> childHits = mergeChildScores(keywordHits, vectorHits, limit);
       if (childHits.isEmpty()) return List.of();
 
       LinkedHashMap<String, Double> parentScores = new LinkedHashMap<>();
-      for (Hit<Map> hit : childHits) {
+      for (MergeScore child : childHits) {
+        Hit<Map> hit = child.hit;
         String parentId = stringValue(hit.source(), "parentId");
         if (parentId != null) {
-          parentScores.merge(parentId, hit.score() == null ? 0.0 : hit.score(), Double::sum);
+          parentScores.merge(parentId, child.score, Double::sum);
         }
       }
       if (parentScores.isEmpty()) return List.of();
+      List<Map.Entry<String, Double>> rankedParentScores =
+          parentScores.entrySet().stream()
+              .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+              .toList();
       SearchResponse<Map> parentResponse =
-          client.search(buildParentRequest(userId, parentScores.keySet(), documentIds), Map.class);
+          client.search(
+              buildParentRequest(
+                  userId,
+                  rankedParentScores.stream().map(Map.Entry::getKey).toList(),
+                  documentIds),
+              Map.class);
       Map<String, Hit<Map>> parents = new LinkedHashMap<>();
       for (Hit<Map> hit : parentResponse.hits().hits()) parents.put(hit.id(), hit);
 
       List<KnowledgeSearchHit> results = new ArrayList<>();
-      for (Map.Entry<String, Double> entry : parentScores.entrySet()) {
+      for (Map.Entry<String, Double> entry : rankedParentScores) {
         Hit<Map> parent = parents.get(entry.getKey());
         if (parent == null) continue;
         Map<String, Object> source = parent.source();
@@ -131,6 +141,13 @@ public class KnowledgeSearchService {
 
   List<Hit<Map>> mergeChildHits(
       List<Hit<Map>> keywordHits, List<Hit<Map>> vectorHits, int limit) {
+    return mergeChildScores(keywordHits, vectorHits, limit).stream()
+        .map(merge -> merge.hit)
+        .toList();
+  }
+
+  private List<MergeScore> mergeChildScores(
+      List<Hit<Map>> keywordHits, List<Hit<Map>> vectorHits, int limit) {
     LinkedHashMap<String, MergeScore> merged = new LinkedHashMap<>();
     mergeHits(keywordHits, merged, 0);
     mergeHits(vectorHits, merged, keywordHits.size());
@@ -141,7 +158,6 @@ public class KnowledgeSearchService {
               return scoreCompare != 0 ? scoreCompare : Integer.compare(left.firstSeenOrder, right.firstSeenOrder);
             })
         .limit(limit)
-        .map(merge -> merge.hit)
         .toList();
   }
 

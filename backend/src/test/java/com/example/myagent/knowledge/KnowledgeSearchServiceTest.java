@@ -85,6 +85,26 @@ class KnowledgeSearchServiceTest {
     verify(client, org.mockito.Mockito.times(2)).search(any(SearchRequest.class), eq(Map.class));
   }
 
+  @Test
+  void sortsParentsByAggregatedRrfScore() throws Exception {
+    ElasticsearchClient client = mock(ElasticsearchClient.class);
+    KnowledgeEmbeddingService embeddingService = mock(KnowledgeEmbeddingService.class);
+    when(embeddingService.embed("deadline")).thenReturn(new float[] {0.1f, 0.2f});
+    when(client.search(any(SearchRequest.class), eq(Map.class)))
+        .thenReturn(
+            childResponse("child-a", "parent-1", "child-b", "parent-2"),
+            childResponse("child-c", "parent-2", "child-d", "parent-3"),
+            parentResponse());
+
+    KnowledgeSearchService service =
+        new KnowledgeSearchService(client, properties(), embeddingService);
+
+    var results = service.search(7L, "deadline", 4, List.of("doc-1"));
+
+    assertThat(results).extracting(KnowledgeSearchHit::parentId)
+        .containsExactly("parent-2", "parent-1", "parent-3");
+  }
+
   private static SearchResponse<Map> childResponse(
       String firstChildId, String firstParentId, String secondChildId, String secondParentId) {
     return SearchResponse.of(
