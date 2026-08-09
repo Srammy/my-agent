@@ -86,7 +86,8 @@ public class ChatService {
     this.toolConfirmationService = toolConfirmationService;
     this.sessionExecutionCoordinator = sessionExecutionCoordinator;
     this.chatMessageService = chatMessageService;
-    this.knowledgeSearchService = knowledgeSearchServiceProvider.getIfAvailable();
+    this.knowledgeSearchService =
+        knowledgeSearchServiceProvider == null ? null : knowledgeSearchServiceProvider.getIfAvailable();
   }
 
   public Flux<StreamEventDto> stream(CurrentUser currentUser, String sessionId, String message) {

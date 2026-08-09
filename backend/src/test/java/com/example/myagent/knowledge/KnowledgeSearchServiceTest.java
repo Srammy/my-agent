@@ -32,7 +32,8 @@ class KnowledgeSearchServiceTest {
                         hits ->
                             hits.hits(
                                 hit ->
-                                    hit.id("doc-1_p_0_c_0")
+                                    hit.index("children")
+                                        .id("doc-1_p_0_c_0")
                                         .score(0.8)
                                         .source(Map.of("parentId", "doc-1_p_0"))))))
         .thenReturn(
@@ -42,7 +43,8 @@ class KnowledgeSearchServiceTest {
                         hits ->
                             hits.hits(
                                 hit ->
-                                    hit.id("doc-1_p_0")
+                                    hit.index("parents")
+                                        .id("doc-1_p_0")
                                         .source(
                                             Map.of(
                                                 "documentId", "doc-1",

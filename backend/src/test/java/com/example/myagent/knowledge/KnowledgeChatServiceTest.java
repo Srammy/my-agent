@@ -27,6 +27,7 @@ import com.example.myagent.toolconfirmation.ToolConfirmationService;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.function.Supplier;
+import org.springframework.beans.factory.ObjectProvider;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -40,6 +41,8 @@ class KnowledgeChatServiceTest {
     PermissionService permissions = mock(PermissionService.class);
     SessionExecutionCoordinator coordinator = mock(SessionExecutionCoordinator.class);
     KnowledgeSearchService search = mock(KnowledgeSearchService.class);
+    ObjectProvider<KnowledgeSearchService> searchProvider = mock(ObjectProvider.class);
+    when(searchProvider.getIfAvailable()).thenReturn(search);
     CurrentUser user = new CurrentUser(7L, "alice", "USER");
     when(sessions.requireOwnedSession(user, "s-1"))
         .thenReturn(new ChatSessionEntity("s-1", 7L, "KB", SessionMode.KNOWLEDGE, now(), now()));
@@ -59,7 +62,7 @@ class KnowledgeChatServiceTest {
             mock(ToolConfirmationService.class),
             coordinator,
             null,
-            search);
+            searchProvider);
 
     assertThat(service.stream(user, "s-1", "上线条件是什么？").collectList().block())
         .extracting(StreamEventDto::type)
@@ -75,6 +78,8 @@ class KnowledgeChatServiceTest {
     ChatAgentGateway gateway = mock(ChatAgentGateway.class);
     PermissionService permissions = mock(PermissionService.class);
     KnowledgeSearchService search = mock(KnowledgeSearchService.class);
+    ObjectProvider<KnowledgeSearchService> searchProvider = mock(ObjectProvider.class);
+    when(searchProvider.getIfAvailable()).thenReturn(search);
     CurrentUser user = new CurrentUser(7L, "alice", "USER");
     when(sessions.requireOwnedSession(user, "s-1"))
         .thenReturn(new ChatSessionEntity("s-1", 7L, "KB", SessionMode.KNOWLEDGE, now(), now()));
@@ -89,7 +94,7 @@ class KnowledgeChatServiceTest {
             mock(ToolConfirmationService.class),
             mock(SessionExecutionCoordinator.class),
             null,
-            search);
+            searchProvider);
 
     assertThat(service.stream(user, "s-1", "无关问题").collectList().block())
         .extracting(StreamEventDto::type)

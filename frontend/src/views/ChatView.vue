@@ -54,6 +54,7 @@ const currentMode = computed<SessionMode>(() => sessions.currentSession?.mode ??
 const currentModeLabel = computed(() => currentMode.value === 'KNOWLEDGE' ? '知识库问答' : '普通对话')
 const modeDialogVisible = ref(false)
 const pendingMode = ref<SessionMode | ''>('')
+const creatingSession = ref(false)
 
 watch(
   currentSessionId,
@@ -209,11 +210,16 @@ async function createSession() {
 }
 
 async function confirmCreateSession() {
-  if (!pendingMode.value) return
-  const session = await sessions.createSession(undefined, pendingMode.value)
-  modeDialogVisible.value = false
-  pendingMode.value = ''
-  chat.useSession(session.id)
+  if (!pendingMode.value || creatingSession.value) return
+  creatingSession.value = true
+  try {
+    const session = await sessions.createSession(undefined, pendingMode.value)
+    modeDialogVisible.value = false
+    pendingMode.value = ''
+    chat.useSession(session.id)
+  } finally {
+    creatingSession.value = false
+  }
 }
 
 function selectSession(sessionId: string) {
@@ -356,7 +362,9 @@ async function logout() {
           <button type="button" data-testid="session-mode-normal" :class="{ selected: pendingMode === 'NORMAL' }" @click="pendingMode = 'NORMAL'">普通对话</button>
           <button type="button" data-testid="session-mode-knowledge" :class="{ selected: pendingMode === 'KNOWLEDGE' }" @click="pendingMode = 'KNOWLEDGE'">知识库问答</button>
         </div>
-        <button type="button" data-testid="confirm-session-mode" :disabled="!pendingMode" @click="confirmCreateSession">创建会话</button>
+        <button type="button" data-testid="confirm-session-mode" :disabled="!pendingMode || creatingSession" @click="confirmCreateSession">
+          {{ creatingSession ? '创建中…' : '创建会话' }}
+        </button>
       </div>
     </div>
   </main>

@@ -18,7 +18,7 @@ async function refresh() {
   try {
     await knowledge.loadDocuments()
     if (knowledge.processing && !polling) {
-      poll()
+      void poll().catch(() => undefined)
     }
   } catch {
     // The store exposes the user-visible error.
@@ -29,7 +29,7 @@ async function poll() {
   polling = true
   try {
     while (polling && knowledge.processing) {
-      await knowledge.pollProcessing({ intervalMs: 250, maxAttempts: 1 })
+      await knowledge.pollProcessing({ intervalMs: 1000, maxAttempts: 1 })
     }
   } finally {
     polling = false
@@ -47,6 +47,9 @@ async function upload(event: Event) {
   if (!file) return
   try {
     await knowledge.uploadDocument(file, { intervalMs: 1000, maxAttempts: 30 })
+    if (knowledge.processing && !polling) {
+      void poll().catch(() => undefined)
+    }
   } catch {
     // The store exposes the user-visible error.
   }

@@ -49,7 +49,7 @@ describe('KnowledgePanel', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const wrapper = mount(KnowledgePanel, { global: { plugins: [ElementPlus] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('解析失败'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('解析失败'), { timeout: 3000 })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('FAILED')
