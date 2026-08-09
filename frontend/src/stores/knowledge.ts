@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import {
   listDocuments,
+  deleteDocument as deleteDocumentApi,
   uploadDocument as uploadDocumentApi,
   type KnowledgeDocument
 } from '../api/knowledge'
@@ -14,6 +15,7 @@ interface KnowledgeState {
   documents: KnowledgeDocument[]
   loading: boolean
   uploading: boolean
+  deletingId: string
   error: string
 }
 
@@ -30,6 +32,7 @@ export const useKnowledgeStore = defineStore('knowledge', {
     documents: [],
     loading: false,
     uploading: false,
+    deletingId: '',
     error: ''
   }),
   getters: {
@@ -80,6 +83,20 @@ export const useKnowledgeStore = defineStore('knowledge', {
         throw error
       } finally {
         this.uploading = false
+      }
+    },
+    async deleteDocument(documentId: string) {
+      this.deletingId = documentId
+      this.error = ''
+
+      try {
+        await deleteDocumentApi(documentId)
+        this.documents = this.documents.filter((document) => document.id !== documentId)
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
+      } finally {
+        this.deletingId = ''
       }
     }
   }

@@ -33,4 +33,12 @@ public class KnowledgeDocumentJobService {
     jobMapper.insert(job);
     return KnowledgeDocumentDto.fromEntity(document);
   }
+
+  @Transactional
+  public void delete(Long userId, String documentId) {
+    KnowledgeDocumentJobEntity job = jobMapper.findOwnedByDocumentId(userId, documentId);
+    if (job != null) {
+      jobMapper.deleteById(job.getId());
+    }
+  }
 }

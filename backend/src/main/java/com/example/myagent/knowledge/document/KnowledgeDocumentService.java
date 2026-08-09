@@ -1,6 +1,7 @@
 package com.example.myagent.knowledge.document;
 
 import com.example.myagent.auth.CurrentUser;
+import com.example.myagent.knowledge.KnowledgeDocumentCleanupService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -26,14 +27,17 @@ public class KnowledgeDocumentService {
   private final KnowledgeDocumentMapper documentMapper;
   private final KnowledgeDocumentStorage storage;
   private final KnowledgeDocumentJobService jobService;
+  private final KnowledgeDocumentCleanupService cleanupService;
 
   public KnowledgeDocumentService(
       KnowledgeDocumentMapper documentMapper,
       KnowledgeDocumentStorage storage,
-      KnowledgeDocumentJobService jobService) {
+      KnowledgeDocumentJobService jobService,
+      KnowledgeDocumentCleanupService cleanupService) {
     this.documentMapper = documentMapper;
     this.storage = storage;
     this.jobService = jobService;
+    this.cleanupService = cleanupService;
   }
 
   public Mono<KnowledgeDocumentDto> upload(CurrentUser currentUser, FilePart file) {
@@ -80,6 +84,18 @@ public class KnowledgeDocumentService {
         .map(this::repairMissingSize)
         .map(KnowledgeDocumentDto::fromEntity)
         .toList();
+  }
+
+  public void delete(CurrentUser currentUser, String documentId) {
+    requireUser(currentUser);
+    KnowledgeDocumentEntity document = documentMapper.findOwnedById(currentUser.id(), documentId);
+    if (document == null) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Knowledge document not found");
+    }
+    cleanupService.cleanup(currentUser.id(), documentId);
+    storage.deleteIfExists(Path.of(document.getStorageKey()));
+    jobService.delete(currentUser.id(), documentId);
+    documentMapper.deleteById(documentId);
   }
 
   private KnowledgeDocumentEntity repairMissingSize(KnowledgeDocumentEntity document) {

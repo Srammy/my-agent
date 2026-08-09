@@ -55,6 +55,15 @@ async function upload(event: Event) {
   }
 }
 
+async function removeDocument(documentId: string, filename: string) {
+  if (!window.confirm(`确认删除文档“${filename}”？`)) return
+  try {
+    await knowledge.deleteDocument(documentId)
+  } catch {
+    // The store exposes the user-visible error.
+  }
+}
+
 function statusLabel(status: string) {
   return status === 'PROCESSING' ? '解析中' : status === 'READY' ? '就绪' : '失败'
 }
@@ -63,6 +72,10 @@ function sizeLabel(size: number | null) {
   if (size === null || size <= 0) return '大小未知'
   if (size < 1024) return `${size} B`
   return `${(size / 1024).toFixed(1)} KB`
+}
+
+function createdAtLabel(createdAt: string) {
+  return createdAt.replace('T', ' ').slice(0, 16)
 }
 </script>
 
@@ -87,11 +100,25 @@ function sizeLabel(size: number | null) {
       <article v-for="document in knowledge.documents" :key="document.id" class="knowledge-document-item">
         <div class="knowledge-document-item__title">
           <strong :title="document.originalFilename">{{ document.originalFilename }}</strong>
-          <el-tag size="small" :type="document.status === 'READY' ? 'success' : document.status === 'FAILED' ? 'danger' : 'warning'">
-            {{ document.status }} · {{ statusLabel(document.status) }}
-          </el-tag>
+          <span class="knowledge-document-item__actions">
+            <el-tag size="small" :type="document.status === 'READY' ? 'success' : document.status === 'FAILED' ? 'danger' : 'warning'">
+              {{ document.status }} · {{ statusLabel(document.status) }}
+            </el-tag>
+            <el-button
+              :data-testid="`delete-document-${document.id}`"
+              size="small"
+              type="danger"
+              text
+              :loading="knowledge.deletingId === document.id"
+              :disabled="Boolean(knowledge.deletingId)"
+              @click="removeDocument(document.id, document.originalFilename)"
+            >
+              删除
+            </el-button>
+          </span>
         </div>
         <div class="knowledge-document-item__meta">
+          <span>上传时间 {{ createdAtLabel(document.createdAt) }}</span>
           <span>{{ sizeLabel(document.sizeBytes) }}</span>
           <span>父文档 {{ document.parentCount }}</span>
           <span>子文档 {{ document.childCount }}</span>

@@ -811,6 +811,13 @@ body.chat-resizing * {
   white-space: nowrap;
 }
 
+.knowledge-document-item__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
 .knowledge-document-item__meta {
   justify-content: flex-start;
   margin-top: 7px;

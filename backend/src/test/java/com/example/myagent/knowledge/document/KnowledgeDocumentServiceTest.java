@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.example.myagent.auth.CurrentUser;
+import com.example.myagent.knowledge.KnowledgeDocumentCleanupService;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -26,8 +27,9 @@ class KnowledgeDocumentServiceTest {
     KnowledgeDocumentMapper documentMapper = mock(KnowledgeDocumentMapper.class);
     KnowledgeDocumentStorage storage = mock(KnowledgeDocumentStorage.class);
     KnowledgeDocumentJobService jobService = mock(KnowledgeDocumentJobService.class);
+    KnowledgeDocumentCleanupService cleanupService = mock(KnowledgeDocumentCleanupService.class);
     KnowledgeDocumentService service =
-        new KnowledgeDocumentService(documentMapper, storage, jobService);
+        new KnowledgeDocumentService(documentMapper, storage, jobService, cleanupService);
     FilePart file = mock(FilePart.class);
     HttpHeaders headers = new HttpHeaders();
     headers.setContentLength(0);
@@ -62,8 +64,9 @@ class KnowledgeDocumentServiceTest {
     KnowledgeDocumentMapper documentMapper = mock(KnowledgeDocumentMapper.class);
     KnowledgeDocumentStorage storage = mock(KnowledgeDocumentStorage.class);
     KnowledgeDocumentJobService jobService = mock(KnowledgeDocumentJobService.class);
+    KnowledgeDocumentCleanupService cleanupService = mock(KnowledgeDocumentCleanupService.class);
     KnowledgeDocumentService service =
-        new KnowledgeDocumentService(documentMapper, storage, jobService);
+        new KnowledgeDocumentService(documentMapper, storage, jobService, cleanupService);
     Path source = tempDir.resolve("guide.md");
     Files.writeString(source, "hello knowledge");
     KnowledgeDocumentEntity document = new KnowledgeDocumentEntity();
@@ -82,5 +85,27 @@ class KnowledgeDocumentServiceTest {
     List<KnowledgeDocumentDto> result = service.list(new CurrentUser(7L, "user", "USER"));
 
     assertThat(result).singleElement().extracting(KnowledgeDocumentDto::sizeBytes).isEqualTo(15L);
+  }
+
+  @Test
+  void deletesOnlyTheAuthenticatedUsersDocumentAndItsSearchData() {
+    KnowledgeDocumentMapper documentMapper = mock(KnowledgeDocumentMapper.class);
+    KnowledgeDocumentStorage storage = mock(KnowledgeDocumentStorage.class);
+    KnowledgeDocumentJobService jobService = mock(KnowledgeDocumentJobService.class);
+    KnowledgeDocumentCleanupService cleanupService = mock(KnowledgeDocumentCleanupService.class);
+    KnowledgeDocumentService service =
+        new KnowledgeDocumentService(documentMapper, storage, jobService, cleanupService);
+    KnowledgeDocumentEntity document = new KnowledgeDocumentEntity();
+    document.setId("doc-1");
+    document.setUserId(7L);
+    document.setStorageKey("C:/knowledge/7/doc-1/source/guide.md");
+    when(documentMapper.findOwnedById(7L, "doc-1")).thenReturn(document);
+
+    service.delete(new CurrentUser(7L, "user", "USER"), "doc-1");
+
+    org.mockito.Mockito.verify(cleanupService).cleanup(7L, "doc-1");
+    org.mockito.Mockito.verify(storage).deleteIfExists(Path.of(document.getStorageKey()));
+    org.mockito.Mockito.verify(jobService).delete(7L, "doc-1");
+    org.mockito.Mockito.verify(documentMapper).deleteById("doc-1");
   }
 }

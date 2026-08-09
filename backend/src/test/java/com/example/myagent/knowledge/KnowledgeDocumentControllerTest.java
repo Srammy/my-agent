@@ -3,6 +3,7 @@ package com.example.myagent.knowledge;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doNothing;
 import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockAuthentication;
 
 import com.example.myagent.auth.CurrentUser;
@@ -11,6 +12,7 @@ import com.example.myagent.knowledge.document.KnowledgeDocumentDto;
 import com.example.myagent.knowledge.document.KnowledgeDocumentService;
 import com.example.myagent.knowledge.document.KnowledgeDocumentStatus;
 import java.util.List;
+import java.time.LocalDateTime;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -42,7 +44,8 @@ class KnowledgeDocumentControllerTest {
   void uploadReturnsAcceptedProcessingDocumentWithoutStorageKey() {
     KnowledgeDocumentDto dto =
         new KnowledgeDocumentDto(
-            "doc-1", "notes.txt", "text/plain", 5L, KnowledgeDocumentStatus.PROCESSING, 0, 0, null);
+            "doc-1", "notes.txt", "text/plain", 5L, KnowledgeDocumentStatus.PROCESSING, 0, 0, null,
+            LocalDateTime.of(2026, 8, 9, 12, 18));
     when(service.upload(any(CurrentUser.class), any())).thenReturn(Mono.just(dto));
 
     LinkedMultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
@@ -76,7 +79,8 @@ class KnowledgeDocumentControllerTest {
   void listReturnsOnlyServiceResultsForTheAuthenticatedUser() {
     KnowledgeDocumentDto dto =
         new KnowledgeDocumentDto(
-            "doc-1", "notes.txt", "text/plain", 5L, KnowledgeDocumentStatus.READY, 1, 2, null);
+            "doc-1", "notes.txt", "text/plain", 5L, KnowledgeDocumentStatus.READY, 1, 2, null,
+            LocalDateTime.of(2026, 8, 9, 12, 18));
     when(service.list(USER)).thenReturn(List.of(dto));
 
     authenticatedClient()
@@ -90,10 +94,26 @@ class KnowledgeDocumentControllerTest {
         .isEqualTo("doc-1")
         .jsonPath("$[0].status")
         .isEqualTo("READY")
+        .jsonPath("$[0].createdAt")
+        .isEqualTo("2026-08-09T12:18:00")
         .jsonPath("$[0].storageKey")
         .doesNotExist();
 
     verify(service).list(USER);
+  }
+
+  @Test
+  void deletesAnOwnedDocument() {
+    doNothing().when(service).delete(USER, "doc-1");
+
+    authenticatedClient()
+        .delete()
+        .uri("/api/knowledge/documents/doc-1")
+        .exchange()
+        .expectStatus()
+        .isNoContent();
+
+    verify(service).delete(USER, "doc-1");
   }
 
   private WebTestClient authenticatedClient() {

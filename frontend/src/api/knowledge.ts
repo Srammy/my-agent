@@ -1,10 +1,11 @@
-import { ApiError, apiGet, TOKEN_KEY } from './client'
+import { ApiError, apiDelete, apiGet, TOKEN_KEY } from './client'
 
 export type KnowledgeDocumentStatus = 'PROCESSING' | 'READY' | 'FAILED'
 
 export interface KnowledgeDocument {
   id: string
   originalFilename: string
+  createdAt: string
   contentType: string
   sizeBytes: number | null
   status: KnowledgeDocumentStatus
@@ -50,6 +51,10 @@ async function parseUploadResponse(response: Response) {
 
 export function listDocuments(): Promise<KnowledgeDocument[]> {
   return apiGet<KnowledgeDocument[]>('/api/knowledge/documents')
+}
+
+export function deleteDocument(documentId: string): Promise<null> {
+  return apiDelete<null>(`/api/knowledge/documents/${encodeURIComponent(documentId)}`)
 }
 
 export async function uploadDocument(file: File): Promise<KnowledgeDocument> {

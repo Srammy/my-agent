@@ -7,6 +7,7 @@ import KnowledgePanel from '../KnowledgePanel.vue'
 const processing = {
   id: 'doc-1',
   originalFilename: 'guide.md',
+  createdAt: '2026-08-09T12:18:00',
   contentType: 'text/markdown',
   sizeBytes: 12,
   status: 'PROCESSING',
@@ -34,6 +35,7 @@ describe('KnowledgePanel', () => {
 
     expect(wrapper.text()).toContain('父文档 2')
     expect(wrapper.text()).toContain('子文档 7')
+    expect(wrapper.text()).toContain('上传时间 2026-08-09 12:18')
   })
 
   it('shows unknown when the stored document size is zero', async () => {
@@ -67,5 +69,25 @@ describe('KnowledgePanel', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('FAILED')
+  })
+
+  it('deletes a document after confirmation', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ ...processing, status: 'READY' }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true))
+
+    const wrapper = mount(KnowledgePanel, { global: { plugins: [ElementPlus] } })
+    await vi.waitFor(() => expect(wrapper.findAll('[data-testid="delete-document-doc-1"]')).toHaveLength(1))
+
+    await wrapper.get('[data-testid="delete-document-doc-1"]').trigger('click')
+
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/knowledge/documents/doc-1')
+    expect(fetchMock.mock.calls[1][1].method).toBe('DELETE')
+    await vi.waitFor(() => expect(wrapper.text()).not.toContain('guide.md'))
   })
 })

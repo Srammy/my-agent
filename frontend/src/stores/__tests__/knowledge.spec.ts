@@ -7,6 +7,7 @@ function document(status: knowledgeApi.KnowledgeDocumentStatus): knowledgeApi.Kn
   return {
     id: 'doc-1',
     originalFilename: 'guide.md',
+    createdAt: '2026-08-09T12:18:00',
     contentType: 'text/markdown',
     sizeBytes: 12,
     status,
@@ -37,5 +38,17 @@ describe('knowledge store', () => {
     expect(store.documents).toEqual([document('READY')])
     expect(store.uploading).toBe(false)
     expect(store.loading).toBe(false)
+  })
+
+  it('removes a deleted document from the list', async () => {
+    vi.spyOn(knowledgeApi, 'listDocuments').mockResolvedValue([document('READY')])
+    vi.spyOn(knowledgeApi, 'deleteDocument').mockResolvedValue(null)
+    const store = useKnowledgeStore()
+    await store.loadDocuments()
+
+    await store.deleteDocument('doc-1')
+
+    expect(knowledgeApi.deleteDocument).toHaveBeenCalledWith('doc-1')
+    expect(store.documents).toEqual([])
   })
 })

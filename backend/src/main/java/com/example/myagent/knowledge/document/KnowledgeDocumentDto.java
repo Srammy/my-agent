@@ -1,5 +1,7 @@
 package com.example.myagent.knowledge.document;
 
+import java.time.LocalDateTime;
+
 public record KnowledgeDocumentDto(
     String id,
     String originalFilename,
@@ -8,7 +10,8 @@ public record KnowledgeDocumentDto(
     KnowledgeDocumentStatus status,
     Integer parentCount,
     Integer childCount,
-    String errorMessage) {
+    String errorMessage,
+    LocalDateTime createdAt) {
 
   public static KnowledgeDocumentDto fromEntity(KnowledgeDocumentEntity entity) {
     return new KnowledgeDocumentDto(
@@ -19,6 +22,7 @@ public record KnowledgeDocumentDto(
         entity.getStatus(),
         entity.getParentCount(),
         entity.getChildCount(),
-        entity.getErrorMessage());
+        entity.getErrorMessage(),
+        entity.getCreatedAt());
   }
 }

@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { listDocuments, uploadDocument, type KnowledgeDocument } from '../knowledge'
+import { deleteDocument, listDocuments, uploadDocument, type KnowledgeDocument } from '../knowledge'
 
 const document: KnowledgeDocument = {
   id: 'doc-1',
   originalFilename: 'guide.md',
+  createdAt: '2026-08-09T12:18:00',
   contentType: 'text/markdown',
   sizeBytes: 12,
   status: 'PROCESSING',
@@ -50,5 +51,14 @@ describe('knowledge document API', () => {
 
     await expect(listDocuments()).resolves.toEqual([document])
     expect(fetchMock).toHaveBeenCalledWith('/api/knowledge/documents', expect.objectContaining({ method: 'GET' }))
+  })
+
+  it('deletes a knowledge document', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(deleteDocument('doc-1')).resolves.toBeNull()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/knowledge/documents/doc-1', expect.objectContaining({ method: 'DELETE' }))
   })
 })
