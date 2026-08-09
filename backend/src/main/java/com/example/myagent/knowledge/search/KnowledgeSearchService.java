@@ -19,7 +19,7 @@ import org.springframework.stereotype.Service;
 public class KnowledgeSearchService {
 
   private static final int DEFAULT_TOP_K = 8;
-  private static final long RRF_RANK_CONSTANT = 60L;
+  private static final double RRF_RANK_CONSTANT = 60.0;
 
   private final ElasticsearchClient client;
   private final KnowledgeProperties properties;
@@ -44,16 +44,24 @@ public class KnowledgeSearchService {
     int limit = Math.max(1, Math.min(topK, 50));
     try {
       float[] vector = embeddingService.embed(question);
-      SearchResponse<Map> childResponse =
+      SearchResponse<Map> keywordResponse =
           client.search(
-              buildChildRequest(userId, question, vector, limit, documentIds), Map.class);
-      List<Hit<Map>> childHits = childResponse.hits().hits();
+              buildKeywordRequest(userId, question, limit, documentIds), Map.class);
+      SearchResponse<Map> vectorResponse =
+          client.search(buildVectorRequest(userId, vector, limit, documentIds), Map.class);
+      List<Hit<Map>> keywordHits = keywordResponse.hits().hits();
+      List<Hit<Map>> vectorHits = vectorResponse.hits().hits();
+      if (keywordHits.isEmpty() && vectorHits.isEmpty()) return List.of();
+
+      List<Hit<Map>> childHits = mergeChildHits(keywordHits, vectorHits, limit);
       if (childHits.isEmpty()) return List.of();
 
       LinkedHashMap<String, Double> parentScores = new LinkedHashMap<>();
       for (Hit<Map> hit : childHits) {
         String parentId = stringValue(hit.source(), "parentId");
-        if (parentId != null) parentScores.putIfAbsent(parentId, hit.score() == null ? 0.0 : hit.score());
+        if (parentId != null) {
+          parentScores.merge(parentId, hit.score() == null ? 0.0 : hit.score(), Double::sum);
+        }
       }
       if (parentScores.isEmpty()) return List.of();
       SearchResponse<Map> parentResponse =
@@ -81,11 +89,9 @@ public class KnowledgeSearchService {
     }
   }
 
-  SearchRequest buildChildRequest(
-      Long userId, String question, float[] vector, int limit, Collection<String> documentIds) {
+  SearchRequest buildKeywordRequest(
+      Long userId, String question, int limit, Collection<String> documentIds) {
     Query filters = ownershipFilter(userId, documentIds);
-    List<Float> queryVector = new ArrayList<>(vector.length);
-    for (float value : vector) queryVector.add(value);
     return SearchRequest.of(
         request ->
             request
@@ -100,7 +106,19 @@ public class KnowledgeSearchService {
                                             must.match(
                                                 match ->
                                                     match.field("content").query(question)))
-                                    .filter(filters)))
+                                    .filter(filters))));
+  }
+
+  SearchRequest buildVectorRequest(
+      Long userId, float[] vector, int limit, Collection<String> documentIds) {
+    Query filters = ownershipFilter(userId, documentIds);
+    List<Float> queryVector = new ArrayList<>(vector.length);
+    for (float value : vector) queryVector.add(value);
+    return SearchRequest.of(
+        request ->
+            request
+                .index(properties.elasticsearch().childIndex())
+                .size(limit)
                 .knn(
                     KnnSearch.of(
                         knn ->
@@ -108,12 +126,23 @@ public class KnowledgeSearchService {
                                 .queryVector(queryVector)
                                 .k((long) limit)
                                 .numCandidates((long) Math.max(limit * 4, 50))
-                                .filter(filters)))
-                .rank(
-                    rank ->
-                        rank.rrf(
-                            rrf ->
-                                rrf.rankConstant(RRF_RANK_CONSTANT).windowSize((long) limit))));
+                                .filter(filters))));
+  }
+
+  List<Hit<Map>> mergeChildHits(
+      List<Hit<Map>> keywordHits, List<Hit<Map>> vectorHits, int limit) {
+    LinkedHashMap<String, MergeScore> merged = new LinkedHashMap<>();
+    mergeHits(keywordHits, merged, 0);
+    mergeHits(vectorHits, merged, keywordHits.size());
+    return merged.values().stream()
+        .sorted(
+            (left, right) -> {
+              int scoreCompare = Double.compare(right.score, left.score);
+              return scoreCompare != 0 ? scoreCompare : Integer.compare(left.firstSeenOrder, right.firstSeenOrder);
+            })
+        .limit(limit)
+        .map(merge -> merge.hit)
+        .toList();
   }
 
   private co.elastic.clients.elasticsearch.core.SearchRequest buildParentRequest(
@@ -165,5 +194,40 @@ public class KnowledgeSearchService {
     if (source == null || source.get(key) == null) return null;
     Object value = source.get(key);
     return value instanceof Number number ? number.intValue() : Integer.valueOf(value.toString());
+  }
+
+  private static void mergeHits(
+      List<Hit<Map>> hits, Map<String, MergeScore> merged, int startOrder) {
+    int rank = 1;
+    int order = startOrder;
+    for (Hit<Map> hit : hits) {
+      String id = hit.id();
+      if (id == null) {
+        rank++;
+        order++;
+        continue;
+      }
+      double score = 1.0 / (RRF_RANK_CONSTANT + rank);
+      MergeScore existing = merged.get(id);
+      if (existing == null) {
+        merged.put(id, new MergeScore(hit, score, order));
+      } else {
+        existing.score += score;
+      }
+      rank++;
+      order++;
+    }
+  }
+
+  private static final class MergeScore {
+    private final Hit<Map> hit;
+    private double score;
+    private final int firstSeenOrder;
+
+    private MergeScore(Hit<Map> hit, double score, int firstSeenOrder) {
+      this.hit = hit;
+      this.score = score;
+      this.firstSeenOrder = firstSeenOrder;
+    }
   }
 }
