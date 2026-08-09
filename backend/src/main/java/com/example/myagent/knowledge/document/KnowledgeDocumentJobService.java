@@ -41,4 +41,12 @@ public class KnowledgeDocumentJobService {
       jobMapper.deleteById(job.getId());
     }
   }
+
+  @Transactional
+  public void requeue(Long userId, String documentId, LocalDateTime updatedAt) {
+    KnowledgeDocumentJobEntity job = jobMapper.findOwnedByDocumentId(userId, documentId);
+    if (job == null || jobMapper.requeue(job.getId(), userId, updatedAt) == 0) {
+      throw new IllegalStateException("Knowledge document job is not retryable");
+    }
+  }
 }

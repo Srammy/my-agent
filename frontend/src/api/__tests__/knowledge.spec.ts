@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { deleteDocument, listDocuments, uploadDocument, type KnowledgeDocument } from '../knowledge'
+import { deleteDocument, listDocuments, retryDocument, uploadDocument, type KnowledgeDocument } from '../knowledge'
 
 const document: KnowledgeDocument = {
   id: 'doc-1',
@@ -60,5 +60,21 @@ describe('knowledge document API', () => {
     await expect(deleteDocument('doc-1')).resolves.toBeNull()
 
     expect(fetchMock).toHaveBeenCalledWith('/api/knowledge/documents/doc-1', expect.objectContaining({ method: 'DELETE' }))
+  })
+
+  it('retries a failed knowledge document', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...document, status: 'PROCESSING' }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(retryDocument('doc-1')).resolves.toMatchObject({ status: 'PROCESSING' })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/knowledge/documents/doc-1/retry',
+      expect.objectContaining({ method: 'POST' })
+    )
   })
 })

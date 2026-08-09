@@ -1,4 +1,4 @@
-import { ApiError, apiDelete, apiGet, TOKEN_KEY } from './client'
+import { ApiError, apiDelete, apiGet, apiPost, TOKEN_KEY } from './client'
 
 export type KnowledgeDocumentStatus = 'PROCESSING' | 'READY' | 'FAILED'
 
@@ -55,6 +55,10 @@ export function listDocuments(): Promise<KnowledgeDocument[]> {
 
 export function deleteDocument(documentId: string): Promise<null> {
   return apiDelete<null>(`/api/knowledge/documents/${encodeURIComponent(documentId)}`)
+}
+
+export function retryDocument(documentId: string): Promise<KnowledgeDocument> {
+  return apiPost<KnowledgeDocument>(`/api/knowledge/documents/${encodeURIComponent(documentId)}/retry`)
 }
 
 export async function uploadDocument(file: File): Promise<KnowledgeDocument> {

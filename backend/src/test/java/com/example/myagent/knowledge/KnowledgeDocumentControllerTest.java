@@ -116,6 +116,27 @@ class KnowledgeDocumentControllerTest {
     verify(service).delete(USER, "doc-1");
   }
 
+  @Test
+  void retriesAnOwnedFailedDocument() {
+    KnowledgeDocumentDto dto =
+        new KnowledgeDocumentDto(
+            "doc-1", "notes.txt", "text/plain", 5L, KnowledgeDocumentStatus.PROCESSING, 0, 0, null,
+            LocalDateTime.of(2026, 8, 9, 12, 18));
+    when(service.retry(USER, "doc-1")).thenReturn(dto);
+
+    authenticatedClient()
+        .post()
+        .uri("/api/knowledge/documents/doc-1/retry")
+        .exchange()
+        .expectStatus()
+        .isAccepted()
+        .expectBody()
+        .jsonPath("$.status")
+        .isEqualTo("PROCESSING");
+
+    verify(service).retry(USER, "doc-1");
+  }
+
   private WebTestClient authenticatedClient() {
     return webTestClient.mutateWith(
         mockAuthentication(new TestingAuthenticationToken(USER, "password", "ROLE_USER")));

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import {
   listDocuments,
   deleteDocument as deleteDocumentApi,
+  retryDocument as retryDocumentApi,
   uploadDocument as uploadDocumentApi,
   type KnowledgeDocument
 } from '../api/knowledge'
@@ -97,6 +98,21 @@ export const useKnowledgeStore = defineStore('knowledge', {
         throw error
       } finally {
         this.deletingId = ''
+      }
+    },
+    async retryDocument(documentId: string) {
+      this.error = ''
+
+      try {
+        const document = await retryDocumentApi(documentId)
+        this.documents = [
+          document,
+          ...this.documents.filter((item) => item.id !== document.id)
+        ]
+        return document
+      } catch (error) {
+        this.error = errorMessage(error)
+        throw error
       }
     }
   }

@@ -64,6 +64,15 @@ async function removeDocument(documentId: string, filename: string) {
   }
 }
 
+async function retryDocument(documentId: string) {
+  try {
+    await knowledge.retryDocument(documentId)
+    if (!polling) void poll().catch(() => undefined)
+  } catch {
+    // The store exposes the user-visible error.
+  }
+}
+
 function statusLabel(status: string) {
   return status === 'PROCESSING' ? '解析中' : status === 'READY' ? '就绪' : '失败'
 }
@@ -114,6 +123,16 @@ function createdAtLabel(createdAt: string) {
               @click="removeDocument(document.id, document.originalFilename)"
             >
               删除
+            </el-button>
+            <el-button
+              v-if="document.status === 'FAILED'"
+              :data-testid="`retry-document-${document.id}`"
+              size="small"
+              type="warning"
+              text
+              @click="retryDocument(document.id)"
+            >
+              重试
             </el-button>
           </span>
         </div>

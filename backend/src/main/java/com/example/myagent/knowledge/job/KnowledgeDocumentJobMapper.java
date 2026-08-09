@@ -85,4 +85,20 @@ public interface KnowledgeDocumentJobMapper extends BaseMapper<KnowledgeDocument
             .eq(KnowledgeDocumentJobEntity::getDocumentId, documentId)
             .last("limit 1"));
   }
+
+  default int requeue(String id, Long userId, LocalDateTime updatedAt) {
+    KnowledgeDocumentJobEntity update = new KnowledgeDocumentJobEntity();
+    update.setStatus(KnowledgeDocumentJobStatus.PENDING);
+    update.setAttempts(0);
+    update.setLastError(null);
+    update.setClaimedUntil(null);
+    update.setClaimToken(null);
+    update.setUpdatedAt(updatedAt);
+    return update(
+        update,
+        Wrappers.<KnowledgeDocumentJobEntity>lambdaUpdate()
+            .eq(KnowledgeDocumentJobEntity::getId, id)
+            .eq(KnowledgeDocumentJobEntity::getUserId, userId)
+            .eq(KnowledgeDocumentJobEntity::getStatus, KnowledgeDocumentJobStatus.FAILED));
+  }
 }

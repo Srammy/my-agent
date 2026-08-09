@@ -14,6 +14,7 @@ import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -96,6 +97,31 @@ public class KnowledgeDocumentService {
     storage.deleteIfExists(Path.of(document.getStorageKey()));
     jobService.delete(currentUser.id(), documentId);
     documentMapper.deleteById(documentId);
+  }
+
+  @Transactional
+  public KnowledgeDocumentDto retry(CurrentUser currentUser, String documentId) {
+    requireUser(currentUser);
+    KnowledgeDocumentEntity document = documentMapper.findOwnedById(currentUser.id(), documentId);
+    if (document == null) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Knowledge document not found");
+    }
+    if (document.getStatus() != KnowledgeDocumentStatus.FAILED) {
+      throw new ResponseStatusException(HttpStatus.CONFLICT, "Only failed documents can be retried");
+    }
+    if (!StringUtils.hasText(document.getStorageKey()) || !Files.exists(Path.of(document.getStorageKey()))) {
+      throw new ResponseStatusException(HttpStatus.CONFLICT, "Original document source is unavailable");
+    }
+    cleanupService.cleanup(currentUser.id(), documentId);
+    LocalDateTime now = LocalDateTime.now();
+    document.setStatus(KnowledgeDocumentStatus.PROCESSING);
+    document.setParentCount(0);
+    document.setChildCount(0);
+    document.setErrorMessage(null);
+    document.setUpdatedAt(now);
+    documentMapper.updateById(document);
+    jobService.requeue(currentUser.id(), documentId, now);
+    return KnowledgeDocumentDto.fromEntity(document);
   }
 
   private KnowledgeDocumentEntity repairMissingSize(KnowledgeDocumentEntity document) {

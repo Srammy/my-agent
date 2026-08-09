@@ -51,4 +51,13 @@ public class KnowledgeDocumentController {
         .subscribeOn(Schedulers.boundedElastic())
         .then();
   }
+
+  @PostMapping("/{documentId}/retry")
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  public Mono<KnowledgeDocumentDto> retry(
+      @AuthenticationPrincipal CurrentUser currentUser,
+      @PathVariable String documentId) {
+    return Mono.fromCallable(() -> service.retry(currentUser, documentId))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
 }
