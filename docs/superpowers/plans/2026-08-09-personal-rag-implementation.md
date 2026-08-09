@@ -1,37 +1,37 @@
-# Personal RAG Implementation Plan
+# 个人知识库 RAG 实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给执行代理的说明：** 执行本计划时必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 技能。计划按照任务拆分，每个步骤使用复选框（`- [ ]`）跟踪完成状态。
 
-**Goal:** 在现有 MyAgent 中实现按用户隔离的个人知识库：用户上传文档后通过 Kafka 异步完成解析、OCR/图片理解、表格结构化抽取、父子文档切分、向量化和 Elasticsearch 8.x 双路检索；知识库问答复用普通 Agent，但只有检索到用户自己的文档内容时才允许调用 Agent。
+**目标：** 在现有 MyAgent 中实现按用户隔离的个人知识库：用户上传文档后通过 Kafka 异步完成解析、OCR/图片理解、表格结构化抽取、父子文档切分、向量化和 Elasticsearch 8.x 双路检索；知识库问答复用普通 Agent，但只有检索到用户自己的文档内容时才允许调用 Agent。
 
-**Architecture:** 上传事务写入 MySQL 文档记录和 Outbox 消息，Relay 将消息投递到 Kafka；ETL Consumer 使用 Spring AI 解析和切分文档，必要时使用多模态模型完成 OCR、图片理解和表格抽取，使用配置的 embedding 模型向量化 child chunks，最后幂等写入 Elasticsearch parent/child 两个索引。问答请求使用当前用户和文档状态过滤，在 Elasticsearch 中用 BM25 `standard` 检索与 `knn` 检索组成原生 RRF；无命中时直接返回固定拒答，不调用 Agent。
+**架构：** 上传事务写入 MySQL 文档记录和 Outbox 消息，Relay 将消息投递到 Kafka；ETL Consumer 使用 Spring AI 解析和切分文档，必要时使用多模态模型完成 OCR、图片理解和表格抽取，使用配置的 embedding 模型向量化 child chunks，最后幂等写入 Elasticsearch parent/child 两个索引。问答请求使用当前用户和文档状态过滤，在 Elasticsearch 中用 BM25 `standard` 检索与 `knn` 检索组成原生 RRF；无命中时直接返回固定拒答，不调用 Agent。
 
-**Tech Stack:** Java 21, Spring Boot 3.3.5（先按当前版本验证 Spring AI 兼容性）, Spring AI, Spring Kafka, MySQL/MyBatis-Plus, Elasticsearch 8.x Java API Client, Kafka, Docker Compose, Vue 3, TypeScript, Vitest.
+**技术栈：** Java 21、Spring Boot 3.3.5（先按当前版本验证 Spring AI 兼容性）、Spring AI、Spring Kafka、MySQL/MyBatis-Plus、Elasticsearch 8.x Java API Client、Kafka、Docker Compose、Vue 3、TypeScript、Vitest。
 
 ---
 
-## Task 1: Add RAG dependencies, configuration, and local infrastructure
+## 任务 1：增加 RAG 依赖、配置和本地基础设施
 
-**Files:**
-- Modify: `backend/pom.xml`
-- Modify: `backend/src/main/java/com/example/myagent/config/` (add configuration classes beside existing config)
-- Modify: `backend/src/main/resources/application.yml`
-- Modify: `docker-compose.yml`
-- Test: `backend/src/test/java/com/example/myagent/knowledge/KnowledgeConfigurationTest.java`
+**涉及文件：**
+- 修改：`backend/pom.xml`
+- 修改：`backend/src/main/java/com/example/myagent/config/`（在现有配置目录旁增加配置类）
+- 修改：`backend/src/main/resources/application.yml`
+- 修改：`docker-compose.yml`
+- 测试：`backend/src/test/java/com/example/myagent/knowledge/KnowledgeConfigurationTest.java`
 
-- [ ] **Step 1: Write the failing configuration test**
+- [ ] **步骤 1：先编写失败的配置测试**
 
-  Add a Spring context test that binds `knowledge.embedding.model`, `knowledge.embedding.dimensions`, `knowledge.multimodal.model`, and the Kafka/Elasticsearch endpoints into a `KnowledgeProperties` bean. Assert that the embedding dimension is `1024` and that model names come from properties rather than hard-coded service constants.
+  增加 Spring 上下文测试，将 `knowledge.embedding.model`、`knowledge.embedding.dimensions`、`knowledge.multimodal.model` 以及 Kafka/Elasticsearch 地址绑定到 `KnowledgeProperties` Bean。断言向量维度为 `1024`，并确认模型名称来自配置，而不是服务中的硬编码常量。
 
-- [ ] **Step 2: Run the focused test to verify it fails**
+- [ ] **步骤 2：运行专项测试，确认测试确实失败**
 
-  Run `mvn -q -Dtest=KnowledgeConfigurationTest test` from `backend`. It must fail because the properties class and bindings do not exist yet.
+  在 `backend` 目录运行 `mvn -q -Dtest=KnowledgeConfigurationTest test`。此时应因配置属性类和绑定关系尚未实现而失败。
 
-- [ ] **Step 3: Add dependencies and configuration properties**
+- [ ] **步骤 3：增加依赖和配置属性**
 
-  Add the Spring AI BOM/modules required for document readers, model clients, and structured output, plus Spring Kafka and the Elasticsearch 8.x Java API client. Keep the current Spring Boot parent first; if dependency resolution or compilation shows that the selected Spring AI release is incompatible with Boot 3.3.5, make the smallest documented parent/version adjustment in this task and rerun the existing backend test suite.
+  增加文档读取器、模型客户端和结构化输出所需的 Spring AI BOM/模块，同时增加 Spring Kafka 和 Elasticsearch 8.x Java API Client。先保持当前 Spring Boot 父版本不变；如果依赖解析或编译证明选定的 Spring AI 版本与 Boot 3.3.5 不兼容，则在本任务内做最小化且有记录的父版本调整，并重新运行现有后端测试集。
 
-  Add a `@ConfigurationProperties(prefix = "knowledge")` record with concrete nested values:
+  增加一个 `@ConfigurationProperties(prefix = "knowledge")` record，并定义明确的嵌套配置项：
 
   ```java
   public record KnowledgeProperties(
@@ -49,314 +49,314 @@
   }
   ```
 
-  Bind the default model selection as `text-embedding-v4` with dimension `1024` and `qwen3.7-plus` for multimodal extraction. Keep ordinary Agent chat configuration separate (`AGENT_MODEL_NAME=qwen-plus`). Read secrets from environment variables, never from source files.
+  默认模型配置为：向量模型 `text-embedding-v4`、向量维度 `1024`、多模态抽取模型 `qwen3.7-plus`。普通 Agent 对话配置单独保留（`AGENT_MODEL_NAME=qwen-plus`）。密钥只从环境变量读取，禁止写入源代码或配置文件。
 
-- [ ] **Step 4: Add Docker services and health checks**
+- [ ] **步骤 4：增加 Docker 服务和健康检查**
 
-  Add persistent, private-network services for Elasticsearch 8.x and Kafka in KRaft single-node development mode. Use named volumes, do not expose either service to the host, set Kafka replication factors to `1` for local development, and add health checks. Keep MySQL/Redis behavior unchanged.
+  增加 Elasticsearch 8.x 和 Kafka 服务，使用持久化卷和私有网络；Kafka 使用 KRaft 单节点开发模式。两个服务都不暴露宿主机端口，Kafka 本地开发副本数设置为 `1`，并增加健康检查。保持 MySQL/Redis 现有行为不变。
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **步骤 5：运行测试并提交**
 
-  Run `mvn -q -Dtest=KnowledgeConfigurationTest test` and then the existing backend tests. Commit with `feat: configure rag infrastructure`.
+  运行 `mvn -q -Dtest=KnowledgeConfigurationTest test`，再运行现有后端测试集。提交信息使用 `feat: configure rag infrastructure`。
 
-## Task 2: Add user-scoped document/session persistence
+## 任务 2：增加按用户隔离的文档和会话持久化
 
-**Files:**
-- Add: `backend/src/main/resources/db/migration/V5__knowledge_documents.sql`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentEntity.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentMapper.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/job/KnowledgeDocumentJobEntity.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/job/KnowledgeDocumentJobMapper.java`
-- Modify: `backend/src/main/java/com/example/myagent/session/ChatSessionEntity.java`
-- Modify: `backend/src/main/java/com/example/myagent/session/SessionService.java`
-- Modify: `backend/src/main/java/com/example/myagent/session/ChatSessionDto.java`
-- Test: `backend/src/test/java/com/example/myagent/knowledge/KnowledgeDocumentMapperTest.java`
-- Test: existing session tests under `backend/src/test/java/com/example/myagent/session/`
+**涉及文件：**
+- 新增：`backend/src/main/resources/db/migration/V5__knowledge_documents.sql`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentEntity.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentMapper.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/job/KnowledgeDocumentJobEntity.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/job/KnowledgeDocumentJobMapper.java`
+- 修改：`backend/src/main/java/com/example/myagent/session/ChatSessionEntity.java`
+- 修改：`backend/src/main/java/com/example/myagent/session/SessionService.java`
+- 修改：`backend/src/main/java/com/example/myagent/session/ChatSessionDto.java`
+- 测试：`backend/src/test/java/com/example/myagent/knowledge/KnowledgeDocumentMapperTest.java`
+- 测试：`backend/src/test/java/com/example/myagent/session/` 下的现有会话测试
 
-- [ ] **Step 1: Write failing persistence tests**
+- [ ] **步骤 1：先编写失败的持久化测试**
 
-  Test that document reads require both `id` and the authenticated `userId`, job rows are unique by `document_id`, and new session DTOs expose a fixed `mode` (`NORMAL` or `KNOWLEDGE`). Verify legacy sessions are treated as `NORMAL`.
+  测试文档读取必须同时使用 `id` 和当前认证用户的 `userId`；测试任务表通过 `document_id` 保证唯一；测试新的会话 DTO 暴露固定的 `mode`（`NORMAL` 或 `KNOWLEDGE`）。确认历史会话默认按 `NORMAL` 处理。
 
-- [ ] **Step 2: Run focused tests and observe the failure**
+- [ ] **步骤 2：运行专项测试并确认失败**
 
-  Run the knowledge persistence tests and session tests. They must fail because the migration/entities/mode field are absent.
+  运行知识库持久化测试和会话测试。此时应因数据库迁移、实体以及会话模式字段尚未实现而失败。
 
-- [ ] **Step 3: Add the Flyway migration**
+- [ ] **步骤 3：增加 Flyway 数据库迁移**
 
-  Create `knowledge_documents` with `id`, `user_id`, filename/content type/size, `storage_key`, `status`, parent/child counts, error message, and timestamps. Create `knowledge_document_jobs` with a unique `document_id`, `user_id`, `status`, attempts, last error, and timestamps. Add `chat_sessions.mode` with default `NORMAL` and a check constraint for `NORMAL`/`KNOWLEDGE`. Add indexes beginning with `user_id` for all user-owned records.
+  创建 `knowledge_documents` 表，包含 `id`、`user_id`、文件名/内容类型/大小、`storage_key`、`status`、父文档数、子文档数、错误信息和时间字段。创建 `knowledge_document_jobs` 表，通过唯一的 `document_id` 关联任务，并记录 `user_id`、`status`、重试次数、最后错误和时间字段。为 `chat_sessions` 增加默认值为 `NORMAL` 的 `mode` 字段，并增加 `NORMAL`/`KNOWLEDGE` 约束。所有用户数据表都增加以 `user_id` 开头的索引。
 
-- [ ] **Step 4: Add entities, mappers, and mode propagation**
+- [ ] **步骤 4：增加实体、Mapper，并贯通会话模式**
 
-  Add status/mode enums and MyBatis-Plus entities/mappers. Update session create/list DTOs and service methods so mode is persisted and returned. For every document/job query, require the user ID obtained from the existing authentication context; do not accept a client-supplied user ID as authorization.
+  增加文档状态和会话模式枚举，以及对应的 MyBatis-Plus 实体和 Mapper。更新会话创建/列表 DTO 和服务方法，使模式能够持久化并返回。所有文档/任务查询都必须使用现有认证上下文中的用户 ID，不能把客户端传入的 `userId` 当作授权依据。
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **步骤 5：运行测试并提交**
 
-  Run the focused tests and the full existing session test set. Commit with `feat: persist user scoped knowledge documents`.
+  运行专项测试和完整的现有会话测试集。提交信息使用 `feat: persist user scoped knowledge documents`。
 
-## Task 3: Implement upload, listing, and durable source storage
+## 任务 3：实现文档上传、列表展示和持久化源文件存储
 
-**Files:**
-- Add: `backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentController.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentService.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentDto.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentStorage.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentJobService.java`
-- Add: `backend/src/test/java/com/example/myagent/knowledge/KnowledgeDocumentControllerTest.java`
+**涉及文件：**
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentController.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentService.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentDto.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentStorage.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/document/KnowledgeDocumentJobService.java`
+- 新增：`backend/src/test/java/com/example/myagent/knowledge/KnowledgeDocumentControllerTest.java`
 
-- [ ] **Step 1: Write failing API tests**
+- [ ] **步骤 1：先编写失败的 API 测试**
 
-  Test `POST /api/knowledge/documents` with a multipart file returns `202`, creates a `PROCESSING` document and one `PENDING` job, and returns no internal storage path. Test `GET /api/knowledge/documents` only returns the authenticated user’s documents. Test an empty/unsupported upload returns a validation error without creating a job.
+  测试使用 multipart 文件调用 `POST /api/knowledge/documents` 时返回 `202`，创建一个 `PROCESSING` 文档和一个 `PENDING` 任务，并且响应中不返回内部存储路径。测试 `GET /api/knowledge/documents` 只返回当前认证用户的文档。测试空文件或不支持的文件类型会返回校验错误，且不会创建任务。
 
-- [ ] **Step 2: Run the API tests and verify failure**
+- [ ] **步骤 2：运行 API 测试并确认失败**
 
-  Run `mvn -q -Dtest=KnowledgeDocumentControllerTest test`; the endpoints should not exist yet.
+  运行 `mvn -q -Dtest=KnowledgeDocumentControllerTest test`；此时接口尚未实现，测试应失败。
 
-- [ ] **Step 3: Implement safe storage and the upload transaction**
+- [ ] **步骤 3：实现安全存储和上传事务**
 
-  Store the original file under `<root>/<userId>/<documentId>/source/<sanitized filename>`, where the path is constructed from validated IDs and a generated server-side document ID. In one transaction insert the document and Outbox job; write the file before commit and delete the newly written file if the transaction fails. Return a document DTO with `PROCESSING` status and counts set to zero.
+  将原始文件存放在 `<root>/<userId>/<documentId>/source/<sanitized filename>` 下。路径必须由经过校验的 ID 和服务端生成的文档 ID 组成。使用一个事务写入文档记录和 Outbox 任务；事务提交前完成文件写入，事务失败时删除本次新写入的文件。返回状态为 `PROCESSING` 且父子文档数量为零的文档 DTO。
 
-- [ ] **Step 4: Implement user-scoped listing**
+- [ ] **步骤 4：实现按用户隔离的文档列表**
 
-  Add a paged or bounded list endpoint ordered by creation time descending. Map statuses `PROCESSING`, `READY`, and `FAILED`, include error text only for the owner, and never return the source storage key.
+  增加分页或有上限的文档列表接口，按创建时间倒序返回。映射 `PROCESSING`、`READY`、`FAILED` 三种状态；错误信息只返回给文档所有者，任何情况下都不返回源文件存储 key。
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **步骤 5：运行测试并提交**
 
-  Run the focused controller tests plus the existing web/security tests. Commit with `feat: add asynchronous knowledge document upload`.
+  运行控制器专项测试以及现有 Web/安全测试。提交信息使用 `feat: add asynchronous knowledge document upload`。
 
-## Task 4: Implement Kafka Outbox relay, retry, and DLT
+## 任务 4：实现 Kafka Outbox Relay、重试和 DLT
 
-**Files:**
-- Add: `backend/src/main/java/com/example/myagent/knowledge/messaging/KnowledgeDocumentProcessMessage.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/messaging/KnowledgeDocumentOutboxRelay.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/messaging/KnowledgeKafkaConfig.java`
-- Modify: `backend/src/main/resources/application.yml`
-- Add: `backend/src/test/java/com/example/myagent/knowledge/KnowledgeDocumentOutboxRelayTest.java`
+**涉及文件：**
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/messaging/KnowledgeDocumentProcessMessage.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/messaging/KnowledgeDocumentOutboxRelay.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/messaging/KnowledgeKafkaConfig.java`
+- 修改：`backend/src/main/resources/application.yml`
+- 新增：`backend/src/test/java/com/example/myagent/knowledge/KnowledgeDocumentOutboxRelayTest.java`
 
-- [ ] **Step 1: Write failing relay tests**
+- [ ] **步骤 1：先编写失败的 Relay 测试**
 
-  Test that a `PENDING` job publishes a message keyed by `documentId` containing only `documentId` and `userId`, then becomes `SENT` only after the Kafka send succeeds. Test that a send failure leaves the job retryable and records the error.
+  测试 `PENDING` 任务发布的消息以 `documentId` 为 Kafka key，消息体只包含 `documentId` 和 `userId`；只有 Kafka 发送成功后任务才变为 `SENT`。测试发送失败时任务仍可重试，并记录错误信息。
 
-- [ ] **Step 2: Run the relay tests and verify failure**
+- [ ] **步骤 2：运行 Relay 测试并确认失败**
 
-  Run `mvn -q -Dtest=KnowledgeDocumentOutboxRelayTest test`; the relay and producer configuration should be missing.
+  运行 `mvn -q -Dtest=KnowledgeDocumentOutboxRelayTest test`；此时 Relay 和生产者配置尚未实现，测试应失败。
 
-- [ ] **Step 3: Add topic and producer/consumer settings**
+- [ ] **步骤 3：增加 Topic 和生产者/消费者配置**
 
-  Configure topic `myagent.knowledge.document.process`, consumer group `myagent-knowledge-etl`, JSON serialization, manual acknowledgment, bounded concurrency, retry backoff, and a DLT. Use `documentId` as the Kafka key to preserve per-document ordering.
+  配置 Topic `myagent.knowledge.document.process`、消费者组 `myagent-knowledge-etl`、JSON 序列化、手动确认、有上限的并发数、重试退避和 DLT。使用 `documentId` 作为 Kafka key，保证同一文档的消息有序处理。
 
-- [ ] **Step 4: Implement the transactional relay**
+- [ ] **步骤 4：实现事务性消息 Relay**
 
-  Poll pending jobs in small batches, publish with `KafkaTemplate`, and update status only in the success callback. Use row locking or an atomic claim state so multiple application instances cannot publish the same job concurrently. A duplicate message must remain safe because the ETL pipeline is idempotent.
+  以小批量轮询待发送任务，使用 `KafkaTemplate` 发布消息，并且只在发送成功回调中更新任务状态。使用行锁或原子认领状态，避免多个应用实例并发发布同一任务。由于 ETL 流程必须幂等，重复消息也必须能够安全处理。
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **步骤 5：运行测试并提交**
 
-  Run the focused tests and Kafka configuration tests. Commit with `feat: publish knowledge etl jobs through kafka`.
+  运行专项测试和 Kafka 配置测试。提交信息使用 `feat: publish knowledge etl jobs through kafka`。
 
-## Task 5: Implement Spring AI parsing, OCR, image understanding, and table extraction
+## 任务 5：使用 Spring AI 实现解析、OCR、图片理解和表格抽取
 
-**Files:**
-- Add: `backend/src/main/java/com/example/myagent/knowledge/etl/KnowledgeDocumentReader.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/etl/MultimodalExtraction.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/etl/TableExtraction.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/etl/KnowledgeDocumentContent.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/etl/SpringAiKnowledgeDocumentReader.java`
-- Add: `backend/src/test/java/com/example/myagent/knowledge/KnowledgeDocumentReaderTest.java`
+**涉及文件：**
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/etl/KnowledgeDocumentReader.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/etl/MultimodalExtraction.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/etl/TableExtraction.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/etl/KnowledgeDocumentContent.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/etl/SpringAiKnowledgeDocumentReader.java`
+- 新增：`backend/src/test/java/com/example/myagent/knowledge/KnowledgeDocumentReaderTest.java`
 
-- [ ] **Step 1: Write failing reader tests**
+- [ ] **步骤 1：先编写失败的文档读取测试**
 
-  Test that a digital text/PDF fixture produces page-aware content, parent metadata, and normalized text. Test that a scan/image fixture sends image media to the configured multimodal model and stores OCR plus image description. Test that a table fixture produces both Markdown text and validated `TableExtraction` JSON with headers, rows, page, and confidence.
+  测试数字文本/PDF 样例能够生成带页码的内容、父文档元数据和规范化文本。测试扫描件/图片样例会将图片媒体发送给配置的多模态模型，并保存 OCR 文本和图片描述。测试表格样例同时生成 Markdown 文本和经过校验的 `TableExtraction` JSON，其中包含表头、行、页码和置信度。
 
-- [ ] **Step 2: Run reader tests and verify failure**
+- [ ] **步骤 2：运行文档读取测试并确认失败**
 
-  Run `mvn -q -Dtest=KnowledgeDocumentReaderTest test`; the Spring AI reader and extraction schema should not exist yet.
+  运行 `mvn -q -Dtest=KnowledgeDocumentReaderTest test`；此时 Spring AI Reader 和抽取结构尚未实现，测试应失败。
 
-- [ ] **Step 3: Implement text extraction with Spring AI readers**
+- [ ] **步骤 3：使用 Spring AI Reader 实现文本抽取**
 
-  Select readers by content type, using Spring AI’s Tika/page/text readers where appropriate. Preserve page number, source filename, content type, and logical parent index in metadata. Normalize whitespace without flattening table rows.
+  根据内容类型选择 Reader，在适合的场景使用 Spring AI 的 Tika/page/text Reader。元数据中保留页码、源文件名、内容类型和逻辑父文档序号。规范化空白字符时不能破坏表格行结构。
 
-- [ ] **Step 4: Implement multimodal extraction**
+- [ ] **步骤 4：实现多模态内容抽取**
 
-  Build a Spring AI multimodal `UserMessage` with text instructions and `Media` for scanned pages/images. Request structured output using `ChatModel` and schema validation. `MultimodalExtraction` must contain OCR text, image description, and table results; table results must serialize to Markdown for retrieval and structured JSON for display/audit. A vision failure throws a retryable ETL exception and does not mark the document ready.
+  为扫描页/图片构造包含文本指令和 `Media` 的 Spring AI 多模态 `UserMessage`。使用 `ChatModel` 和 Schema 校验请求结构化输出。`MultimodalExtraction` 必须包含 OCR 文本、图片描述和表格结果；表格结果需要序列化成用于检索的 Markdown，以及用于展示/审计的结构化 JSON。视觉模型处理失败时抛出可重试的 ETL 异常，不能将文档标记为就绪。
 
-- [ ] **Step 5: Implement parent-child splitting**
+- [ ] **步骤 5：实现父子文档切分**
 
-  Split structure-first into parent documents of about 1500–2000 tokens, then child chunks of about 300–500 tokens with 50–80 token overlap. Keep document/page/content type metadata on both levels, preserve table headers in every table child, and attach `parentId` to each child.
+  按文档结构优先切分为约 1500–2000 tokens 的父文档，再切分为约 300–500 tokens、重叠 50–80 tokens 的子块。父子两级都保留文档/页码/内容类型元数据；每个表格子块都必须保留表头，并为每个子块设置 `parentId`。
 
-- [ ] **Step 6: Run tests and commit**
+- [ ] **步骤 6：运行测试并提交**
 
-  Run reader/splitting tests and the full backend test suite. Commit with `feat: parse knowledge documents with spring ai`.
+  运行文档读取/切分测试和完整后端测试集。提交信息使用 `feat: parse knowledge documents with spring ai`。
 
-## Task 6: Add Elasticsearch mappings, embedding, and idempotent indexing
+## 任务 6：增加 Elasticsearch 映射、向量化和幂等索引
 
-**Files:**
-- Add: `backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeElasticsearchIndexManager.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeEmbeddingService.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeIndexService.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeParentDocument.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeChildDocument.java`
-- Add: `backend/src/test/java/com/example/myagent/knowledge/KnowledgeIndexServiceTest.java`
+**涉及文件：**
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeElasticsearchIndexManager.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeEmbeddingService.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeIndexService.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeParentDocument.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeChildDocument.java`
+- 新增：`backend/src/test/java/com/example/myagent/knowledge/KnowledgeIndexServiceTest.java`
 
-- [ ] **Step 1: Write failing indexing tests**
+- [ ] **步骤 1：先编写失败的索引测试**
 
-  Test that a child chunk is embedded with the configured model and exactly `1024` dimensions, and that parent/child records carry the same authenticated `userId`, document ID, and status. Test that indexing the same document twice produces deterministic IDs and does not duplicate records.
+  测试子块使用配置的向量模型进行向量化，且维度必须严格为 `1024`；测试父子记录携带相同的认证用户 `userId`、文档 ID 和状态。测试同一文档重复索引时生成确定性的 ID，不能产生重复记录。
 
-- [ ] **Step 2: Run indexing tests and verify failure**
+- [ ] **步骤 2：运行索引测试并确认失败**
 
-  Run `mvn -q -Dtest=KnowledgeIndexServiceTest test`; the ES mappings and embedding service should be absent.
+  运行 `mvn -q -Dtest=KnowledgeIndexServiceTest test`；此时 ES 映射和向量化服务尚未实现，测试应失败。
 
-- [ ] **Step 3: Create the two Elasticsearch indices**
+- [ ] **步骤 3：创建两个 Elasticsearch 索引**
 
-  Create `myagent_knowledge_parents` and `myagent_knowledge_children` with explicit mappings. The child index has `content` as text, exact metadata fields as keyword/integer fields, and `embedding` as `dense_vector` with `dims: 1024` and cosine similarity. Use `parentId` linkage rather than an Elasticsearch join field.
+  创建 `myagent_knowledge_parents` 和 `myagent_knowledge_children` 两个索引，并显式定义映射。子索引的 `content` 使用 text 类型，精确元数据使用 keyword/integer 类型，`embedding` 使用 `dims: 1024`、余弦相似度的 `dense_vector`。使用 `parentId` 建立逻辑关联，不使用 Elasticsearch join 字段。
 
-- [ ] **Step 4: Implement embedding and bulk writes**
+- [ ] **步骤 4：实现向量化和批量写入**
 
-  Inject Spring AI’s `EmbeddingModel`, use the configured model for both document and query embeddings, and fail fast if the returned dimension is not `1024`. Generate deterministic IDs from `documentId + parentIndex/childIndex`, bulk index all records, and delete old records by `userId + documentId` before rebuilding. Do not write any record under a client-provided user ID.
+  注入 Spring AI 的 `EmbeddingModel`，文档向量和查询向量都使用同一个配置模型；如果返回维度不是 `1024`，立即失败。使用 `documentId + parentIndex/childIndex` 生成确定性 ID，批量写入所有记录，重建前按 `userId + documentId` 删除旧记录。禁止使用客户端传入的用户 ID 写入任何记录。
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **步骤 5：运行测试并提交**
 
-  Run indexing tests and the full backend suite. Commit with `feat: index rag parent child documents in elasticsearch`.
+  运行索引测试和完整后端测试集。提交信息使用 `feat: index rag parent child documents in elasticsearch`。
 
-## Task 7: Implement Kafka ETL consumer and failure cleanup
+## 任务 7：实现 Kafka ETL 消费者和失败清理
 
-**Files:**
-- Add: `backend/src/main/java/com/example/myagent/knowledge/etl/KnowledgeDocumentEtlProcessor.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/etl/KnowledgeDocumentKafkaConsumer.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/etl/KnowledgeDocumentCleanupService.java`
-- Add: `backend/src/test/java/com/example/myagent/knowledge/KnowledgeDocumentEtlProcessorTest.java`
+**涉及文件：**
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/etl/KnowledgeDocumentEtlProcessor.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/etl/KnowledgeDocumentKafkaConsumer.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/etl/KnowledgeDocumentCleanupService.java`
+- 新增：`backend/src/test/java/com/example/myagent/knowledge/KnowledgeDocumentEtlProcessorTest.java`
 
-- [ ] **Step 1: Write failing processor tests**
+- [ ] **步骤 1：先编写失败的 ETL 处理测试**
 
-  Test successful processing transitions the MySQL document to `READY`, records parent/child counts, deletes Elasticsearch data from any previous attempt before indexing, and deletes the original source file. Test parsing/indexing failure deletes all ES parent/child records for the exact `userId + documentId`, transitions to `FAILED` after retry exhaustion, and retains the original source file.
+  测试处理成功后 MySQL 文档变为 `READY`，记录父子文档数量，在索引前删除之前尝试产生的 Elasticsearch 数据，并删除原始源文件。测试解析/索引失败时，只删除精确 `userId + documentId` 对应的 ES 父子记录；重试耗尽后将文档变为 `FAILED`，并保留原始源文件。
 
-- [ ] **Step 2: Run the processor tests and verify failure**
+- [ ] **步骤 2：运行 ETL 处理测试并确认失败**
 
-  Run `mvn -q -Dtest=KnowledgeDocumentEtlProcessorTest test`; the consumer/orchestration should be absent.
+  运行 `mvn -q -Dtest=KnowledgeDocumentEtlProcessorTest test`；此时消费者和 ETL 编排尚未实现，测试应失败。
 
-- [ ] **Step 3: Implement the processor**
+- [ ] **步骤 3：实现 ETL 处理器**
 
-  Load the document by message `documentId` and persisted `userId`, verify ownership, load the source from the server-side storage key, parse/split/extract, embed, and bulk index. Update MySQL status only after the complete ES write succeeds. The source is deleted only after the READY update succeeds.
+  根据消息中的 `documentId` 和持久化的 `userId` 加载文档并校验所有权；从服务端存储 key 读取源文件，完成解析/切分/抽取、向量化和批量索引。只有完整 ES 写入成功后才更新 MySQL 状态；只有 `READY` 状态更新成功后才删除源文件。
 
-- [ ] **Step 4: Implement retry and DLT cleanup**
+- [ ] **步骤 4：实现重试和 DLT 清理**
 
-  Throw retryable exceptions from the listener for transient model, Kafka, or ES failures. On every failed attempt clean partial ES data before retrying; on DLT mark the document `FAILED`, persist a concise error, leave the source for reprocessing, and make cleanup idempotent. Never delete another document or user’s data.
+  对暂时性的模型、Kafka 或 ES 失败，从 Listener 抛出可重试异常。每次失败尝试都要在重试前清理部分 ES 数据；进入 DLT 后将文档标记为 `FAILED`，持久化简短错误信息，保留源文件供重新处理，并确保清理操作幂等。绝不能删除其他文档或其他用户的数据。
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **步骤 5：运行测试并提交**
 
-  Run focused ETL tests and all backend tests. Commit with `feat: process rag documents asynchronously`.
+  运行 ETL 专项测试和全部后端测试。提交信息使用 `feat: process rag documents asynchronously`。
 
-## Task 8: Implement Elasticsearch RRF retrieval and Agent-backed knowledge chat
+## 任务 8：实现 Elasticsearch RRF 检索和基于普通 Agent 的知识库问答
 
-**Files:**
-- Add: `backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeSearchService.java`
-- Add: `backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeSearchHit.java`
-- Modify: `backend/src/main/java/com/example/myagent/chat/ChatService.java`
-- Modify: `backend/src/main/java/com/example/myagent/chat/ChatController.java`
-- Add/modify chat DTOs under `backend/src/main/java/com/example/myagent/chat/`
-- Add: `backend/src/test/java/com/example/myagent/knowledge/KnowledgeSearchServiceTest.java`
-- Add/modify chat tests under `backend/src/test/java/com/example/myagent/chat/`
+**涉及文件：**
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeSearchService.java`
+- 新增：`backend/src/main/java/com/example/myagent/knowledge/search/KnowledgeSearchHit.java`
+- 修改：`backend/src/main/java/com/example/myagent/chat/ChatService.java`
+- 修改：`backend/src/main/java/com/example/myagent/chat/ChatController.java`
+- 新增/修改：`backend/src/main/java/com/example/myagent/chat/` 下的聊天 DTO
+- 新增：`backend/src/test/java/com/example/myagent/knowledge/KnowledgeSearchServiceTest.java`
+- 新增/修改：`backend/src/test/java/com/example/myagent/chat/` 下的聊天测试
 
-- [ ] **Step 1: Write failing retrieval/chat tests**
+- [ ] **步骤 1：先编写失败的检索和聊天测试**
 
-  Test the ES request contains a BM25 `standard` retriever and a vector `knn` retriever combined by native RRF, with filters for the current `userId` and `READY` status. Test a knowledge session with hits passes only retrieved parent context to the ordinary Agent gateway. Test zero hits returns the fixed no-answer message and does not call the Agent gateway.
+  测试 ES 请求同时包含 BM25 `standard` Retriever 和向量 `knn` Retriever，并通过原生 RRF 合并；两个分支都必须过滤当前 `userId` 和 `READY` 状态。测试知识库会话有命中时只将检索到的父文档上下文传给普通 Agent Gateway。测试零命中时返回固定拒答，不调用 Agent Gateway。
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [ ] **步骤 2：运行专项测试并确认失败**
 
-  Run the retrieval and chat tests; the RRF service and knowledge mode branch should be absent.
+  运行检索和聊天测试；此时 RRF 服务和知识库模式分支尚未实现，测试应失败。
 
-- [ ] **Step 3: Implement native ES RRF retrieval**
+- [ ] **步骤 3：实现 Elasticsearch 原生 RRF 检索**
 
-  Embed the query with the same configured embedding model, build a `standard` retriever against child `content`, build a `knn` retriever against child `embedding`, and combine them with Elasticsearch 8.x native RRF. Apply `userId`, `documentId` scope if supplied, and `status = READY` to both branches. Collapse or deduplicate by parent ID, fetch parent records by `userId + parentId`, and return source filename/page/chunk metadata.
+  使用同一个配置的向量模型将查询向量化；针对子文档 `content` 构建 `standard` Retriever，针对子文档 `embedding` 构建 `knn` Retriever，再使用 Elasticsearch 8.x 原生 RRF 合并。两个检索分支都应用 `userId`、可选的 `documentId` 范围和 `status = READY` 过滤。按父文档 ID 合并或去重，再通过 `userId + parentId` 查询父文档，并返回源文件名/页码/块信息。
 
-- [ ] **Step 4: Route knowledge sessions through the ordinary Agent**
+- [ ] **步骤 4：将知识库会话接入普通 Agent**
 
-  Add a fixed session mode to chat handling. `NORMAL` keeps the existing path. `KNOWLEDGE` searches first; if hits exist, construct a grounded prompt containing only retrieved context and source metadata, then invoke the same ordinary Agent gateway and stream the response. If no hits exist, return `未在知识库中找到相关内容。` without invoking the Agent.
+  在聊天处理流程中增加固定的会话模式。`NORMAL` 保持现有流程。`KNOWLEDGE` 先执行检索；有命中时，只用检索到的上下文和来源元数据构造 grounded prompt，然后调用同一个普通 Agent Gateway 并流式返回。无命中时返回 `未在知识库中找到相关内容。`，不调用 Agent。
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **步骤 5：运行测试并提交**
 
-  Run retrieval/chat tests and the complete backend test suite. Commit with `feat: add rrf grounded knowledge chat`.
+  运行检索/聊天测试和完整后端测试集。提交信息使用 `feat: add rrf grounded knowledge chat`。
 
-## Task 9: Add frontend document APIs, session mode, and polling state
+## 任务 9：增加前端文档 API、会话模式和轮询状态
 
-**Files:**
-- Modify: `frontend/src/api/chat.ts`
-- Add: `frontend/src/api/knowledge.ts`
-- Modify: `frontend/src/stores/sessions.ts`
-- Add: `frontend/src/stores/knowledge.ts`
-- Modify: `frontend/src/types/`
-- Test: `frontend/src/stores/sessions.spec.ts`
-- Test: `frontend/src/stores/knowledge.spec.ts`
+**涉及文件：**
+- 修改：`frontend/src/api/chat.ts`
+- 新增：`frontend/src/api/knowledge.ts`
+- 修改：`frontend/src/stores/sessions.ts`
+- 新增：`frontend/src/stores/knowledge.ts`
+- 修改：`frontend/src/types/`
+- 测试：`frontend/src/stores/sessions.spec.ts`
+- 测试：`frontend/src/stores/knowledge.spec.ts`
 
-- [ ] **Step 1: Write failing frontend tests**
+- [ ] **步骤 1：先编写失败的前端测试**
 
-  Test session creation sends `mode`, session list retains the mode label, document upload uses multipart form data, and polling refreshes a `PROCESSING` document until `READY` or `FAILED`.
+  测试创建会话时发送 `mode`，会话列表保留模式标签，文档上传使用 multipart 表单，并且轮询会持续刷新 `PROCESSING` 文档，直到变为 `READY` 或 `FAILED`。
 
-- [ ] **Step 2: Run focused frontend tests and verify failure**
+- [ ] **步骤 2：运行专项前端测试并确认失败**
 
-  Run `npm run test -- sessions knowledge` from `frontend`; the new types, API, and store behavior should be missing.
+  在 `frontend` 目录运行 `npm run test -- sessions knowledge`；此时新类型、API 和状态管理行为尚未实现，测试应失败。
 
-- [ ] **Step 3: Add typed APIs and stores**
+- [ ] **步骤 3：增加类型化 API 和状态管理**
 
-  Add `KnowledgeDocument`, `KnowledgeDocumentStatus`, and `ChatMode` types. Add document list/upload APIs and a bounded polling action. Update session store create/list behavior to persist `NORMAL`/`KNOWLEDGE` and avoid trusting mode from route query parameters.
+  增加 `KnowledgeDocument`、`KnowledgeDocumentStatus` 和 `ChatMode` 类型。增加文档列表/上传 API 和有上限的轮询动作。更新会话 Store 的创建/列表行为，持久化 `NORMAL`/`KNOWLEDGE`，并且不信任路由查询参数中的模式。
 
-- [ ] **Step 4: Run tests and commit**
+- [ ] **步骤 4：运行测试并提交**
 
-  Run the focused frontend tests and existing frontend test suite. Commit with `feat: add knowledge frontend state`.
+  运行前端专项测试和现有前端测试集。提交信息使用 `feat: add knowledge frontend state`。
 
-## Task 10: Implement the agreed UI interaction
+## 任务 10：实现已确认的前端交互样式
 
-**Files:**
-- Modify: `frontend/src/views/ChatView.vue`
-- Modify: `frontend/src/components/SessionSidebar.vue`
-- Modify: `frontend/src/components/Composer.vue`
-- Modify: `frontend/src/components/ChatTranscript.vue`
-- Add: `frontend/src/components/KnowledgePanel.vue`
-- Modify: `frontend/src/style.css`
-- Test: `frontend/src/views/ChatView.spec.ts`
-- Test: component tests under `frontend/src/components/`
+**涉及文件：**
+- 修改：`frontend/src/views/ChatView.vue`
+- 修改：`frontend/src/components/SessionSidebar.vue`
+- 修改：`frontend/src/components/Composer.vue`
+- 修改：`frontend/src/components/ChatTranscript.vue`
+- 新增：`frontend/src/components/KnowledgePanel.vue`
+- 修改：`frontend/src/style.css`
+- 测试：`frontend/src/views/ChatView.spec.ts`
+- 测试：`frontend/src/components/` 下的组件测试
 
-- [ ] **Step 1: Write failing UI tests**
+- [ ] **步骤 1：先编写失败的界面测试**
 
-  Test the right side has top-level tabs `Skill` and `知识库`; the `知识库` tab has exactly one child tab named `知识库`. Test the new-session flow lets the user choose `普通对话` or `知识库问答`, and the left session list displays the selected mode. Test the knowledge panel shows upload/list/status/error states.
+  测试右侧有同级的 `Skill` 和 `知识库` 顶层页签；`知识库` 页签下只有一个名为 `知识库` 的子页签。测试新建会话流程可以选择 `普通对话` 或 `知识库问答`，左侧会话列表能够展示所选模式。测试知识库面板能够展示上传、列表、状态和错误状态。
 
-- [ ] **Step 2: Run UI tests and verify failure**
+- [ ] **步骤 2：运行界面测试并确认失败**
 
-  Run the focused Vitest files; the agreed tab and mode interactions should not exist yet.
+  运行相关 Vitest 文件；此时已确认的页签和模式交互尚未实现，测试应失败。
 
-- [ ] **Step 3: Implement session mode selection and labels**
+- [ ] **步骤 3：实现会话模式选择和标签展示**
 
-  Add a mode selector to new-session creation. Keep mode immutable after creation. Render a compact mode badge/text beside every session title: `普通对话` or `知识库问答`. Make the selected mode visible in the chat header and composer so the user can distinguish the two paths without relying on hidden state.
+  在新建会话流程中增加模式选择器。会话创建后模式不可修改。每个会话标题旁显示紧凑的模式标签：`普通对话` 或 `知识库问答`。在聊天头部和输入区显示当前模式，让用户无需依赖隐藏状态即可区分两种对话路径。
 
-- [ ] **Step 4: Implement the right-side knowledge tab**
+- [ ] **步骤 4：实现右侧知识库页签**
 
-  Keep `Skill` and `知识库` at the same top level. Under `知识库`, render only the `知识库` child tab, containing upload control, document list, status, counts, retry/error display, and processing polling. Do not add a `知识库对话` child tab; knowledge Q&A starts from a session whose mode is `知识库问答`.
+  保持 `Skill` 和 `知识库` 为同级顶层页签。在 `知识库` 下只渲染一个 `知识库` 子页签，包含上传控件、文档列表、处理状态、父子文档数量、重试/错误展示和处理中轮询。不要增加 `知识库对话` 子页签；知识库问答从模式为 `知识库问答` 的会话进入。
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **步骤 5：运行测试并提交**
 
-  Run the focused UI tests, full frontend test suite, lint, and build. Commit with `feat: add knowledge base interaction ui`.
+  运行界面专项测试、完整前端测试集、Lint 和构建。提交信息使用 `feat: add knowledge base interaction ui`。
 
-## Task 11: End-to-end verification and handoff
+## 任务 11：端到端验证和交付说明
 
-**Files:**
-- Modify: `README.md`
-- Modify: `docker-compose.yml` if smoke-test configuration needs correction
-- Add: `backend/src/test/java/com/example/myagent/knowledge/KnowledgeRagIntegrationTest.java` when test containers/infrastructure are available
+**涉及文件：**
+- 修改：`README.md`
+- 修改：`docker-compose.yml`（如冒烟测试配置需要修正）
+- 新增：`backend/src/test/java/com/example/myagent/knowledge/KnowledgeRagIntegrationTest.java`（测试容器或基础设施可用时增加）
 
-- [ ] **Step 1: Run all automated checks**
+- [ ] **步骤 1：运行全部自动化检查**
 
-  Run the complete backend test suite, complete frontend test suite, frontend lint/build, and the existing Docker Compose security test. Fix only failures caused by this feature.
+  运行完整后端测试集、完整前端测试集、前端 Lint/构建以及现有 Docker Compose 安全测试。只修复由本功能引起的失败，不修改无关问题。
 
-- [ ] **Step 2: Run the local infrastructure smoke test**
+- [ ] **步骤 2：运行本地基础设施冒烟测试**
 
-  Start MySQL, Redis, Elasticsearch, and Kafka with Docker Compose. Upload a text/PDF fixture, verify the API returns `PROCESSING`, consume the Kafka job, verify ES parent/child records are user-scoped and the document becomes `READY`, then ask a knowledge question and verify the response contains retrieved sources. Ask an unrelated question and verify the fixed no-answer response.
+  使用 Docker Compose 启动 MySQL、Redis、Elasticsearch 和 Kafka。上传文本/PDF 样例，确认 API 返回 `PROCESSING`；消费 Kafka 任务，确认 ES 父子记录按用户隔离且文档变为 `READY`；然后提出知识库问题，确认回答包含检索来源。再提出无关问题，确认返回固定拒答。
 
-- [ ] **Step 3: Verify isolation and failure cleanup**
+- [ ] **步骤 3：验证用户隔离和失败清理**
 
-  Repeat retrieval as a second user and confirm zero hits. Force a parser/embedding/ES failure and confirm partial ES records are removed, MySQL becomes `FAILED` after DLT, and the original source remains available.
+  使用第二个用户重复检索，确认零命中。人为制造解析/向量化/ES 失败，确认部分 ES 记录被删除；进入 DLT 后 MySQL 状态变为 `FAILED`，并且原始源文件仍然保留。
 
-- [ ] **Step 4: Document operations and configuration**
+- [ ] **步骤 4：补充运维和配置说明**
 
-  Update README with environment variables, Docker startup, topic/group names, model configuration, storage cleanup behavior, retry/DLT operations, and the fact that the same embedding model/dimension must be used for indexing and query vectors.
+  更新 README，说明环境变量、Docker 启动方式、Topic/消费者组名称、模型配置、存储清理行为、重试/DLT 运维方式，以及索引向量和查询向量必须使用同一个向量模型和维度。
 
-- [ ] **Step 5: Run final verification and commit**
+- [ ] **步骤 5：运行最终验证并提交**
 
-  Re-run all checks after documentation changes and commit with `docs: document personal rag setup`.
+  文档修改完成后重新运行全部检查。提交信息使用 `docs: document personal rag setup`。
