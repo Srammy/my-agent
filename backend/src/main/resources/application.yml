@@ -56,3 +56,26 @@ mybatis-plus:
 security:
   jwt:
     secret: ${SECURITY_JWT_SECRET}
+
+knowledge:
+  embedding:
+    provider: ${KNOWLEDGE_EMBEDDING_PROVIDER:dashscope}
+    model: ${KNOWLEDGE_EMBEDDING_MODEL:text-embedding-v4}
+    dimensions: ${KNOWLEDGE_EMBEDDING_DIMENSIONS:1024}
+    api-key-env: ${KNOWLEDGE_EMBEDDING_API_KEY_ENV:DASHSCOPE_API_KEY}
+  multimodal:
+    provider: ${KNOWLEDGE_MULTIMODAL_PROVIDER:dashscope}
+    model: ${KNOWLEDGE_MULTIMODAL_MODEL:qwen3.7-plus}
+    api-key-env: ${KNOWLEDGE_MULTIMODAL_API_KEY_ENV:DASHSCOPE_API_KEY}
+  elasticsearch:
+    url: ${KNOWLEDGE_ELASTICSEARCH_URL:http://elasticsearch:9200}
+    username: ${KNOWLEDGE_ELASTICSEARCH_USERNAME:elastic}
+    password: ${KNOWLEDGE_ELASTICSEARCH_PASSWORD:}
+    parent-index: ${KNOWLEDGE_ELASTICSEARCH_PARENT_INDEX:myagent_knowledge_parents}
+    child-index: ${KNOWLEDGE_ELASTICSEARCH_CHILD_INDEX:myagent_knowledge_children}
+  kafka:
+    topic: ${KNOWLEDGE_KAFKA_TOPIC:myagent.knowledge.document.process}
+    group: ${KNOWLEDGE_KAFKA_GROUP:myagent-knowledge-etl}
+    bootstrap-servers: ${KNOWLEDGE_KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+  storage:
+    root: ${KNOWLEDGE_STORAGE_ROOT:./.knowledge/storage}
