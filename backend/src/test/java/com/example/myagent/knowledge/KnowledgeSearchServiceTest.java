@@ -41,10 +41,29 @@ class KnowledgeSearchServiceTest {
     verify(client, org.mockito.Mockito.times(3)).search(requestCaptor.capture(), eq(Map.class));
     SearchRequest bm25Request = requestCaptor.getAllValues().get(0);
     SearchRequest knnRequest = requestCaptor.getAllValues().get(1);
+    SearchRequest parentRequest = requestCaptor.getAllValues().get(2);
     assertThat(bm25Request.rank()).isNull();
     assertThat(bm25Request.knn()).isEmpty();
     assertThat(knnRequest.rank()).isNull();
     assertThat(knnRequest.knn()).isNotEmpty();
+    var ownershipFilters = parentRequest.query().bool().filter().get(0).bool().filter();
+    assertThat(ownershipFilters).anySatisfy(filter -> {
+      assertThat(filter.isTerm()).isTrue();
+      assertThat(filter.term().field()).isEqualTo("userId");
+      assertThat(filter.term().value().longValue()).isEqualTo(7L);
+    });
+    assertThat(ownershipFilters).anySatisfy(filter -> {
+      assertThat(filter.isTerm()).isTrue();
+      assertThat(filter.term().field()).isEqualTo("status");
+      assertThat(filter.term().value().stringValue()).isEqualTo("READY");
+    });
+    assertThat(ownershipFilters).anySatisfy(filter -> {
+      assertThat(filter.isTerms()).isTrue();
+      assertThat(filter.terms().field()).isEqualTo("documentId");
+      assertThat(filter.terms().terms().value())
+          .singleElement()
+          .satisfies(value -> assertThat(value.stringValue()).isEqualTo("doc-1"));
+    });
     assertThat(results).extracting(KnowledgeSearchHit::parentId)
         .containsExactly("parent-2", "parent-1", "parent-3");
   }
@@ -115,7 +134,7 @@ class KnowledgeSearchServiceTest {
                                             .id("parent-2")
                                             .source(
                                                 Map.of(
-                                                    "documentId", "doc-2",
+                                                    "documentId", "doc-1",
                                                     "sourceFilename", "release.docx",
                                                     "pageNumber", 2,
                                                     "content", "release acceptance details"))),
@@ -125,7 +144,7 @@ class KnowledgeSearchServiceTest {
                                             .id("parent-3")
                                             .source(
                                                 Map.of(
-                                                    "documentId", "doc-3",
+                                                    "documentId", "doc-1",
                                                     "sourceFilename", "release.xlsx",
                                                     "pageNumber", 3,
                                                     "content", "release checklist details")))))));
