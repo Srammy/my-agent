@@ -25,7 +25,7 @@
 3. 将读取结果按逻辑上下文组装为父文档。一个父文档约 1,500～2,000 个 token，边界优先在标题、段落和页面边界处确定。
 4. 对每个父文档使用 Spring AI `TokenTextSplitter` 生成子文档，子文档约 300～500 个 token，重叠约 50～80 个 token；长段落在句子边界处切分。
 5. 为每个父文档和子文档写入以下元数据：`userId`、`documentId`、`parentId`、`chunkIndex`、`sourceFilename`、`status`。
-6. 使用 Spring AI `EmbeddingModel` 对子文档批量生成向量，只将子文档写入检索索引；父文档保留完整上下文，供命中后回取。
+6. 使用 Spring AI `EmbeddingModel` 调用 DashScope `text-embedding-v4`，固定输出 1024 维向量，对子文档批量生成向量；只将子文档写入检索索引，父文档保留完整上下文，供命中后回取。
 
 上传接口与 ETL 解耦。上传请求只保存原文件、创建 `PROCESSING` 文档记录和 Outbox 任务记录，返回 202；Outbox Relay 将任务可靠投递到 Kafka，Kafka Consumer 负责读取、父子切分、向量化和 Elasticsearch 写入。处理成功后状态变为 `READY`，失败后变为 `FAILED`。
 
@@ -81,14 +81,16 @@ Docker Compose 增加 Elasticsearch 8.x 和单节点 KRaft Kafka 服务及持久
 | `pageNumber` | `integer` | 来源页码 |
 | `chunkIndex` | `integer` | 子片段顺序 |
 
-两个索引都在初始化时创建明确 mapping；向量维度来自 EmbeddingModel 配置，不能在运行时对已存在索引静默变更。
+两个索引都在初始化时创建明确 mapping；本期 `embedding` 维度固定为 1024，不能在运行时对已存在索引静默变更。文档 chunk 和用户问题必须使用同一个 `text-embedding-v4` 模型。
+
+Embedding 配置使用现有 `DASHSCOPE_API_KEY`，模型名为 `text-embedding-v4`，维度为 `1024`；聊天模型 `qwen-plus` 只负责普通 Agent 和多模态抽取，不用于生成向量。
 
 ### 混合检索和 RRF
 
 知识库问答收到问题后：
 
 1. 校验会话归属和会话模式必须为 `KNOWLEDGE`。
-2. 使用同一个 `EmbeddingModel` 将问题向量化。
+2. 使用同一个 DashScope `text-embedding-v4` `EmbeddingModel` 将问题向量化。
 3. 对子文档索引发起 Elasticsearch 原生 `_search` 请求，使用 `rrf` retriever 合并两个子检索器：
    - `standard`：对 `content` 执行 BM25 `multi_match`。
    - `knn`：对 `embedding` 执行近邻检索。
