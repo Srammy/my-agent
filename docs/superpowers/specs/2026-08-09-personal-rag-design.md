@@ -27,11 +27,13 @@
 5. 为每个父文档和子文档写入以下元数据：`userId`、`documentId`、`parentId`、`chunkIndex`、`sourceFilename`、`status`。
 6. 使用 Spring AI `EmbeddingModel` 对子文档批量生成向量，只将子文档写入检索索引；父文档保留完整上下文，供命中后回取。
 
+上传接口与 ETL 解耦。上传请求只保存原文件、创建 `PROCESSING` 文档记录并提交后台处理任务，返回 202；后台任务负责读取、父子切分、向量化和 Elasticsearch 写入。处理成功后状态变为 `READY`，失败后变为 `FAILED`。
+
 父子关系使用应用层 `parentId` 逻辑关联，不使用 Elasticsearch `join` 字段。这样 RRF 只在子文档索引上执行，命中后根据 `parentId` 批量读取父文档，检索和隔离逻辑更容易测试。
 
 ### Elasticsearch 索引
 
-Docker Compose 增加 Elasticsearch 8.x 服务和持久化 volume，不将 Elasticsearch 端口暴露给宿主机。后端通过 Compose 网络访问它。
+Docker Compose 增加 Elasticsearch 8.x 服务和持久化 volume，不将 Elasticsearch 端口暴露给宿主机。后端通过 Compose 网络访问它；backend 同时挂载 `knowledge_data` volume 保存异步处理期间的原文件。
 
 使用两个索引：
 
@@ -104,6 +106,7 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 - `original_filename varchar(255) not null`
 - `content_type varchar(128) not null`
 - `size_bytes bigint not null`
+- `storage_key varchar(500) not null`
 - `status varchar(32) not null`，取值 `PROCESSING`、`READY`、`FAILED`
 - `parent_count int not null default 0`
 - `child_count int not null default 0`
@@ -111,7 +114,7 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 - `created_at datetime not null`
 - `updated_at datetime not null`
 
-索引为 `(user_id, created_at)` 和 `(user_id, status)`。文档二进制只在处理期间保存到由后端生成的用户隔离临时目录，处理结束后删除；本期列表不提供原文件下载。
+索引为 `(user_id, created_at)` 和 `(user_id, status)`。原文件保存到后端生成的用户隔离路径，并通过 Docker `knowledge_data` volume 持久化；处理成功后删除原文件并清空 `storage_key`，处理失败时保留原文件以支持重试。本期列表不提供原文件下载。
 
 新增 `chat_sessions.mode varchar(32) not null`，取值 `NORMAL`、`KNOWLEDGE`。已有会话迁移为 `NORMAL`。
 
@@ -123,7 +126,16 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 - `GET /api/chat/sessions`：返回 `mode`，供左侧列表展示标签。
 - `POST /api/chat/sessions/{sessionId}/stream`：沿用现有流式接口；服务端根据会话模式选择普通 Agent 或知识库检索链路。
 
-上传处理在一次请求内完成，避免引入本期不需要的任务队列。处理过程中数据库状态为 `PROCESSING`，成功变为 `READY`；解析、嵌入或 Elasticsearch 写入失败则变为 `FAILED` 并保留可读错误信息。失败时不留下可检索的半成品子文档。
+上传处理采用异步后台任务，不阻塞上传请求：
+
+1. 接口校验文件类型和 20 MB 大小限制，将文件写入 `knowledge_data/{userId}/{documentId}/source`，并在 MySQL 中创建 `PROCESSING` 记录。
+2. 事务提交后向有界 `ThreadPoolTaskExecutor` 提交 `KnowledgeDocumentProcessingTask(documentId)`，接口返回 202 和 `PROCESSING` 状态。
+3. 任务启动时重新从 MySQL 校验文档归属和状态，使用 `storage_key` 读取原文件，执行 Spring AI ETL、EmbeddingModel 批处理和 Elasticsearch bulk 写入。
+4. 写入前按 `userId + documentId` 清理该文档的旧父子索引数据；写入失败时再次清理，避免半成品被检索。
+5. 全部写入成功后更新父子计数并将文档置为 `READY`，删除原文件；任一步骤失败则将文档置为 `FAILED` 并保存可读错误信息。
+6. 应用启动时重新提交所有仍为 `PROCESSING` 的文档；任务使用确定性的父子 ID 和清理后重建保证重试幂等。
+
+`GET /api/knowledge/documents` 返回实时状态，前端在有 `PROCESSING` 文档时轮询列表；聊天检索只允许 `READY` 文档。
 
 ## 前端设计
 
@@ -141,7 +153,7 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 - 跨用户文档或会话访问统一返回 404，不泄露资源是否存在。
 - 不支持的文件类型返回 415。
 - 超过单文件大小限制返回 413；本期限制为 20 MB。
-- EmbeddingModel 不可用、Elasticsearch 不可用或解析失败时，文档变为 `FAILED`，API 返回明确错误；不写入可检索的半成品数据。
+- EmbeddingModel 不可用、Elasticsearch 不可用或解析失败时，文档变为 `FAILED`，列表显示明确错误；不写入可检索的半成品数据。
 - 知识库会话无命中时返回正常聊天流中的固定文本事件和 `done` 事件，不伪装成模型生成内容。
 
 ## 测试和验收标准
@@ -150,6 +162,7 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 
 - Spring AI 父文档组装和子文档切分测试：标题、段落、重叠、超长段落和 metadata 继承。
 - 文档服务测试：上传成功计数、失败状态和临时文件清理。
+- 异步任务测试：上传接口快速返回 202，后台任务更新 `PROCESSING` 到 `READY` 或 `FAILED`，应用启动能够恢复 `PROCESSING` 任务，重复执行不会留下重复索引。
 - Elasticsearch 检索请求测试：同时包含 `standard`、`knn`、RRF 和 `userId` filter。
 - 用户隔离测试：不同用户不能列表、检索或回取彼此的文档。
 - 知识库 ChatService 测试：无命中不调用 Agent；有命中时把父文档上下文传给 Agent；普通模式不触发检索。
@@ -175,6 +188,6 @@ RRF 只负责融合排序，不承担用户权限判断。权限判断由每个�
 ## 非目标
 
 - 本期不做原文件下载、在线预览、文档删除和重新索引按钮。
-- 本期不引入异步任务队列；上传处理为单请求同步流程。
+- 本期不引入跨服务消息队列；异步处理使用后端内有界线程池和 MySQL 状态恢复。
 - 本期不做 OCR、图片内容理解和表格结构化抽取。
 - 本期不调整现有普通 Agent 的工具确认和权限机制。
