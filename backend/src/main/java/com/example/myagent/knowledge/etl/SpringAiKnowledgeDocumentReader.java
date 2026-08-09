@@ -2,6 +2,7 @@ package com.example.myagent.knowledge.etl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -17,7 +18,12 @@ import org.springframework.ai.reader.markdown.MarkdownDocumentReader;
 import org.springframework.ai.reader.markdown.config.MarkdownDocumentReaderConfig;
 import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
@@ -41,12 +47,13 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
       Path source, Long userId, String documentId, String sourceFilename, String contentType) {
     try {
       if (isImage(contentType)) {
+        Media media = new Media(MimeTypeUtils.parseMimeType(contentType), new FileSystemResource(source));
         return new KnowledgeDocumentContent(
             documentId,
             userId,
             sourceFilename,
             contentType,
-            split(documentId, userId, sourceFilename, contentType, extractImage(source, contentType), 1));
+            split(documentId, userId, sourceFilename, contentType, extractMultimodal(media), 1));
       }
       List<KnowledgeDocumentContent.ParentDocument> parents = new ArrayList<>();
       for (TextSection section : readText(source, sourceFilename)) {
@@ -69,7 +76,7 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
                   new FileSystemResource(source), MarkdownDocumentReaderConfig.defaultConfig())
               .get();
     } else if (filename != null && filename.toLowerCase().endsWith(".pdf")) {
-      documents = new PagePdfDocumentReader(new FileSystemResource(source)).get();
+      return readPdf(source);
     } else {
       documents = new TikaDocumentReader(new FileSystemResource(source)).get();
     }
@@ -84,9 +91,47 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
     return sections;
   }
 
-  private String extractImage(Path source, String contentType) {
+  private List<TextSection> readPdf(Path source) {
+    try (PDDocument pdf = Loader.loadPDF(source.toFile())) {
+      List<Document> documents = new PagePdfDocumentReader(new FileSystemResource(source)).get();
+      PDFRenderer renderer = new PDFRenderer(pdf);
+      List<TextSection> sections = new ArrayList<>();
+      Map<Integer, Document> textPages = new HashMap<>();
+      for (int index = 0; index < documents.size(); index++) {
+        Integer page = pageNumber(documents.get(index));
+        if (page == null) page = index + 1;
+        textPages.put(page, documents.get(index));
+      }
+      for (int index = 0; index < pdf.getNumberOfPages(); index++) {
+        int page = index + 1;
+        Document document = textPages.get(page);
+        if (document != null && document.getText() != null && !document.getText().isBlank()) {
+          sections.add(new TextSection(document.getText().strip(), page));
+          continue;
+        }
+        sections.add(new TextSection(extractPdfPage(renderer, index), page));
+      }
+      if (sections.isEmpty()) {
+        throw new IllegalArgumentException("Document has no readable pages");
+      }
+      return sections;
+    } catch (KnowledgeDocumentEtlException error) {
+      throw error;
+    } catch (Exception error) {
+      throw new KnowledgeDocumentEtlException("Unable to OCR PDF pages", error);
+    }
+  }
+
+  private String extractPdfPage(PDFRenderer renderer, int pageIndex) throws IOException {
+    java.awt.image.BufferedImage image = renderer.renderImageWithDPI(pageIndex, 150, ImageType.RGB);
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    javax.imageio.ImageIO.write(image, "png", output);
+    Media media = new Media(MimeTypeUtils.IMAGE_PNG, new ByteArrayResource(output.toByteArray()));
+    return extractMultimodal(media);
+  }
+
+  private String extractMultimodal(Media media) {
     try {
-      Media media = new Media(MimeTypeUtils.parseMimeType(contentType), new FileSystemResource(source));
       UserMessage message =
           UserMessage.builder()
               .text(

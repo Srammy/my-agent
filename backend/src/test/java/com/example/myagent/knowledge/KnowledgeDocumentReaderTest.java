@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.myagent.knowledge.etl.KnowledgeDocumentContent;
@@ -101,5 +102,29 @@ class KnowledgeDocumentReaderTest {
       assertThat(parent.pageNumber()).isEqualTo(1);
       assertThat(parent.text()).contains("PDF page content");
     });
+  }
+
+  @Test
+  void fallsBackToPageOcrForPdfWithoutReadableText() throws Exception {
+    Path source = Files.createTempFile("scanned-knowledge", ".pdf");
+    try (PDDocument pdf = new PDDocument()) {
+      pdf.addPage(new PDPage());
+      pdf.save(source.toFile());
+    }
+    ChatModel chatModel = mock(ChatModel.class);
+    String json =
+        "{\"ocrText\":\"扫描页中的项目截止日期是周五\",\"imageDescription\":\"\",\"tables\":[]}";
+    when(chatModel.call(any(Prompt.class)))
+        .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(json)))));
+
+    KnowledgeDocumentContent content =
+        new SpringAiKnowledgeDocumentReader(chatModel, new ObjectMapper())
+            .read(source, 7L, "doc-scanned", "scanned.pdf", "application/pdf");
+
+    assertThat(content.parents()).singleElement().satisfies(parent -> {
+      assertThat(parent.pageNumber()).isEqualTo(1);
+      assertThat(parent.text()).contains("扫描页中的项目截止日期是周五");
+    });
+    verify(chatModel).call(any(Prompt.class));
   }
 }
