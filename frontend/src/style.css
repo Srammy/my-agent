@@ -310,12 +310,6 @@ body.chat-resizing * {
   background: #ffffff;
 }
 
-.composer__mode {
-  color: #64748b;
-  font-size: 12px;
-  padding: 10px 18px 0;
-}
-
 .assistant-panel {
   min-width: 0;
   min-height: 0;

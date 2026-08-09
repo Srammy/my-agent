@@ -318,7 +318,6 @@ async function logout() {
           :disabled="chat.isLoading || sessions.loading || chat.isCancellingSession(currentSessionId)"
           :has-session="Boolean(currentSessionId)"
           :session-id="currentSessionId"
-          :mode="currentMode"
           @send="sendMessage"
         />
       </div>

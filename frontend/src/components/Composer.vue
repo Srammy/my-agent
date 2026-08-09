@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import PermissionPanel from './PermissionPanel.vue'
-import type { SessionMode } from '../api/chat'
 
 defineProps<{
   disabled: boolean
   hasSession: boolean
   sessionId: string
-  mode?: SessionMode
 }>()
 
 const emit = defineEmits<{
@@ -15,10 +13,6 @@ const emit = defineEmits<{
 }>()
 
 const draft = ref('')
-
-function modeLabel(mode?: SessionMode) {
-  return mode === 'KNOWLEDGE' ? '知识库问答' : '普通对话'
-}
 
 function send() {
   const message = draft.value.trim()
@@ -43,7 +37,6 @@ function onKeydown(event: KeyboardEvent) {
 
 <template>
   <div class="composer-shell">
-    <div class="composer__mode">{{ modeLabel(mode) }}</div>
     <form class="composer" @submit.prevent="send">
     <el-input
       v-model="draft"

@@ -3,9 +3,9 @@ import { mount } from '@vue/test-utils'
 import Composer from '../Composer.vue'
 
 describe('Composer permission control', () => {
-  it('shows the current conversation mode above the input', () => {
+  it('does not show a duplicate conversation mode above the input', () => {
     const wrapper = mount(Composer, {
-      props: { disabled: false, hasSession: true, sessionId: 's1', mode: 'KNOWLEDGE' },
+      props: { disabled: false, hasSession: true, sessionId: 's1' },
       global: {
         stubs: {
           ElInput: { template: '<textarea class="composer__input" />' },
@@ -15,7 +15,9 @@ describe('Composer permission control', () => {
       }
     })
 
-    expect(wrapper.get('.composer__mode').text()).toContain('知识库问答')
+    expect(wrapper.findAll('.composer__mode')).toHaveLength(0)
+    expect(wrapper.findAll('.composer__input')).toHaveLength(1)
+    expect(wrapper.findAll('.composer__send')).toHaveLength(1)
   })
 
   it('places the compact permission selector between the message input and send button', () => {
