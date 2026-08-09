@@ -326,6 +326,10 @@ body.chat-resizing * {
   gap: 10px;
 }
 
+.skill-panel__header {
+  justify-content: flex-end;
+}
+
 .skill-upload-tooltip {
   line-height: 1.5;
 }

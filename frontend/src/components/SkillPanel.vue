@@ -27,8 +27,7 @@ async function handleFiles(event: Event) {
 
 <template>
   <section class="assistant-panel-section" v-loading="skills.loading">
-    <div class="panel-row">
-      <strong>我的 Skill</strong>
+    <div class="panel-row skill-panel__header">
       <el-tooltip placement="top" effect="light">
         <template #content>
           <div class="skill-upload-tooltip">
@@ -63,7 +62,7 @@ async function handleFiles(event: Event) {
             <span class="skill-description panel-muted">{{ skill.description }}</span>
           </el-tooltip>
         </div>
-        <el-button size="small" type="danger" @click="skills.deleteSkill(skill.name)">
+        <el-button size="small" type="danger" text @click="skills.deleteSkill(skill.name)">
           删除
         </el-button>
       </li>

@@ -73,7 +73,7 @@ function formatDate(value: string) {
         <strong>会话</strong>
         <span>{{ sessions.length }} 个</span>
       </div>
-      <el-button size="small" type="primary" :loading="loading" @click="emit('create')">
+      <el-button size="small" type="primary" text :loading="loading" @click="emit('create')">
         新建
       </el-button>
     </div>

@@ -1,7 +1,6 @@
 <template>
   <div class="skill-review-panel">
     <div class="panel-header">
-      <strong>自学习 Skill 审核</strong>
       <el-button size="small" :loading="reviews.loading" @click="reviews.loadReviews()">刷新</el-button>
     </div>
     <p class="panel-desc">Agent 创建的草稿必须人工审核后才能晋升为正式 Skill。</p>
@@ -80,6 +79,9 @@ async function handleReject(skillName: string) {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 6px;
+}
+.skill-review-panel .panel-header {
+  justify-content: flex-end;
 }
 .panel-desc {
   font-size: 12px;
