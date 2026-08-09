@@ -34,7 +34,7 @@ create table if not exists knowledge_document_jobs (
 );
 
 alter table chat_sessions
-  add column if not exists mode varchar(32) not null default 'NORMAL';
+  add column mode varchar(32) not null default 'NORMAL';
 
 alter table chat_sessions
   add constraint ck_chat_sessions_mode check (mode in ('NORMAL', 'KNOWLEDGE'));

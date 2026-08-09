@@ -43,7 +43,7 @@ services:
       - rag_private
 
   kafka:
-    image: bitnami/kafka:3.9
+    image: bitnamilegacy/kafka:3.9.0-debian-12-r12
     environment:
       KAFKA_ENABLE_KRAFT: "yes"
       KAFKA_CFG_NODE_ID: 1
@@ -78,6 +78,9 @@ services:
       SPRING_PROFILES_ACTIVE: docker
       SECURITY_JWT_SECRET: ${SECURITY_JWT_SECRET:?Set SECURITY_JWT_SECRET in .env}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      KNOWLEDGE_EMBEDDING_API_KEY: ${DASHSCOPE_API_KEY:-}
+      KNOWLEDGE_EMBEDDING_BASE_URL: ${KNOWLEDGE_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode}
+      KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-text-embedding-v4}
       AGENT_SCOPE_ENABLED: ${AGENT_SCOPE_ENABLED:-false}
       AGENT_MODEL_PROVIDER: ${AGENT_MODEL_PROVIDER:-dashscope}
       AGENT_MODEL_NAME: ${AGENT_MODEL_NAME:-dashscope:qwen-plus}

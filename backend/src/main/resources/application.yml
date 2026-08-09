@@ -1,6 +1,13 @@
 spring:
   application:
     name: myagent
+  ai:
+    openai:
+      api-key: ${KNOWLEDGE_EMBEDDING_API_KEY:${DASHSCOPE_API_KEY:}}
+      base-url: ${KNOWLEDGE_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+      embedding:
+        options:
+          model: ${KNOWLEDGE_EMBEDDING_MODEL:text-embedding-v4}
   datasource:
     url: jdbc:mysql://${MYSQL_HOST:mysql}:3306/${MYSQL_DATABASE:myagent}?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
     username: ${MYSQL_USERNAME:root}
