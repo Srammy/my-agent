@@ -22,9 +22,10 @@ public interface KnowledgeDocumentJobMapper extends BaseMapper<KnowledgeDocument
             .last("limit " + Math.max(1, Math.min(limit, 100))));
   }
 
-  default int claim(String id, Long userId, LocalDateTime claimedUntil) {
+  default int claim(String id, Long userId, String claimToken, LocalDateTime claimedUntil) {
     KnowledgeDocumentJobEntity update = new KnowledgeDocumentJobEntity();
     update.setClaimedUntil(claimedUntil);
+    update.setClaimToken(claimToken);
     return update(
         update,
         Wrappers.<KnowledgeDocumentJobEntity>lambdaUpdate()
@@ -40,7 +41,7 @@ public interface KnowledgeDocumentJobMapper extends BaseMapper<KnowledgeDocument
                             claimedUntil.minusMinutes(2))));
   }
 
-  default int markSent(String id, Long userId, LocalDateTime updatedAt) {
+  default int markSent(String id, Long userId, String claimToken, LocalDateTime updatedAt) {
     KnowledgeDocumentJobEntity update = new KnowledgeDocumentJobEntity();
     update.setStatus(KnowledgeDocumentJobStatus.SENT);
     update.setClaimedUntil(null);
@@ -50,12 +51,14 @@ public interface KnowledgeDocumentJobMapper extends BaseMapper<KnowledgeDocument
         Wrappers.<KnowledgeDocumentJobEntity>lambdaUpdate()
             .eq(KnowledgeDocumentJobEntity::getId, id)
             .eq(KnowledgeDocumentJobEntity::getUserId, userId)
-            .eq(KnowledgeDocumentJobEntity::getStatus, KnowledgeDocumentJobStatus.PENDING));
+            .eq(KnowledgeDocumentJobEntity::getStatus, KnowledgeDocumentJobStatus.PENDING)
+            .eq(KnowledgeDocumentJobEntity::getClaimToken, claimToken));
   }
 
   default int markFailure(
       String id,
       Long userId,
+      String claimToken,
       int attempts,
       String error,
       boolean terminal,
@@ -70,7 +73,9 @@ public interface KnowledgeDocumentJobMapper extends BaseMapper<KnowledgeDocument
         update,
         Wrappers.<KnowledgeDocumentJobEntity>lambdaUpdate()
             .eq(KnowledgeDocumentJobEntity::getId, id)
-            .eq(KnowledgeDocumentJobEntity::getUserId, userId));
+            .eq(KnowledgeDocumentJobEntity::getUserId, userId)
+            .eq(KnowledgeDocumentJobEntity::getStatus, KnowledgeDocumentJobStatus.PENDING)
+            .eq(KnowledgeDocumentJobEntity::getClaimToken, claimToken));
   }
 
   default KnowledgeDocumentJobEntity findOwnedByDocumentId(Long userId, String documentId) {

@@ -16,6 +16,7 @@ public class KnowledgeDocumentJobEntity {
   private LocalDateTime createdAt;
   private LocalDateTime updatedAt;
   private LocalDateTime claimedUntil;
+  private String claimToken;
 
   public String getId() { return id; }
   public void setId(String id) { this.id = id; }
@@ -35,4 +36,6 @@ public class KnowledgeDocumentJobEntity {
   public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
   public LocalDateTime getClaimedUntil() { return claimedUntil; }
   public void setClaimedUntil(LocalDateTime claimedUntil) { this.claimedUntil = claimedUntil; }
+  public String getClaimToken() { return claimToken; }
+  public void setClaimToken(String claimToken) { this.claimToken = claimToken; }
 }

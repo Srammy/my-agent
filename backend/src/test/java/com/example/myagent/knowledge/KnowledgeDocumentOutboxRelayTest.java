@@ -49,7 +49,7 @@ class KnowledgeDocumentOutboxRelayTest {
     ArgumentCaptor<KnowledgeDocumentProcessMessage> message =
         ArgumentCaptor.forClass(KnowledgeDocumentProcessMessage.class);
     verify(template).send(eq(PROPERTIES.kafka().topic()), eq("doc-1"), message.capture());
-    verify(mapper).markSent(eq("job-1"), eq(7L), any(LocalDateTime.class));
+    verify(mapper).markSent(eq("job-1"), eq(7L), any(String.class), any(LocalDateTime.class));
     assertThat(message.getValue().documentId()).isEqualTo("doc-1");
     assertThat(message.getValue().userId()).isEqualTo(7L);
   }
@@ -68,7 +68,14 @@ class KnowledgeDocumentOutboxRelayTest {
     relay.relayPendingJobs();
 
     verify(mapper)
-        .markFailure(eq("job-1"), eq(7L), eq(1), eq("kafka down"), eq(false), any(LocalDateTime.class));
+        .markFailure(
+            eq("job-1"),
+            eq(7L),
+            any(String.class),
+            eq(1),
+            eq("kafka down"),
+            eq(false),
+            any(LocalDateTime.class));
   }
 
   private static KnowledgeDocumentJobEntity pendingJob() {
@@ -82,6 +89,8 @@ class KnowledgeDocumentOutboxRelayTest {
 
   private static void whenClaimable(KnowledgeDocumentJobMapper mapper, KnowledgeDocumentJobEntity job) {
     doReturn(List.of(job)).when(mapper).findClaimable(any(LocalDateTime.class), eq(20));
-    doReturn(1).when(mapper).claim(eq("job-1"), eq(7L), any(LocalDateTime.class));
+    doReturn(1)
+        .when(mapper)
+        .claim(eq("job-1"), eq(7L), any(String.class), any(LocalDateTime.class));
   }
 }

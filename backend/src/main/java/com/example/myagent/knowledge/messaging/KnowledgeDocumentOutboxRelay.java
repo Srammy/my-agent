@@ -5,6 +5,7 @@ import com.example.myagent.knowledge.job.KnowledgeDocumentJobEntity;
 import com.example.myagent.knowledge.job.KnowledgeDocumentJobMapper;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -35,14 +36,15 @@ public class KnowledgeDocumentOutboxRelay {
   public void relayPendingJobs() {
     List<KnowledgeDocumentJobEntity> jobs = jobMapper.findClaimable(LocalDateTime.now(), 20);
     for (KnowledgeDocumentJobEntity job : jobs) {
-      if (jobMapper.claim(job.getId(), job.getUserId(), LocalDateTime.now().plusMinutes(2)) == 0) {
+      String claimToken = UUID.randomUUID().toString();
+      if (jobMapper.claim(job.getId(), job.getUserId(), claimToken, LocalDateTime.now().plusMinutes(2)) == 0) {
         continue;
       }
-      send(job);
+      send(job, claimToken);
     }
   }
 
-  private void send(KnowledgeDocumentJobEntity job) {
+  private void send(KnowledgeDocumentJobEntity job, String claimToken) {
     KnowledgeDocumentProcessMessage message =
         new KnowledgeDocumentProcessMessage(job.getDocumentId(), job.getUserId());
     try {
@@ -51,11 +53,12 @@ public class KnowledgeDocumentOutboxRelay {
       future.whenComplete(
           (result, error) -> {
             if (error == null) {
-              jobMapper.markSent(job.getId(), job.getUserId(), LocalDateTime.now());
+              jobMapper.markSent(job.getId(), job.getUserId(), claimToken, LocalDateTime.now());
             } else {
               jobMapper.markFailure(
                   job.getId(),
                   job.getUserId(),
+                  claimToken,
                   job.getAttempts() + 1,
                   error.getMessage(),
                   job.getAttempts() + 1 >= maxAttempts,
@@ -66,6 +69,7 @@ public class KnowledgeDocumentOutboxRelay {
       jobMapper.markFailure(
           job.getId(),
           job.getUserId(),
+          claimToken,
           job.getAttempts() + 1,
           error.getMessage(),
           job.getAttempts() + 1 >= maxAttempts,
