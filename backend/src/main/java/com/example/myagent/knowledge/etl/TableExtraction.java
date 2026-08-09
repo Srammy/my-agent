@@ -10,11 +10,24 @@ public record TableExtraction(
       return "";
     }
     StringBuilder markdown = new StringBuilder("| ");
-    markdown.append(String.join(" | ", headers)).append(" |\n| ");
+    markdown
+        .append(String.join(" | ", headers.stream().map(TableExtraction::escapeCell).toList()))
+        .append(" |\n| ");
     markdown.append("--- | ".repeat(headers.size())).append("\n");
     for (List<String> row : rows == null ? List.<List<String>>of() : rows) {
-      markdown.append("| ").append(String.join(" | ", row)).append(" |\n");
+      markdown.append("| ")
+          .append(
+              String.join(
+                  " | ",
+                  (row == null ? List.<String>of() : row).stream()
+                      .map(TableExtraction::escapeCell)
+                      .toList()))
+          .append(" |\n");
     }
     return markdown.toString();
+  }
+
+  private static String escapeCell(String value) {
+    return value == null ? "" : value.replace("|", "\\|").replaceAll("\\s+", " ").strip();
   }
 }

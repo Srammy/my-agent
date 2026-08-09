@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.myagent.knowledge.etl.KnowledgeDocumentContent;
 import com.example.myagent.knowledge.etl.SpringAiKnowledgeDocumentReader;
+import com.example.myagent.knowledge.etl.TableExtraction;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -56,8 +57,17 @@ class KnowledgeDocumentReaderTest {
     SpringAiKnowledgeDocumentReader reader =
         new SpringAiKnowledgeDocumentReader(chatModel, new ObjectMapper());
     KnowledgeDocumentContent content =
-        reader.read(source, 7L, "doc-image", "page.png", "image/png");
+    reader.read(source, 7L, "doc-image", "page.png", "image/png");
 
     assertThat(content.parents().get(0).text()).contains("验收标准", "流程图", "项目", "通过");
+    assertThat(content.parents().get(0).pageNumber()).isEqualTo(1);
+  }
+
+  @Test
+  void escapesMarkdownTableCells() {
+    String markdown =
+        new TableExtraction(List.of("A|B"), List.of(List.of("line\none")), 1, 1.0).toMarkdown();
+
+    assertThat(markdown).contains("A\\|B", "line one");
   }
 }

@@ -39,8 +39,20 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
   public KnowledgeDocumentContent read(
       Path source, Long userId, String documentId, String sourceFilename, String contentType) {
     try {
-      String text = isImage(contentType) ? extractImage(source, contentType) : readText(source, sourceFilename);
-      return split(documentId, userId, sourceFilename, contentType, text);
+      if (isImage(contentType)) {
+        return new KnowledgeDocumentContent(
+            documentId,
+            userId,
+            sourceFilename,
+            contentType,
+            split(documentId, userId, sourceFilename, contentType, extractImage(source, contentType), 1));
+      }
+      List<KnowledgeDocumentContent.ParentDocument> parents = new ArrayList<>();
+      for (TextSection section : readText(source, sourceFilename)) {
+        parents.addAll(
+            split(documentId, userId, sourceFilename, contentType, section.text(), section.pageNumber()));
+      }
+      return new KnowledgeDocumentContent(documentId, userId, sourceFilename, contentType, parents);
     } catch (KnowledgeDocumentEtlException error) {
       throw error;
     } catch (Exception error) {
@@ -48,7 +60,7 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
     }
   }
 
-  private String readText(Path source, String filename) {
+  private List<TextSection> readText(Path source, String filename) {
     List<Document> documents;
     if (filename != null && filename.toLowerCase().endsWith(".md")) {
       documents =
@@ -58,12 +70,15 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
     } else {
       documents = new TikaDocumentReader(new FileSystemResource(source)).get();
     }
-    return documents.stream()
-        .map(Document::getText)
-        .filter(text -> text != null && !text.isBlank())
-        .map(String::strip)
-        .reduce((left, right) -> left + "\n\n" + right)
-        .orElseThrow(() -> new IllegalArgumentException("Document has no readable text"));
+    List<TextSection> sections =
+        documents.stream()
+            .filter(document -> document.getText() != null && !document.getText().isBlank())
+            .map(document -> new TextSection(document.getText().strip(), pageNumber(document)))
+            .toList();
+    if (sections.isEmpty()) {
+      throw new IllegalArgumentException("Document has no readable text");
+    }
+    return sections;
   }
 
   private String extractImage(Path source, String contentType) {
@@ -93,8 +108,13 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
     }
   }
 
-  private KnowledgeDocumentContent split(
-      String documentId, Long userId, String filename, String contentType, String text) {
+  private List<KnowledgeDocumentContent.ParentDocument> split(
+      String documentId,
+      Long userId,
+      String filename,
+      String contentType,
+      String text,
+      Integer pageNumber) {
     List<String> parentTokens = tokens(text);
     List<KnowledgeDocumentContent.ParentDocument> parents = new ArrayList<>();
     for (int parentStart = 0, parentIndex = 0;
@@ -108,10 +128,16 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
       for (int childStart = parentStart; childStart < parentEnd; childStart += CHILD_TOKENS - CHILD_OVERLAP) {
         int childEnd = Math.min(parentEnd, childStart + CHILD_TOKENS);
         String childText = join(parentTokens.subList(childStart, childEnd));
-        Map<String, Object> metadata = metadata(userId, documentId, filename, contentType, parentIndex, childIndex);
+        Map<String, Object> metadata =
+            metadata(userId, documentId, filename, contentType, parentIndex, childIndex, pageNumber);
         children.add(
             new KnowledgeDocumentContent.ChildDocument(
-                parentId + "_c_" + childIndex, parentId, childIndex, null, childText, metadata));
+                parentId + "_c_" + childIndex,
+                parentId,
+                childIndex,
+                pageNumber,
+                childText,
+                metadata));
         childIndex++;
         if (childEnd == parentEnd) break;
       }
@@ -119,22 +145,29 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
           new KnowledgeDocumentContent.ParentDocument(
               parentId,
               parentIndex,
-              null,
+              pageNumber,
               parentText,
-              metadata(userId, documentId, filename, contentType, parentIndex, null),
+              metadata(userId, documentId, filename, contentType, parentIndex, null, pageNumber),
               children));
     }
-    return new KnowledgeDocumentContent(documentId, userId, filename, contentType, parents);
+    return parents;
   }
 
   private static Map<String, Object> metadata(
-      Long userId, String documentId, String filename, String contentType, int parentIndex, Integer childIndex) {
+      Long userId,
+      String documentId,
+      String filename,
+      String contentType,
+      int parentIndex,
+      Integer childIndex,
+      Integer pageNumber) {
     Map<String, Object> metadata = new HashMap<>();
     metadata.put("userId", userId);
     metadata.put("documentId", documentId);
     metadata.put("sourceFilename", filename);
     metadata.put("contentType", contentType);
     metadata.put("parentIndex", parentIndex);
+    if (pageNumber != null) metadata.put("pageNumber", pageNumber);
     if (childIndex != null) metadata.put("childIndex", childIndex);
     return metadata;
   }
@@ -150,4 +183,21 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
   private static boolean isImage(String contentType) {
     return contentType != null && contentType.toLowerCase().startsWith("image/");
   }
+
+  private static Integer pageNumber(Document document) {
+    for (String key : List.of("pageNumber", "page_number", "page")) {
+      Object value = document.getMetadata().get(key);
+      if (value instanceof Number number) return number.intValue();
+      if (value != null) {
+        try {
+          return Integer.valueOf(value.toString());
+        } catch (NumberFormatException ignored) {
+          // Ignore non-numeric reader metadata and continue checking known keys.
+        }
+      }
+    }
+    return null;
+  }
+
+  private record TextSection(String text, Integer pageNumber) {}
 }

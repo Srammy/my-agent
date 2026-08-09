@@ -23,4 +23,4 @@ git diff --check
 
 ## 说明
 
-Markdown reader 会将标题作为 reader 元数据处理，正文切片使用其正文输出。PDF/Office 的页级元数据保留能力将在后续 ETL 消费与索引任务中继续接入。
+Markdown reader 会将标题作为 reader 元数据处理，正文切片使用其正文输出。PDF/Office reader 返回的已知页码元数据会写入父、子文档；图片抽取按单页处理并标记为第 1 页。表格单元格中的竖线和换行会被转义/规范化，避免破坏 Markdown 表格结构。
