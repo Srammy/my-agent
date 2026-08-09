@@ -1,3 +1,3 @@
 package com.example.myagent.session;
 
-public record CreateSessionRequest(String title) {}
+public record CreateSessionRequest(String title, SessionMode mode) {}
