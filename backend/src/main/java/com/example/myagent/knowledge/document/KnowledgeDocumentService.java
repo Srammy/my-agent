@@ -1,6 +1,9 @@
 package com.example.myagent.knowledge.document;
 
 import com.example.myagent.auth.CurrentUser;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -43,7 +46,7 @@ public class KnowledgeDocumentService {
     document.setUserId(currentUser.id());
     document.setOriginalFilename(file.filename());
     document.setContentType(file.headers().getContentType() == null ? null : file.headers().getContentType().toString());
-    document.setSizeBytes(Math.max(file.headers().getContentLength(), 0));
+    document.setSizeBytes(null);
     document.setStorageKey(source.toString());
     document.setStatus(KnowledgeDocumentStatus.PROCESSING);
     document.setParentCount(0);
@@ -52,6 +55,16 @@ public class KnowledgeDocumentService {
     document.setUpdatedAt(now);
 
     return storage.save(file, source)
+        .then(
+            Mono.fromCallable(
+                () -> {
+                  long actualSize = Files.size(source);
+                  if (actualSize == 0 || actualSize > MAX_FILE_SIZE) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Document file size is invalid");
+                  }
+                  document.setSizeBytes(actualSize);
+                  return document;
+                }))
         .then(Mono.fromCallable(() -> jobService.createProcessingDocument(document)))
         .subscribeOn(Schedulers.boundedElastic())
         .onErrorResume(
@@ -64,8 +77,28 @@ public class KnowledgeDocumentService {
   public List<KnowledgeDocumentDto> list(CurrentUser currentUser) {
     requireUser(currentUser);
     return documentMapper.findByUserId(currentUser.id()).stream()
+        .map(this::repairMissingSize)
         .map(KnowledgeDocumentDto::fromEntity)
         .toList();
+  }
+
+  private KnowledgeDocumentEntity repairMissingSize(KnowledgeDocumentEntity document) {
+    if (document.getSizeBytes() != null
+        && document.getSizeBytes() > 0
+        || !StringUtils.hasText(document.getStorageKey())) {
+      return document;
+    }
+    try {
+      long actualSize = Files.size(Path.of(document.getStorageKey()));
+      if (actualSize > 0) {
+        document.setSizeBytes(actualSize);
+        document.setUpdatedAt(LocalDateTime.now());
+        documentMapper.updateById(document);
+      }
+    } catch (IOException | InvalidPathException ignored) {
+      // Keep the stored value when the source file is no longer available.
+    }
+    return document;
   }
 
   private static void validate(CurrentUser currentUser, FilePart file) {
@@ -74,7 +107,7 @@ public class KnowledgeDocumentService {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Document file is required");
     }
     long size = file.headers().getContentLength();
-    if (size == 0 || size > MAX_FILE_SIZE) {
+    if (size > MAX_FILE_SIZE) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Document file size is invalid");
     }
     String filename = file.filename();
