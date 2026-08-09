@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import com.example.myagent.knowledge.search.KnowledgeSearchHit;
 import com.example.myagent.knowledge.search.KnowledgeSearchService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -78,14 +79,14 @@ public class ChatService {
       ToolConfirmationService toolConfirmationService,
       SessionExecutionCoordinator sessionExecutionCoordinator,
       ChatMessageService chatMessageService,
-      KnowledgeSearchService knowledgeSearchService) {
+      ObjectProvider<KnowledgeSearchService> knowledgeSearchServiceProvider) {
     this.sessionService = sessionService;
     this.chatAgentGateway = chatAgentGateway;
     this.permissionService = permissionService;
     this.toolConfirmationService = toolConfirmationService;
     this.sessionExecutionCoordinator = sessionExecutionCoordinator;
     this.chatMessageService = chatMessageService;
-    this.knowledgeSearchService = knowledgeSearchService;
+    this.knowledgeSearchService = knowledgeSearchServiceProvider.getIfAvailable();
   }
 
   public Flux<StreamEventDto> stream(CurrentUser currentUser, String sessionId, String message) {
