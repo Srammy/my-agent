@@ -4,14 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.myagent.config.KnowledgeProperties;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 class KnowledgeConfigurationTest {
 
   private final ApplicationContextRunner contextRunner =
-      new ApplicationContextRunner().withUserConfiguration(TestConfiguration.class);
+      new ApplicationContextRunner().withUserConfiguration(KnowledgeTestConfiguration.class);
 
   @Test
   void bindsConfiguredKnowledgeProperties() {
@@ -85,7 +84,7 @@ class KnowledgeConfigurationTest {
         });
   }
 
-  @SpringBootConfiguration
+  @org.springframework.boot.test.context.TestConfiguration
   @EnableConfigurationProperties(KnowledgeProperties.class)
-  static class TestConfiguration {}
+  static class KnowledgeTestConfiguration {}
 }
