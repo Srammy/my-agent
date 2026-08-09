@@ -83,7 +83,25 @@ Docker Compose 增加 Elasticsearch 8.x 和单节点 KRaft Kafka 服务及持久
 
 两个索引都在初始化时创建明确 mapping；本期 `embedding` 维度固定为 1024，不能在运行时对已存在索引静默变更。文档 chunk 和用户问题必须使用同一个 `text-embedding-v4` 模型。
 
-Embedding 配置使用现有 `DASHSCOPE_API_KEY`，模型名为 `text-embedding-v4`，维度为 `1024`；聊天模型 `qwen-plus` 只负责普通 Agent 和多模态抽取，不用于生成向量。
+模型全部通过配置选择，默认值如下：
+
+- 普通 Agent 聊天模型：`qwen-plus`。
+- 知识库 Embedding 模型：`text-embedding-v4`，维度 `1024`。
+- OCR、图片理解和表格抽取多模态模型：`qwen3.7-plus`。
+
+三类模型共用现有 `DASHSCOPE_API_KEY`，但使用独立的模型配置项。启动时校验 Embedding 模型的输出维度，以及多模态模型是否支持图片输入和结构化输出；校验失败时后端启动失败或将相关文档任务标记为 `FAILED`，不能静默降级到错误模型。
+
+对应环境变量为：
+
+```dotenv
+AGENT_MODEL_NAME=qwen-plus
+KNOWLEDGE_EMBEDDING_MODEL=text-embedding-v4
+KNOWLEDGE_EMBEDDING_DIMENSIONS=1024
+KNOWLEDGE_MULTIMODAL_MODEL=qwen3.7-plus
+KNOWLEDGE_MODEL_API_KEY_ENV=DASHSCOPE_API_KEY
+```
+
+模型提供商和 Base URL 也通过知识库配置提供，以便替换为其他支持 Spring AI 的模型服务；更换 Embedding 模型或维度时必须新建索引并重新处理文档。
 
 ### 混合检索和 RRF
 
