@@ -18,7 +18,6 @@ public class KnowledgeIndexService {
   }
 
   public void index(KnowledgeDocumentContent content) {
-    indexManager.deleteByDocument(content.userId(), content.documentId());
     List<KnowledgeParentDocument> parents = new ArrayList<>();
     List<KnowledgeChildDocument> children = new ArrayList<>();
     for (KnowledgeDocumentContent.ParentDocument parent : content.parents()) {
@@ -50,8 +49,14 @@ public class KnowledgeIndexService {
                 "READY"));
       }
     }
-    indexManager.writeParents(parents);
-    indexManager.writeChildren(children);
+    try {
+      indexManager.deleteByDocument(content.userId(), content.documentId());
+      indexManager.writeParents(parents);
+      indexManager.writeChildren(children);
+    } catch (RuntimeException error) {
+      indexManager.deleteByDocument(content.userId(), content.documentId());
+      throw error;
+    }
   }
 
   private static List<Float> toList(float[] vector) {

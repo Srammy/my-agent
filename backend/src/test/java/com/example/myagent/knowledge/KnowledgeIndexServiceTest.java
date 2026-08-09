@@ -3,6 +3,7 @@ package com.example.myagent.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -53,6 +54,24 @@ class KnowledgeIndexServiceTest {
     assertThatThrownBy(() -> embeddingService.embed("text"))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("expected 2");
+  }
+
+  @Test
+  void removesPartialIndexWhenChildBulkWriteFails() {
+    EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+    when(embeddingModel.embed(any(String.class))).thenReturn(new float[] {0.1f, 0.2f});
+    KnowledgeEmbeddingService embeddingService =
+        new KnowledgeEmbeddingService(embeddingModel, properties(2));
+    KnowledgeElasticsearchIndexManager indexManager = mock(KnowledgeElasticsearchIndexManager.class);
+    doThrow(new IllegalStateException("child bulk failed"))
+        .when(indexManager)
+        .writeChildren(any());
+    KnowledgeIndexService service = new KnowledgeIndexService(indexManager, embeddingService);
+
+    assertThatThrownBy(() -> service.index(content(7L, "doc-1")))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("child bulk failed");
+    verify(indexManager, org.mockito.Mockito.times(2)).deleteByDocument(7L, "doc-1");
   }
 
   private static KnowledgeDocumentContent content(Long userId, String documentId) {

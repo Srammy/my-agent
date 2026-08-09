@@ -97,7 +97,8 @@ public class KnowledgeElasticsearchIndexManager {
   }
 
   private void deleteByDocument(String index, Long userId, String documentId) throws IOException {
-    client.deleteByQuery(
+    var response =
+        client.deleteByQuery(
         request ->
             request.index(index)
                 .query(
@@ -112,6 +113,11 @@ public class KnowledgeElasticsearchIndexManager {
                                         filter ->
                                             filter.term(
                                                 term -> term.field("documentId").value(documentId))))));
+    if (Boolean.TRUE.equals(response.timedOut())
+        || (response.versionConflicts() != null && response.versionConflicts() > 0)
+        || (response.failures() != null && !response.failures().isEmpty())) {
+      throw new IllegalStateException("Knowledge index cleanup did not complete for " + index);
+    }
   }
 
   private void createIfMissing(String index, Map<String, Property> properties) throws IOException {
