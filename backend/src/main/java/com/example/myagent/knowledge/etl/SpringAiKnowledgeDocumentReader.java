@@ -143,7 +143,7 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
               .media(media)
               .build();
       ChatResponse response = chatModel.call(new Prompt(message));
-      String json = response.getResult().getOutput().getText();
+      String json = normalizeJson(response.getResult().getOutput().getText());
       MultimodalExtraction extraction = objectMapper.readValue(json, MultimodalExtraction.class);
       String tables = extraction.tables() == null
           ? ""
@@ -156,6 +156,17 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
     } catch (Exception error) {
       throw new KnowledgeDocumentEtlException("Multimodal document extraction failed", error);
     }
+  }
+
+  static String normalizeJson(String response) {
+    String normalized = response == null ? "" : response.strip();
+    if (normalized.startsWith("```") && normalized.endsWith("```")) {
+      int firstLineBreak = normalized.indexOf('\n');
+      normalized = firstLineBreak >= 0
+          ? normalized.substring(firstLineBreak + 1, normalized.length() - 3)
+          : normalized.substring(3, normalized.length() - 3);
+    }
+    return normalized.strip();
   }
 
   private List<KnowledgeDocumentContent.ParentDocument> split(
