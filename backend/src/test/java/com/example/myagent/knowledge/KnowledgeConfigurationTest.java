@@ -33,7 +33,8 @@ class KnowledgeConfigurationTest {
             "knowledge.kafka.group=knowledge-consumers",
             "knowledge.kafka.bootstrap-servers=kafka:9092",
             "knowledge.storage.root=./.knowledge/storage",
-            "knowledge.retrieval.min-rrf-score=0.03")
+            "knowledge.retrieval.min-rrf-score=0.03",
+            "knowledge.retrieval.top-k=12")
         .run(
             context -> {
               KnowledgeProperties properties = context.getBean(KnowledgeProperties.class);
@@ -58,6 +59,7 @@ class KnowledgeConfigurationTest {
               assertThat(properties.kafka().bootstrapServers()).isEqualTo("kafka:9092");
               assertThat(properties.storage().root()).isEqualTo("./.knowledge/storage");
               assertThat(retrieval.minRrfScore()).isEqualTo(0.03);
+              assertThat(retrieval.topK()).isEqualTo(12);
             });
   }
 
@@ -87,6 +89,7 @@ class KnowledgeConfigurationTest {
           assertThat(properties.kafka().bootstrapServers()).isEqualTo("kafka:9092");
           assertThat(properties.storage().root()).isEqualTo("./.knowledge/storage");
           assertThat(retrieval.minRrfScore()).isEqualTo(0.02);
+          assertThat(retrieval.topK()).isEqualTo(8);
         });
   }
 

@@ -98,7 +98,7 @@ class KnowledgeSearchServiceTest {
 
     KnowledgeSearchService service =
         new KnowledgeSearchService(
-            client, properties(), embeddingService, new KnowledgeRetrievalProperties(0.02));
+            client, properties(), embeddingService, new KnowledgeRetrievalProperties(0.02, 8));
 
     assertThat(service.search(7L, "unknown")).isEmpty();
     verify(client, org.mockito.Mockito.times(2)).search(any(SearchRequest.class), eq(Map.class));
@@ -122,6 +122,26 @@ class KnowledgeSearchServiceTest {
 
     assertThat(results).extracting(KnowledgeSearchHit::parentId)
         .containsExactly("parent-2", "parent-1", "parent-3");
+  }
+
+  @Test
+  void usesConfiguredTopKForDefaultSearchRequests() throws Exception {
+    ElasticsearchClient client = mock(ElasticsearchClient.class);
+    KnowledgeEmbeddingService embeddingService = mock(KnowledgeEmbeddingService.class);
+    when(embeddingService.embed("deadline")).thenReturn(new float[] {0.1f, 0.2f});
+    when(client.search(any(SearchRequest.class), eq(Map.class)))
+        .thenReturn(emptySearchResponse(), emptySearchResponse());
+
+    KnowledgeSearchService service =
+        new KnowledgeSearchService(
+            client, properties(), embeddingService, new KnowledgeRetrievalProperties(0.0, 3));
+
+    service.search(7L, "deadline");
+
+    var requestCaptor = org.mockito.ArgumentCaptor.forClass(SearchRequest.class);
+    verify(client, org.mockito.Mockito.times(2)).search(requestCaptor.capture(), eq(Map.class));
+    assertThat(requestCaptor.getAllValues()).allSatisfy(request -> assertThat(request.size()).isEqualTo(3));
+    assertThat(requestCaptor.getAllValues().get(1).knn().get(0).k()).isEqualTo(3L);
   }
 
   private static SearchResponse<Map> childResponse(

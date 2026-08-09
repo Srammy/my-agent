@@ -20,7 +20,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class KnowledgeSearchService {
 
-  private static final int DEFAULT_TOP_K = 8;
   private static final double RRF_RANK_CONSTANT = 60.0;
 
   private final ElasticsearchClient client;
@@ -32,7 +31,7 @@ public class KnowledgeSearchService {
       ElasticsearchClient client,
       KnowledgeProperties properties,
       KnowledgeEmbeddingService embeddingService) {
-    this(client, properties, embeddingService, new KnowledgeRetrievalProperties(0.0));
+        this(client, properties, embeddingService, new KnowledgeRetrievalProperties(0.0, 8));
   }
 
   @Autowired
@@ -48,7 +47,7 @@ public class KnowledgeSearchService {
   }
 
   public List<KnowledgeSearchHit> search(Long userId, String question) {
-    return search(userId, question, DEFAULT_TOP_K, List.of());
+    return search(userId, question, retrievalProperties.topK(), List.of());
   }
 
   public List<KnowledgeSearchHit> search(
