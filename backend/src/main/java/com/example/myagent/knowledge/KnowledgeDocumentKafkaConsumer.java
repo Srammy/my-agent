@@ -4,6 +4,8 @@ import com.example.myagent.knowledge.messaging.KnowledgeDocumentProcessMessage;
 import org.springframework.kafka.annotation.DltHandler;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.annotation.RetryableTopic;
+import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -28,7 +30,11 @@ public class KnowledgeDocumentKafkaConsumer {
 
   @DltHandler
   public void consumeDeadLetter(
-      KnowledgeDocumentProcessMessage message, Exception exception) {
-    processor.markFailed(message, exception);
+      KnowledgeDocumentProcessMessage message,
+      @Header(name = KafkaHeaders.DLT_EXCEPTION_MESSAGE, required = false) String errorMessage) {
+    processor.markFailed(
+        message,
+        new IllegalStateException(
+            errorMessage == null || errorMessage.isBlank() ? "Kafka ETL retries exhausted" : errorMessage));
   }
 }

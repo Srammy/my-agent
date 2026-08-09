@@ -37,10 +37,14 @@ public class KnowledgeDocumentEtlProcessor {
 
   public void process(KnowledgeDocumentProcessMessage message) {
     KnowledgeDocumentEntity document = loadOwned(message);
-    if (document.getStatus() == KnowledgeDocumentStatus.READY) return;
+    if (document.getStatus() == KnowledgeDocumentStatus.READY) {
+      storage.deleteIfExists(Path.of(document.getStorageKey()));
+      return;
+    }
+    KnowledgeDocumentContent content;
     try {
       cleanupService.cleanup(message.userId(), message.documentId());
-      KnowledgeDocumentContent content =
+      content =
           reader.read(
               Path.of(document.getStorageKey()),
               document.getUserId(),
@@ -48,19 +52,33 @@ public class KnowledgeDocumentEtlProcessor {
               document.getOriginalFilename(),
               document.getContentType());
       indexService.index(content);
-      KnowledgeDocumentEntity ready = new KnowledgeDocumentEntity();
-      ready.setId(document.getId());
-      ready.setUserId(document.getUserId());
-      ready.setStatus(KnowledgeDocumentStatus.READY);
-      ready.setParentCount(content.parents().size());
-      ready.setChildCount(content.parents().stream().mapToInt(parent -> parent.children().size()).sum());
-      ready.setErrorMessage(null);
-      ready.setUpdatedAt(LocalDateTime.now());
-      documentMapper.updateById(ready);
-      storage.deleteIfExists(Path.of(document.getStorageKey()));
     } catch (RuntimeException error) {
       cleanupService.cleanup(message.userId(), message.documentId());
       throw new KnowledgeDocumentEtlException("Knowledge document ETL failed", error);
+    }
+
+    KnowledgeDocumentEntity ready = new KnowledgeDocumentEntity();
+    ready.setId(document.getId());
+    ready.setUserId(document.getUserId());
+    ready.setStatus(KnowledgeDocumentStatus.READY);
+    ready.setParentCount(content.parents().size());
+    ready.setChildCount(content.parents().stream().mapToInt(parent -> parent.children().size()).sum());
+    ready.setErrorMessage(null);
+    ready.setUpdatedAt(LocalDateTime.now());
+    try {
+      if (documentMapper.updateById(ready) == 0) {
+        cleanupService.cleanup(message.userId(), message.documentId());
+        throw new IllegalStateException("Knowledge document READY update affected no rows");
+      }
+    } catch (RuntimeException error) {
+      cleanupService.cleanup(message.userId(), message.documentId());
+      throw new KnowledgeDocumentEtlException("Knowledge document status update failed", error);
+    }
+
+    try {
+      storage.deleteIfExists(Path.of(document.getStorageKey()));
+    } catch (RuntimeException error) {
+      throw new KnowledgeDocumentEtlException("Knowledge document source cleanup failed", error);
     }
   }
 

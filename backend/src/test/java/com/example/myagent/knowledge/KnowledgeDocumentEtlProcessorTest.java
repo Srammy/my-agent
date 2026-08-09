@@ -41,6 +41,7 @@ class KnowledgeDocumentEtlProcessorTest {
     KnowledgeDocumentEntity document = document(7L, "doc-1");
     KnowledgeDocumentContent content = content(7L, "doc-1");
     when(documentMapper.findOwnedById(7L, "doc-1")).thenReturn(document);
+    when(documentMapper.updateById(any(KnowledgeDocumentEntity.class))).thenReturn(1);
     when(reader.read(
             Path.of(document.getStorageKey()),
             7L,
