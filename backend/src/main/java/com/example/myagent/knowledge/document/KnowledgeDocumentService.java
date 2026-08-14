@@ -114,13 +114,13 @@ public class KnowledgeDocumentService {
     }
     cleanupService.cleanup(currentUser.id(), documentId);
     LocalDateTime now = LocalDateTime.now();
+    jobService.requeue(currentUser.id(), documentId, now);
     document.setStatus(KnowledgeDocumentStatus.PROCESSING);
     document.setParentCount(0);
     document.setChildCount(0);
     document.setErrorMessage(null);
     document.setUpdatedAt(now);
     documentMapper.updateById(document);
-    jobService.requeue(currentUser.id(), documentId, now);
     return KnowledgeDocumentDto.fromEntity(document);
   }
 

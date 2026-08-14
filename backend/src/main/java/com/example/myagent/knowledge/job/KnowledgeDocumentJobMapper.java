@@ -99,6 +99,9 @@ public interface KnowledgeDocumentJobMapper extends BaseMapper<KnowledgeDocument
         Wrappers.<KnowledgeDocumentJobEntity>lambdaUpdate()
             .eq(KnowledgeDocumentJobEntity::getId, id)
             .eq(KnowledgeDocumentJobEntity::getUserId, userId)
-            .eq(KnowledgeDocumentJobEntity::getStatus, KnowledgeDocumentJobStatus.FAILED));
+            .in(
+                KnowledgeDocumentJobEntity::getStatus,
+                KnowledgeDocumentJobStatus.FAILED,
+                KnowledgeDocumentJobStatus.SENT));
   }
 }
