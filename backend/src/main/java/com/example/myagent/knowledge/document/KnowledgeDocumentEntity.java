@@ -16,6 +16,7 @@ public class KnowledgeDocumentEntity {
   private KnowledgeDocumentStatus status;
   private Integer parentCount;
   private Integer childCount;
+  private Integer chunkCount;
   private String errorMessage;
   private LocalDateTime createdAt;
   private LocalDateTime updatedAt;
@@ -38,6 +39,8 @@ public class KnowledgeDocumentEntity {
   public void setParentCount(Integer parentCount) { this.parentCount = parentCount; }
   public Integer getChildCount() { return childCount; }
   public void setChildCount(Integer childCount) { this.childCount = childCount; }
+  public Integer getChunkCount() { return chunkCount; }
+  public void setChunkCount(Integer chunkCount) { this.chunkCount = chunkCount; }
   public String getErrorMessage() { return errorMessage; }
   public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
   public LocalDateTime getCreatedAt() { return createdAt; }

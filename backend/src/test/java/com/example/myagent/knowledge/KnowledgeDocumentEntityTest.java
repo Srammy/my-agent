@@ -16,6 +16,7 @@ class KnowledgeDocumentEntityTest {
     document.setId("doc-1");
     document.setUserId(7L);
     document.setStatus(KnowledgeDocumentStatus.PROCESSING);
+    document.setChunkCount(12);
 
     KnowledgeDocumentJobEntity job = new KnowledgeDocumentJobEntity();
     job.setDocumentId(document.getId());
@@ -24,6 +25,7 @@ class KnowledgeDocumentEntityTest {
 
     assertThat(document.getUserId()).isEqualTo(7L);
     assertThat(document.getStatus()).isEqualTo(KnowledgeDocumentStatus.PROCESSING);
+    assertThat(document.getChunkCount()).isEqualTo(12);
     assertThat(job.getDocumentId()).isEqualTo("doc-1");
     assertThat(job.getUserId()).isEqualTo(7L);
     assertThat(job.getStatus()).isEqualTo(KnowledgeDocumentJobStatus.PENDING);
