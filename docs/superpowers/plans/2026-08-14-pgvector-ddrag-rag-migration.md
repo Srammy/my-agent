@@ -12,7 +12,7 @@
 
 ## 实施步骤
 
-### 1. 建立 PostgreSQL/PgVector 基础设施
+### Task 1: 建立 PostgreSQL/PgVector 基础设施
 
 修改：
 
@@ -41,7 +41,7 @@
 - `docker compose config` 能解析 postgres、backend 依赖和 env 引用。
 - PostgreSQL 健康检查通过，`vector` extension 可用。
 
-### 2. 建立 PostgreSQL schema 与文档 chunk 仓储
+### Task 2: 建立 PostgreSQL schema 与文档 chunk 仓储
 
 新增/修改：
 
@@ -67,7 +67,7 @@
 - repository 单元测试覆盖批量写入、重复键和按用户过滤。
 - 两个用户使用同一 documentId/相同内容时，用户 A 的查询不会读到用户 B 的 chunk。
 
-### 3. 将 Spring AI reader 改为 DD_Rag 单层结构感知切分
+### Task 3: 将 Spring AI reader 改为 DD_Rag 单层结构感知切分
 
 修改/新增：
 
@@ -91,7 +91,7 @@
 - OCR/表格抽取结果能继续进入 chunk 文本。
 - 同一输入重复切分得到相同的 chunkId、chunkIndex 和文本。
 
-### 4. 改造 Kafka ETL 的持久化、向量化和关键词索引
+### Task 4: 改造 Kafka ETL 的持久化、向量化和关键词索引
 
 修改/新增：
 
@@ -121,7 +121,7 @@
 - retry 在已有旧数据时保持幂等，不产生重复 chunk/vector/ES 文档。
 - 用户隔离测试覆盖清理、写入和失败补偿。
 
-### 5. 移植 DD_Rag 的查询规划/改写
+### Task 5: 移植 DD_Rag 的查询规划/改写
 
 新增：
 
@@ -143,7 +143,7 @@
 - 模型异常和非法 JSON 回退原问题。
 - userId 不影响授权范围，只影响调用上下文和日志关联。
 
-### 6. 实现 PgVector + ES + 应用 RRF 混合检索
+### Task 6: 实现 PgVector + ES + 应用 RRF 混合检索
 
 新增/修改：
 
@@ -175,7 +175,7 @@
 - 阈值拦截、空结果、四级证据等级测试。
 - 用户 A/B 相同内容隔离测试，覆盖 ES、PgVector 和 PostgreSQL 回查。
 
-### 7. 接入普通 Agent，并强制参考来源
+### Task 7: 接入普通 Agent，并强制参考来源
 
 修改：
 
@@ -198,7 +198,7 @@
 - 参考来源始终是回答最后一个文本事件。
 - 普通对话回归测试保持通过。
 
-### 8. 更新知识库页面与 API 文档计数
+### Task 8: 更新知识库页面与 API 文档计数
 
 修改：
 
@@ -220,7 +220,7 @@
 - chunkCount 为 0、正常值和缺省值的渲染测试。
 - 删除/重试操作不改变用户隔离行为。
 
-### 9. 完成 Docker 与集成验证
+### Task 9: 完成 Docker 与集成验证
 
 执行：
 
