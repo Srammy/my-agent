@@ -33,8 +33,18 @@ class KnowledgeConfigurationTest {
             "knowledge.kafka.group=knowledge-consumers",
             "knowledge.kafka.bootstrap-servers=kafka:9092",
             "knowledge.storage.root=./.knowledge/storage",
+            "knowledge.postgresql.url=jdbc:postgresql://postgres:5432/myagent_knowledge",
+            "knowledge.postgresql.username=knowledge",
+            "knowledge.postgresql.password=secret",
+            "knowledge.pgvector.table-name=vector_store",
+            "knowledge.pgvector.dimensions=1536",
+            "knowledge.pgvector.initialize-schema=false",
             "knowledge.retrieval.min-rrf-score=0.03",
-            "knowledge.retrieval.top-k=12")
+            "knowledge.retrieval.top-k=12",
+            "knowledge.retrieval.channel-top-k=24",
+            "knowledge.retrieval.rrf-k=80",
+            "knowledge.retrieval.neighbor-window=2",
+            "knowledge.retrieval.query-planning-enabled=true")
         .run(
             context -> {
               KnowledgeProperties properties = context.getBean(KnowledgeProperties.class);
@@ -58,8 +68,19 @@ class KnowledgeConfigurationTest {
               assertThat(properties.kafka().group()).isEqualTo("knowledge-consumers");
               assertThat(properties.kafka().bootstrapServers()).isEqualTo("kafka:9092");
               assertThat(properties.storage().root()).isEqualTo("./.knowledge/storage");
+              assertThat(properties.postgresql().url())
+                  .isEqualTo("jdbc:postgresql://postgres:5432/myagent_knowledge");
+              assertThat(properties.postgresql().username()).isEqualTo("knowledge");
+              assertThat(properties.postgresql().password()).isEqualTo("secret");
+              assertThat(properties.pgvector().tableName()).isEqualTo("vector_store");
+              assertThat(properties.pgvector().dimensions()).isEqualTo(1536);
+              assertThat(properties.pgvector().initializeSchema()).isFalse();
               assertThat(retrieval.minRrfScore()).isEqualTo(0.03);
               assertThat(retrieval.topK()).isEqualTo(12);
+              assertThat(retrieval.channelTopK()).isEqualTo(24);
+              assertThat(retrieval.rrfK()).isEqualTo(80);
+              assertThat(retrieval.neighborWindow()).isEqualTo(2);
+              assertThat(retrieval.queryPlanningEnabled()).isTrue();
             });
   }
 
@@ -88,8 +109,19 @@ class KnowledgeConfigurationTest {
           assertThat(properties.kafka().group()).isEqualTo("myagent-knowledge-etl");
           assertThat(properties.kafka().bootstrapServers()).isEqualTo("kafka:9092");
           assertThat(properties.storage().root()).isEqualTo("./.knowledge/storage");
+          assertThat(properties.postgresql().url())
+              .isEqualTo("jdbc:postgresql://postgres:5432/myagent_knowledge");
+          assertThat(properties.postgresql().username()).isEqualTo("postgres");
+          assertThat(properties.postgresql().password()).isEmpty();
+          assertThat(properties.pgvector().tableName()).isEqualTo("vector_store");
+          assertThat(properties.pgvector().dimensions()).isEqualTo(1024);
+          assertThat(properties.pgvector().initializeSchema()).isTrue();
           assertThat(retrieval.minRrfScore()).isEqualTo(0.02);
           assertThat(retrieval.topK()).isEqualTo(8);
+          assertThat(retrieval.channelTopK()).isEqualTo(50);
+          assertThat(retrieval.rrfK()).isEqualTo(60);
+          assertThat(retrieval.neighborWindow()).isEqualTo(1);
+          assertThat(retrieval.queryPlanningEnabled()).isTrue();
         });
   }
 

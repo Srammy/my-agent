@@ -82,6 +82,10 @@ knowledge:
   retrieval:
     min-rrf-score: ${KNOWLEDGE_RETRIEVAL_MIN_RRF_SCORE:0.02}
     top-k: ${KNOWLEDGE_RETRIEVAL_TOP_K:8}
+    channel-top-k: ${KNOWLEDGE_RETRIEVAL_CHANNEL_TOP_K:50}
+    rrf-k: ${KNOWLEDGE_RETRIEVAL_RRF_K:60}
+    neighbor-window: ${KNOWLEDGE_RETRIEVAL_NEIGHBOR_WINDOW:1}
+    query-planning-enabled: ${KNOWLEDGE_QUERY_PLANNING_ENABLED:true}
   embedding:
     provider: ${KNOWLEDGE_EMBEDDING_PROVIDER:dashscope}
     model: ${KNOWLEDGE_EMBEDDING_MODEL:text-embedding-v4}
@@ -105,3 +109,13 @@ knowledge:
     max-attempts: ${KNOWLEDGE_KAFKA_MAX_ATTEMPTS:5}
   storage:
     root: ${KNOWLEDGE_STORAGE_ROOT:./.knowledge/storage}
+  postgresql:
+    url: jdbc:postgresql://${KNOWLEDGE_POSTGRES_HOST:postgres}:${KNOWLEDGE_POSTGRES_PORT:5432}/${KNOWLEDGE_POSTGRES_DATABASE:myagent_knowledge}
+    username: ${KNOWLEDGE_POSTGRES_USERNAME:postgres}
+    password: ${KNOWLEDGE_POSTGRES_PASSWORD:}
+    schema: ${KNOWLEDGE_POSTGRES_SCHEMA:public}
+    migration-locations: ${KNOWLEDGE_POSTGRES_MIGRATION_LOCATIONS:db/knowledge-migration}
+  pgvector:
+    table-name: ${KNOWLEDGE_PGVECTOR_TABLE:vector_store}
+    dimensions: ${KNOWLEDGE_PGVECTOR_DIMENSIONS:${KNOWLEDGE_EMBEDDING_DIMENSIONS:1024}}
+    initialize-schema: ${KNOWLEDGE_PGVECTOR_INITIALIZE_SCHEMA:true}

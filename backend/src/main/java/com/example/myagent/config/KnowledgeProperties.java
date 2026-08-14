@@ -9,7 +9,19 @@ public record KnowledgeProperties(
     @DefaultValue Multimodal multimodal,
     @DefaultValue Elasticsearch elasticsearch,
     @DefaultValue Kafka kafka,
-    @DefaultValue Storage storage) {
+    @DefaultValue Storage storage,
+    @DefaultValue Postgresql postgresql,
+    @DefaultValue Pgvector pgvector,
+    @DefaultValue Retrieval retrieval) {
+
+  public KnowledgeProperties(
+      Embedding embedding,
+      Multimodal multimodal,
+      Elasticsearch elasticsearch,
+      Kafka kafka,
+      Storage storage) {
+    this(embedding, multimodal, elasticsearch, kafka, storage, new Postgresql(), new Pgvector(), new Retrieval());
+  }
 
   public record Embedding(
       @DefaultValue("dashscope") String provider,
@@ -35,4 +47,42 @@ public record KnowledgeProperties(
       @DefaultValue("kafka:9092") String bootstrapServers) {}
 
   public record Storage(@DefaultValue("./.knowledge/storage") String root) {}
+
+  public record Postgresql(
+      @DefaultValue("jdbc:postgresql://postgres:5432/myagent_knowledge") String url,
+      @DefaultValue("postgres") String username,
+      @DefaultValue("") String password,
+      @DefaultValue("public") String schema,
+      @DefaultValue("db/knowledge-migration") String migrationLocations) {
+
+    public Postgresql() {
+      this(
+          "jdbc:postgresql://postgres:5432/myagent_knowledge",
+          "postgres",
+          "",
+          "public",
+          "db/knowledge-migration");
+    }
+  }
+
+  public record Pgvector(
+      @DefaultValue("vector_store") String tableName,
+      @DefaultValue("1024") int dimensions,
+      @DefaultValue("true") boolean initializeSchema) {
+
+    public Pgvector() {
+      this("vector_store", 1024, true);
+    }
+  }
+
+  public record Retrieval(
+      @DefaultValue("50") int channelTopK,
+      @DefaultValue("60") int rrfK,
+      @DefaultValue("1") int neighborWindow,
+      @DefaultValue("true") boolean queryPlanningEnabled) {
+
+    public Retrieval() {
+      this(50, 60, 1, true);
+    }
+  }
 }

@@ -26,6 +26,22 @@ services:
       timeout: 5s
       retries: 10
 
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${KNOWLEDGE_POSTGRES_DATABASE:-myagent_knowledge}
+      POSTGRES_USER: ${KNOWLEDGE_POSTGRES_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${KNOWLEDGE_POSTGRES_PASSWORD:?Set KNOWLEDGE_POSTGRES_PASSWORD in .env}
+    volumes:
+      - knowledge_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rag_private
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
     environment:
@@ -86,6 +102,17 @@ services:
       KNOWLEDGE_MULTIMODAL_API_KEY_ENV: ${KNOWLEDGE_MULTIMODAL_API_KEY_ENV:-DASHSCOPE_API_KEY}
       KNOWLEDGE_RETRIEVAL_MIN_RRF_SCORE: ${KNOWLEDGE_RETRIEVAL_MIN_RRF_SCORE:-0.02}
       KNOWLEDGE_RETRIEVAL_TOP_K: ${KNOWLEDGE_RETRIEVAL_TOP_K:-8}
+      KNOWLEDGE_RETRIEVAL_CHANNEL_TOP_K: ${KNOWLEDGE_RETRIEVAL_CHANNEL_TOP_K:-50}
+      KNOWLEDGE_RETRIEVAL_RRF_K: ${KNOWLEDGE_RETRIEVAL_RRF_K:-60}
+      KNOWLEDGE_RETRIEVAL_NEIGHBOR_WINDOW: ${KNOWLEDGE_RETRIEVAL_NEIGHBOR_WINDOW:-1}
+      KNOWLEDGE_QUERY_PLANNING_ENABLED: ${KNOWLEDGE_QUERY_PLANNING_ENABLED:-true}
+      KNOWLEDGE_POSTGRES_HOST: ${KNOWLEDGE_POSTGRES_HOST:-postgres}
+      KNOWLEDGE_POSTGRES_PORT: ${KNOWLEDGE_POSTGRES_PORT:-5432}
+      KNOWLEDGE_POSTGRES_DATABASE: ${KNOWLEDGE_POSTGRES_DATABASE:-myagent_knowledge}
+      KNOWLEDGE_POSTGRES_USERNAME: ${KNOWLEDGE_POSTGRES_USERNAME:-postgres}
+      KNOWLEDGE_POSTGRES_PASSWORD: ${KNOWLEDGE_POSTGRES_PASSWORD:?Set KNOWLEDGE_POSTGRES_PASSWORD in .env}
+      KNOWLEDGE_PGVECTOR_TABLE: ${KNOWLEDGE_PGVECTOR_TABLE:-vector_store}
+      KNOWLEDGE_PGVECTOR_DIMENSIONS: ${KNOWLEDGE_PGVECTOR_DIMENSIONS:-1024}
       AGENT_SCOPE_ENABLED: ${AGENT_SCOPE_ENABLED:-false}
       AGENT_MODEL_PROVIDER: ${AGENT_MODEL_PROVIDER:-dashscope}
       AGENT_MODEL_NAME: ${AGENT_MODEL_NAME:-dashscope:qwen-plus}
@@ -113,6 +140,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     ports:
       - "8080:8080"
     networks:
@@ -133,6 +162,7 @@ volumes:
   elasticsearch_data:
   kafka_data:
   knowledge_data:
+  knowledge_postgres_data:
 
 networks:
   rag_private:
