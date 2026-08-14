@@ -28,7 +28,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 class KnowledgeDocumentReaderTest {
 
   @Test
-  void readsMarkdownAndCreatesParentChildChunksWithMetadata() throws Exception {
+  void readsMarkdownAndCreatesFlatChunksWithMetadata() throws Exception {
     Path source = Files.createTempFile("knowledge", ".md");
     Files.writeString(source, "# Project\n\nThe launch checklist contains testing and acceptance details.");
 
@@ -37,12 +37,10 @@ class KnowledgeDocumentReaderTest {
     KnowledgeDocumentContent content =
         reader.read(source, 7L, "doc-1", "project.md", "text/markdown");
 
-    assertThat(content.parents()).hasSize(1);
-    assertThat(content.parents().get(0).parentId()).isEqualTo("doc-1_p_0");
-    assertThat(content.parents().get(0).text()).contains("acceptance");
-    assertThat(content.parents().get(0).children()).isNotEmpty();
-    assertThat(content.parents().get(0).children().get(0).parentId()).isEqualTo("doc-1_p_0");
-    assertThat(content.parents().get(0).children().get(0).metadata())
+    assertThat(content.chunks()).hasSize(1);
+    assertThat(content.chunks().get(0).chunkId()).isEqualTo("doc-1:0");
+    assertThat(content.chunks().get(0).text()).contains("acceptance");
+    assertThat(content.chunks().get(0).metadata())
         .containsEntry("userId", 7L)
         .containsEntry("documentId", "doc-1")
         .containsEntry("sourceFilename", "project.md");
@@ -65,8 +63,8 @@ class KnowledgeDocumentReaderTest {
     KnowledgeDocumentContent content =
     reader.read(source, 7L, "doc-image", "page.png", "image/png");
 
-    assertThat(content.parents().get(0).text()).contains("验收标准", "流程图", "项目", "通过");
-    assertThat(content.parents().get(0).pageNumber()).isEqualTo(1);
+    assertThat(content.chunks().get(0).text()).contains("验收标准", "流程图", "项目", "通过");
+    assertThat(content.chunks().get(0).pageNumber()).isEqualTo(1);
   }
 
   @Test
@@ -98,9 +96,9 @@ class KnowledgeDocumentReaderTest {
     KnowledgeDocumentContent content =
         reader.read(source, 7L, "doc-pdf", "document.pdf", "application/pdf");
 
-    assertThat(content.parents()).singleElement().satisfies(parent -> {
-      assertThat(parent.pageNumber()).isEqualTo(1);
-      assertThat(parent.text()).contains("PDF page content");
+    assertThat(content.chunks()).singleElement().satisfies(chunk -> {
+      assertThat(chunk.pageNumber()).isEqualTo(1);
+      assertThat(chunk.text()).contains("PDF page content");
     });
   }
 
@@ -121,9 +119,9 @@ class KnowledgeDocumentReaderTest {
         new SpringAiKnowledgeDocumentReader(chatModel, new ObjectMapper())
             .read(source, 7L, "doc-scanned", "scanned.pdf", "application/pdf");
 
-    assertThat(content.parents()).singleElement().satisfies(parent -> {
-      assertThat(parent.pageNumber()).isEqualTo(1);
-      assertThat(parent.text()).contains("扫描页中的项目截止日期是周五");
+    assertThat(content.chunks()).singleElement().satisfies(chunk -> {
+      assertThat(chunk.pageNumber()).isEqualTo(1);
+      assertThat(chunk.text()).contains("扫描页中的项目截止日期是周五");
     });
     verify(chatModel).call(any(Prompt.class));
   }

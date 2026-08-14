@@ -99,8 +99,7 @@ knowledge:
     url: ${KNOWLEDGE_ELASTICSEARCH_URL:http://elasticsearch:9200}
     username: ${KNOWLEDGE_ELASTICSEARCH_USERNAME:elastic}
     password: ${KNOWLEDGE_ELASTICSEARCH_PASSWORD:}
-    parent-index: ${KNOWLEDGE_ELASTICSEARCH_PARENT_INDEX:myagent_knowledge_parents}
-    child-index: ${KNOWLEDGE_ELASTICSEARCH_CHILD_INDEX:myagent_knowledge_children}
+    chunk-index: ${KNOWLEDGE_ELASTICSEARCH_CHUNK_INDEX:myagent_knowledge_chunks}
   kafka:
     topic: ${KNOWLEDGE_KAFKA_TOPIC:myagent.knowledge.document.process}
     group: ${KNOWLEDGE_KAFKA_GROUP:myagent-knowledge-etl}
@@ -109,6 +108,10 @@ knowledge:
     max-attempts: ${KNOWLEDGE_KAFKA_MAX_ATTEMPTS:5}
   storage:
     root: ${KNOWLEDGE_STORAGE_ROOT:./.knowledge/storage}
+  chunking:
+    target-tokens: ${KNOWLEDGE_CHUNKING_TARGET_TOKENS:240}
+    max-tokens: ${KNOWLEDGE_CHUNKING_MAX_TOKENS:320}
+    overlap-tokens: ${KNOWLEDGE_CHUNKING_OVERLAP_TOKENS:32}
   postgresql:
     url: jdbc:postgresql://${KNOWLEDGE_POSTGRES_HOST:postgres}:${KNOWLEDGE_POSTGRES_PORT:5432}/${KNOWLEDGE_POSTGRES_DATABASE:myagent_knowledge}
     username: ${KNOWLEDGE_POSTGRES_USERNAME:postgres}

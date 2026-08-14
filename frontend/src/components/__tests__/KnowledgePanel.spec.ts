@@ -13,6 +13,7 @@ const processing = {
   status: 'PROCESSING',
   parentCount: 0,
   childCount: 0,
+  chunkCount: 0,
   errorMessage: null
 }
 
@@ -22,9 +23,9 @@ describe('KnowledgePanel', () => {
     vi.restoreAllMocks()
   })
 
-  it('shows document status and parent/child counts', async () => {
+  it('shows document status and chunk count', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-      new Response(JSON.stringify([{ ...processing, status: 'READY', parentCount: 2, childCount: 7 }]), {
+      new Response(JSON.stringify([{ ...processing, status: 'READY', chunkCount: 7 }]), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       })
@@ -33,8 +34,7 @@ describe('KnowledgePanel', () => {
     const wrapper = mount(KnowledgePanel, { global: { plugins: [ElementPlus] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('READY'))
 
-    expect(wrapper.text()).toContain('父文档 2')
-    expect(wrapper.text()).toContain('子文档 7')
+    expect(wrapper.text()).toContain('Chunk 7')
     expect(wrapper.text()).toContain('上传时间 2026-08-09 12:18')
   })
 

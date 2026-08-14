@@ -56,6 +56,7 @@ public class KnowledgeDocumentService {
     document.setStatus(KnowledgeDocumentStatus.PROCESSING);
     document.setParentCount(0);
     document.setChildCount(0);
+    document.setChunkCount(0);
     document.setCreatedAt(now);
     document.setUpdatedAt(now);
 
@@ -118,6 +119,7 @@ public class KnowledgeDocumentService {
     document.setStatus(KnowledgeDocumentStatus.PROCESSING);
     document.setParentCount(0);
     document.setChildCount(0);
+    document.setChunkCount(0);
     document.setErrorMessage(null);
     document.setUpdatedAt(now);
     documentMapper.updateById(document);

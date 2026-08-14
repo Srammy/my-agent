@@ -11,6 +11,7 @@ export interface KnowledgeDocument {
   status: KnowledgeDocumentStatus
   parentCount: number
   childCount: number
+  chunkCount: number
   errorMessage: string | null
 }
 

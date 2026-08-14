@@ -27,8 +27,7 @@ class KnowledgeConfigurationTest {
             "knowledge.elasticsearch.url=http://elasticsearch:9200",
             "knowledge.elasticsearch.username=elastic",
             "knowledge.elasticsearch.password=",
-            "knowledge.elasticsearch.parent-index=knowledge-parent",
-            "knowledge.elasticsearch.child-index=knowledge-child",
+            "knowledge.elasticsearch.chunk-index=knowledge-chunks",
             "knowledge.kafka.topic=knowledge-ingest",
             "knowledge.kafka.group=knowledge-consumers",
             "knowledge.kafka.bootstrap-servers=kafka:9092",
@@ -61,9 +60,7 @@ class KnowledgeConfigurationTest {
               assertThat(properties.elasticsearch().url()).isEqualTo("http://elasticsearch:9200");
               assertThat(properties.elasticsearch().username()).isEqualTo("elastic");
               assertThat(properties.elasticsearch().password()).isEmpty();
-              assertThat(properties.elasticsearch().parentIndex())
-                  .isEqualTo("knowledge-parent");
-              assertThat(properties.elasticsearch().childIndex()).isEqualTo("knowledge-child");
+              assertThat(properties.elasticsearch().chunkIndex()).isEqualTo("knowledge-chunks");
               assertThat(properties.kafka().topic()).isEqualTo("knowledge-ingest");
               assertThat(properties.kafka().group()).isEqualTo("knowledge-consumers");
               assertThat(properties.kafka().bootstrapServers()).isEqualTo("kafka:9092");
@@ -100,10 +97,8 @@ class KnowledgeConfigurationTest {
           assertThat(properties.elasticsearch().url()).isEqualTo("http://elasticsearch:9200");
           assertThat(properties.elasticsearch().username()).isEqualTo("elastic");
           assertThat(properties.elasticsearch().password()).isEmpty();
-          assertThat(properties.elasticsearch().parentIndex())
-              .isEqualTo("myagent_knowledge_parents");
-          assertThat(properties.elasticsearch().childIndex())
-              .isEqualTo("myagent_knowledge_children");
+          assertThat(properties.elasticsearch().chunkIndex())
+              .isEqualTo("myagent_knowledge_chunks");
           assertThat(properties.kafka().topic())
               .isEqualTo("myagent.knowledge.document.process");
           assertThat(properties.kafka().group()).isEqualTo("myagent-knowledge-etl");

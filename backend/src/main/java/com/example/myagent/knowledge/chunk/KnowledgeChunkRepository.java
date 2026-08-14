@@ -38,10 +38,10 @@ public class KnowledgeChunkRepository {
           char_start, char_end, metadata_json, created_at, updated_at
         ) values (?, ?, ?, ?, ?, ?, ?, ?, cast(? as jsonb), ?, ?)
         """;
-    int[] results = jdbcTemplate.batchUpdate(sql, chunks, chunks.size(), KnowledgeChunkRepository::bind);
+    int[][] results = jdbcTemplate.batchUpdate(sql, chunks, chunks.size(), KnowledgeChunkRepository::bind);
     int inserted = 0;
-    for (int result : results) {
-      inserted += result;
+    for (int[] batch : results) {
+      for (int result : batch) inserted += result;
     }
     return inserted;
   }

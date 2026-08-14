@@ -1,67 +1,85 @@
 package com.example.myagent.knowledge.search;
 
+import com.example.myagent.knowledge.chunk.KnowledgeChunk;
+import com.example.myagent.knowledge.chunk.KnowledgeChunkRepository;
 import com.example.myagent.knowledge.etl.KnowledgeDocumentContent;
-import java.util.ArrayList;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 
 @Service
 public class KnowledgeIndexService {
 
   private final KnowledgeElasticsearchIndexManager indexManager;
-  private final KnowledgeEmbeddingService embeddingService;
+  private final KnowledgeChunkRepository chunkRepository;
+  private final KnowledgePgVectorService vectorService;
+  private final ObjectMapper objectMapper;
 
   public KnowledgeIndexService(
-      KnowledgeElasticsearchIndexManager indexManager, KnowledgeEmbeddingService embeddingService) {
+      KnowledgeElasticsearchIndexManager indexManager,
+      KnowledgeChunkRepository chunkRepository,
+      KnowledgePgVectorService vectorService,
+      ObjectMapper objectMapper) {
     this.indexManager = indexManager;
-    this.embeddingService = embeddingService;
+    this.chunkRepository = chunkRepository;
+    this.vectorService = vectorService;
+    this.objectMapper = objectMapper;
   }
 
   public void index(KnowledgeDocumentContent content) {
-    List<KnowledgeParentDocument> parents = new ArrayList<>();
-    List<KnowledgeChildDocument> children = new ArrayList<>();
-    for (KnowledgeDocumentContent.ParentDocument parent : content.parents()) {
-      parents.add(
-          new KnowledgeParentDocument(
-              parent.parentId(),
-              content.userId(),
-              content.documentId(),
-              content.sourceFilename(),
-              content.contentType(),
-              parent.parentIndex(),
-              parent.pageNumber(),
-              parent.text(),
-              "READY"));
-      for (KnowledgeDocumentContent.ChildDocument child : parent.children()) {
-        float[] vector = embeddingService.embed(child.text());
-        children.add(
-            new KnowledgeChildDocument(
-                child.childId(),
-                content.userId(),
-                content.documentId(),
-                child.parentId(),
-                content.sourceFilename(),
-                content.contentType(),
-                child.childIndex(),
-                child.pageNumber(),
-                child.text(),
-                toList(vector),
-                "READY"));
-      }
-    }
+    List<KnowledgeChunk> chunks = content.chunks().stream().map(chunk -> toChunk(content, chunk)).toList();
+    List<KnowledgeChunkIndexDocument> searchDocuments = content.chunks().stream()
+        .map(chunk -> new KnowledgeChunkIndexDocument(
+            chunk.chunkId(), content.userId(), content.documentId(), chunk.chunkIndex(),
+            chunk.pageNumber(), content.sourceFilename(), chunk.text(), "READY"))
+        .toList();
     try {
       indexManager.deleteByDocument(content.userId(), content.documentId());
-      indexManager.writeParents(parents);
-      indexManager.writeChildren(children);
+      vectorService.deleteByUserAndDocument(content.userId(), content.documentId());
+      chunkRepository.deleteByUserAndDocument(content.userId(), content.documentId());
+      chunkRepository.insertBatch(chunks);
+      vectorService.indexDocuments(content.chunks());
+      indexManager.writeChunks(searchDocuments);
     } catch (RuntimeException error) {
-      indexManager.deleteByDocument(content.userId(), content.documentId());
+      cleanup(content.userId(), content.documentId());
       throw error;
     }
   }
 
-  private static List<Float> toList(float[] vector) {
-    List<Float> values = new ArrayList<>(vector.length);
-    for (float value : vector) values.add(value);
-    return values;
+  private KnowledgeChunk toChunk(
+      KnowledgeDocumentContent content, KnowledgeDocumentContent.ChunkDocument chunk) {
+    try {
+      Map<String, Object> metadata = chunk.metadata() == null ? Map.of() : chunk.metadata();
+      return new KnowledgeChunk(
+          null,
+          content.userId(),
+          content.documentId(),
+          chunk.chunkId(),
+          chunk.chunkIndex(),
+          chunk.text(),
+          null,
+          integerValue(metadata, "charStart"),
+          integerValue(metadata, "charEnd"),
+          objectMapper.writeValueAsString(metadata),
+          LocalDateTime.now(),
+          LocalDateTime.now());
+    } catch (JsonProcessingException error) {
+      throw new IllegalStateException("Knowledge chunk metadata serialization failed", error);
+    }
+  }
+
+  private void cleanup(Long userId, String documentId) {
+    try { indexManager.deleteByDocument(userId, documentId); } catch (RuntimeException ignored) { }
+    try { vectorService.deleteByUserAndDocument(userId, documentId); } catch (RuntimeException ignored) { }
+    try { chunkRepository.deleteByUserAndDocument(userId, documentId); } catch (RuntimeException ignored) { }
+  }
+
+  private static Integer integerValue(Map<String, Object> metadata, String key) {
+    Object value = metadata.get(key);
+    if (value == null) return null;
+    return value instanceof Number number ? number.intValue() : Integer.valueOf(value.toString());
   }
 }

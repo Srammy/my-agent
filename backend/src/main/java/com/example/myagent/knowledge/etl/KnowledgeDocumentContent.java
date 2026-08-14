@@ -8,20 +8,11 @@ public record KnowledgeDocumentContent(
     Long userId,
     String sourceFilename,
     String contentType,
-    List<ParentDocument> parents) {
+    List<ChunkDocument> chunks) {
 
-  public record ParentDocument(
-      String parentId,
-      int parentIndex,
-      Integer pageNumber,
-      String text,
-      Map<String, Object> metadata,
-      List<ChildDocument> children) {}
-
-  public record ChildDocument(
-      String childId,
-      String parentId,
-      int childIndex,
+  public record ChunkDocument(
+      String chunkId,
+      int chunkIndex,
       Integer pageNumber,
       String text,
       Map<String, Object> metadata) {}

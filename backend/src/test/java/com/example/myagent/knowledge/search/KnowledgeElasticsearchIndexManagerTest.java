@@ -41,7 +41,7 @@ class KnowledgeElasticsearchIndexManagerTest {
 
     manager.deleteByDocument(7L, "doc-1");
 
-    assertThat(requests).hasSize(2).allSatisfy(request -> assertThat(request.ignoreUnavailable()).isTrue());
+    assertThat(requests).hasSize(1).allSatisfy(request -> assertThat(request.ignoreUnavailable()).isTrue());
   }
 
   private static KnowledgeProperties properties() {

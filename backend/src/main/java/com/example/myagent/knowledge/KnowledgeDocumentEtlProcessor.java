@@ -61,8 +61,9 @@ public class KnowledgeDocumentEtlProcessor {
     ready.setId(document.getId());
     ready.setUserId(document.getUserId());
     ready.setStatus(KnowledgeDocumentStatus.READY);
-    ready.setParentCount(content.parents().size());
-    ready.setChildCount(content.parents().stream().mapToInt(parent -> parent.children().size()).sum());
+    ready.setParentCount(0);
+    ready.setChildCount(0);
+    ready.setChunkCount(content.chunks().size());
     ready.setErrorMessage(null);
     ready.setUpdatedAt(LocalDateTime.now());
     try {

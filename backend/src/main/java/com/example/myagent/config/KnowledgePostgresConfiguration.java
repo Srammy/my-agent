@@ -17,6 +17,7 @@ public class KnowledgePostgresConfiguration {
   HikariDataSource knowledgePostgresqlDataSource(KnowledgeProperties properties) {
     KnowledgeProperties.Postgresql postgres = properties.postgresql();
     return DataSourceBuilder.create()
+        .type(HikariDataSource.class)
         .url(postgres.url())
         .username(postgres.username())
         .password(postgres.password())

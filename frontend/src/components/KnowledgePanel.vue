@@ -139,8 +139,7 @@ function createdAtLabel(createdAt: string) {
         <div class="knowledge-document-item__meta">
           <span>上传时间 {{ createdAtLabel(document.createdAt) }}</span>
           <span>{{ sizeLabel(document.sizeBytes) }}</span>
-          <span>父文档 {{ document.parentCount }}</span>
-          <span>子文档 {{ document.childCount }}</span>
+          <span>Chunk {{ document.chunkCount }}</span>
         </div>
         <p v-if="document.errorMessage" class="panel-error">{{ document.errorMessage }}</p>
       </article>

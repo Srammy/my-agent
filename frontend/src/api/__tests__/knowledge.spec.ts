@@ -10,6 +10,7 @@ const document: KnowledgeDocument = {
   status: 'PROCESSING',
   parentCount: 0,
   childCount: 0,
+  chunkCount: 0,
   errorMessage: null
 }
 

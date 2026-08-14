@@ -3,6 +3,7 @@ package com.example.myagent.knowledge.search;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.mapping.Property;
 import co.elastic.clients.elasticsearch.core.bulk.BulkOperation;
+import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.indices.ExistsRequest;
 import com.example.myagent.config.KnowledgeProperties;
 import java.io.IOException;
@@ -24,140 +25,99 @@ public class KnowledgeElasticsearchIndexManager {
 
   public void ensureIndexes() {
     try {
-      createIfMissing(properties.elasticsearch().parentIndex(), parentProperties());
-      createIfMissing(properties.elasticsearch().childIndex(), childProperties());
+      createIfMissing(properties.elasticsearch().chunkIndex());
     } catch (IOException error) {
-      throw new IllegalStateException("Unable to initialize knowledge Elasticsearch indexes", error);
+      throw new IllegalStateException("Unable to initialize knowledge Elasticsearch index", error);
     }
   }
 
-  public void writeParents(List<KnowledgeParentDocument> documents) {
+  public void writeChunks(List<KnowledgeChunkIndexDocument> documents) {
     if (documents.isEmpty()) return;
     ensureIndexes();
     try {
-      var request =
-          new co.elastic.clients.elasticsearch.core.BulkRequest.Builder()
-              .operations(
-                  documents.stream()
-                      .map(
-                          document ->
-                              BulkOperation.of(
-                                  operation ->
-                                      operation.index(
-                                          index ->
-                                              index.index(properties.elasticsearch().parentIndex())
-                                                  .id(document.id())
-                                                  .document(document))))
-                      .toList())
-              .build();
+      var request = new co.elastic.clients.elasticsearch.core.BulkRequest.Builder()
+          .operations(documents.stream().map(document -> BulkOperation.of(operation ->
+              operation.index(index -> index.index(properties.elasticsearch().chunkIndex())
+                  .id(document.chunkId()).document(document)))).toList())
+          .build();
       var response = client.bulk(request);
-      if (response.errors()) {
-        throw new IllegalStateException("Knowledge parent bulk indexing failed");
-      }
+      if (response.errors()) throw new IllegalStateException("Knowledge chunk bulk indexing failed");
     } catch (IOException error) {
-      throw new IllegalStateException("Unable to write knowledge parent documents", error);
-    }
-  }
-
-  public void writeChildren(List<KnowledgeChildDocument> documents) {
-    if (documents.isEmpty()) return;
-    ensureIndexes();
-    try {
-      var request =
-          new co.elastic.clients.elasticsearch.core.BulkRequest.Builder()
-              .operations(
-                  documents.stream()
-                      .map(
-                          document ->
-                              BulkOperation.of(
-                                  operation ->
-                                      operation.index(
-                                          index ->
-                                              index.index(properties.elasticsearch().childIndex())
-                                                  .id(document.id())
-                                                  .document(document))))
-                      .toList())
-              .build();
-      var response = client.bulk(request);
-      if (response.errors()) {
-        throw new IllegalStateException("Knowledge child bulk indexing failed");
-      }
-    } catch (IOException error) {
-      throw new IllegalStateException("Unable to write knowledge child documents", error);
+      throw new IllegalStateException("Unable to write knowledge chunk documents", error);
     }
   }
 
   public void deleteByDocument(Long userId, String documentId) {
     try {
-      deleteByDocument(properties.elasticsearch().parentIndex(), userId, documentId);
-      deleteByDocument(properties.elasticsearch().childIndex(), userId, documentId);
+      var response = client.deleteByQuery(request -> request
+          .index(properties.elasticsearch().chunkIndex())
+          .ignoreUnavailable(true)
+          .query(query -> query.bool(bool -> bool
+              .filter(filter -> filter.term(term -> term.field("userId").value(userId)))
+              .filter(filter -> filter.term(term -> term.field("documentId").value(documentId))))));
+      if (Boolean.TRUE.equals(response.timedOut())
+          || (response.versionConflicts() != null && response.versionConflicts() > 0)
+          || (response.failures() != null && !response.failures().isEmpty())) {
+        throw new IllegalStateException("Knowledge chunk index cleanup did not complete");
+      }
     } catch (IOException error) {
-      throw new IllegalStateException("Unable to delete knowledge index records", error);
+      throw new IllegalStateException("Unable to delete knowledge chunk index records", error);
     }
   }
 
-  private void deleteByDocument(String index, Long userId, String documentId) throws IOException {
-    var response =
-        client.deleteByQuery(
-        request ->
-            request.index(index)
-                .ignoreUnavailable(true)
-                .query(
-                    query ->
-                        query.bool(
-                            bool ->
-                                bool.filter(
-                                        filter ->
-                                            filter.term(
-                                                term -> term.field("userId").value(userId)))
-                                    .filter(
-                                        filter ->
-                                            filter.term(
-                                                term -> term.field("documentId").value(documentId))))));
-    if (Boolean.TRUE.equals(response.timedOut())
-        || (response.versionConflicts() != null && response.versionConflicts() > 0)
-        || (response.failures() != null && !response.failures().isEmpty())) {
-      throw new IllegalStateException("Knowledge index cleanup did not complete for " + index);
+  public List<KnowledgeKeywordHit> searchKeywords(
+      Long userId, String question, int topK, java.util.Collection<String> documentIds) {
+    if (userId == null || question == null || question.isBlank() || topK <= 0) return List.of();
+    try {
+      SearchResponse<Map> response = client.search(request -> request
+          .index(properties.elasticsearch().chunkIndex())
+          .size(topK)
+          .query(query -> query.bool(bool -> {
+            bool.filter(filter -> filter.term(term -> term.field("userId").value(userId)));
+            bool.filter(filter -> filter.term(term -> term.field("status").value("READY")));
+            if (documentIds != null && !documentIds.isEmpty()) {
+              bool.filter(filter -> filter.terms(terms -> terms.field("documentId")
+                  .terms(values -> values.value(documentIds.stream()
+                      .map(co.elastic.clients.elasticsearch._types.FieldValue::of).toList()))));
+            }
+            bool.should(should -> should.matchPhrase(phrase -> phrase.field("content").query(question).boost(3.0f)));
+            bool.should(should -> should.match(match -> match.field("content").query(question)));
+            bool.minimumShouldMatch("1");
+            return bool;
+          })), Map.class);
+      return response.hits().hits().stream().map(hit -> {
+        Map source = hit.source();
+        return new KnowledgeKeywordHit(
+            hit.id(), stringValue(source, "documentId"), integerValue(source, "chunkIndex"),
+            integerValue(source, "pageNumber"), stringValue(source, "sourceFilename"),
+            stringValue(source, "content"));
+      }).toList();
+    } catch (IOException error) {
+      throw new IllegalStateException("Knowledge keyword search failed", error);
     }
   }
 
-  private void createIfMissing(String index, Map<String, Property> properties) throws IOException {
-    if (client.indices().exists(ExistsRequest.of(request -> request.index(index))).value()) {
-      return;
-    }
-    client.indices().create(request -> request.index(index).mappings(mapping -> mapping.properties(properties)));
+  private static String stringValue(Map source, String key) {
+    return source == null || source.get(key) == null ? null : source.get(key).toString();
   }
 
-  private Map<String, Property> parentProperties() {
-    return Map.of(
-        "userId", Property.of(property -> property.long_(longType -> longType)),
-        "documentId", Property.of(property -> property.keyword(keyword -> keyword)),
-        "sourceFilename", Property.of(property -> property.keyword(keyword -> keyword)),
-        "contentType", Property.of(property -> property.keyword(keyword -> keyword)),
-        "parentIndex", Property.of(property -> property.integer(integer -> integer)),
-        "pageNumber", Property.of(property -> property.integer(integer -> integer)),
-        "content", Property.of(property -> property.text(text -> text)),
-        "status", Property.of(property -> property.keyword(keyword -> keyword)));
+  private static Integer integerValue(Map source, String key) {
+    if (source == null || source.get(key) == null) return null;
+    Object value = source.get(key);
+    return value instanceof Number number ? number.intValue() : Integer.valueOf(value.toString());
   }
 
-  private Map<String, Property> childProperties() {
-    return Map.of(
-        "userId", Property.of(property -> property.long_(longType -> longType)),
-        "documentId", Property.of(property -> property.keyword(keyword -> keyword)),
-        "parentId", Property.of(property -> property.keyword(keyword -> keyword)),
-        "sourceFilename", Property.of(property -> property.keyword(keyword -> keyword)),
-        "contentType", Property.of(property -> property.keyword(keyword -> keyword)),
-        "childIndex", Property.of(property -> property.integer(integer -> integer)),
-        "pageNumber", Property.of(property -> property.integer(integer -> integer)),
-        "content", Property.of(property -> property.text(text -> text)),
-        "embedding",
-        Property.of(
-            property ->
-                property.denseVector(
-                    vector ->
-                        vector.dims(properties.embedding().dimensions())
-                            .index(true)
-                            .similarity("cosine"))),
-        "status", Property.of(property -> property.keyword(keyword -> keyword)));
+  private void createIfMissing(String index) throws IOException {
+    if (client.indices().exists(ExistsRequest.of(request -> request.index(index))).value()) return;
+    client.indices().create(request -> request.index(index)
+        .mappings(mapping -> mapping.properties(Map.of(
+            "userId", Property.of(property -> property.long_(value -> value)),
+            "documentId", Property.of(property -> property.keyword(value -> value)),
+            "chunkId", Property.of(property -> property.keyword(value -> value)),
+            "chunkIndex", Property.of(property -> property.integer(value -> value)),
+            "pageNumber", Property.of(property -> property.integer(value -> value)),
+            "sourceFilename", Property.of(property -> property.text(value -> value)),
+            "content", Property.of(property -> property.text(value -> value)),
+            "status", Property.of(property -> property.keyword(value -> value))))));
   }
 }

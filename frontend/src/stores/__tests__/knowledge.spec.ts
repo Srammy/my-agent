@@ -13,6 +13,7 @@ function document(status: knowledgeApi.KnowledgeDocumentStatus): knowledgeApi.Kn
     status,
     parentCount: status === 'READY' ? 1 : 0,
     childCount: status === 'READY' ? 2 : 0,
+    chunkCount: status === 'READY' ? 2 : 0,
     errorMessage: status === 'FAILED' ? 'parse failed' : null
   }
 }

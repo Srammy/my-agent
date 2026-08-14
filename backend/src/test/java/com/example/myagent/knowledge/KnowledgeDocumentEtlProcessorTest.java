@@ -66,8 +66,9 @@ class KnowledgeDocumentEtlProcessorTest {
                     updated.getId().equals("doc-1")
                         && updated.getUserId().equals(7L)
                         && updated.getStatus() == KnowledgeDocumentStatus.READY
-                        && updated.getParentCount() == 1
-                        && updated.getChildCount() == 2
+                        && updated.getParentCount() == 0
+                        && updated.getChildCount() == 0
+                        && updated.getChunkCount() == 2
                         && updated.getErrorMessage() == null));
     order.verify(storage).deleteIfExists(Path.of(document.getStorageKey()));
   }
@@ -162,16 +163,11 @@ class KnowledgeDocumentEtlProcessorTest {
   }
 
   private static KnowledgeDocumentContent content(Long userId, String documentId) {
-    KnowledgeDocumentContent.ChildDocument firstChild =
-        new KnowledgeDocumentContent.ChildDocument(
-            "doc-1_p_0_c_0", "doc-1_p_0", 0, 1, "first", Map.of());
-    KnowledgeDocumentContent.ChildDocument secondChild =
-        new KnowledgeDocumentContent.ChildDocument(
-            "doc-1_p_0_c_1", "doc-1_p_0", 1, 1, "second", Map.of());
-    KnowledgeDocumentContent.ParentDocument parent =
-        new KnowledgeDocumentContent.ParentDocument(
-            "doc-1_p_0", 0, 1, "first second", Map.of(), List.of(firstChild, secondChild));
+    KnowledgeDocumentContent.ChunkDocument first =
+        new KnowledgeDocumentContent.ChunkDocument("doc-1:0", 0, 1, "first", Map.of());
+    KnowledgeDocumentContent.ChunkDocument second =
+        new KnowledgeDocumentContent.ChunkDocument("doc-1:1", 1, 1, "second", Map.of());
     return new KnowledgeDocumentContent(
-        documentId, userId, "source.pdf", "application/pdf", List.of(parent));
+        documentId, userId, "source.pdf", "application/pdf", List.of(first, second));
   }
 }

@@ -1,13 +1,14 @@
 package com.example.myagent.knowledge.etl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.myagent.config.KnowledgeProperties;
 import java.io.IOException;
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -31,17 +32,30 @@ import org.springframework.util.MimeTypeUtils;
 @Component
 public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader {
 
-  private static final int PARENT_TOKENS = 1600;
-  private static final int CHILD_TOKENS = 400;
-  private static final int CHILD_OVERLAP = 60;
-
   private final ChatModel chatModel;
   private final ObjectMapper objectMapper;
+  private final KnowledgeChunkingService chunkingService;
+
+  public SpringAiKnowledgeDocumentReader(ChatModel chatModel, ObjectMapper objectMapper) {
+    this(chatModel, objectMapper, new KnowledgeChunkingService(defaultProperties()));
+  }
 
   public SpringAiKnowledgeDocumentReader(
-      @Qualifier("knowledgeMultimodalChatModel") ChatModel chatModel, ObjectMapper objectMapper) {
+      @Qualifier("knowledgeMultimodalChatModel") ChatModel chatModel,
+      ObjectMapper objectMapper,
+      KnowledgeChunkingService chunkingService) {
     this.chatModel = chatModel;
     this.objectMapper = objectMapper;
+    this.chunkingService = chunkingService;
+  }
+
+  private static KnowledgeProperties defaultProperties() {
+    return new KnowledgeProperties(
+        new KnowledgeProperties.Embedding("test", "embedding", 2, "KEY"),
+        new KnowledgeProperties.Multimodal("test", "vision", "KEY"),
+        new KnowledgeProperties.Elasticsearch("http://localhost:9200", "", "", "chunks"),
+        new KnowledgeProperties.Kafka("topic", "group", "localhost:9092"),
+        new KnowledgeProperties.Storage("target"));
   }
 
   @Override
@@ -55,14 +69,25 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
             userId,
             sourceFilename,
             contentType,
-            split(documentId, userId, sourceFilename, contentType, extractMultimodal(media), 1));
+            chunkingService.chunk(
+                documentId, userId, sourceFilename, contentType, extractMultimodal(media), 1, 0));
       }
-      List<KnowledgeDocumentContent.ParentDocument> parents = new ArrayList<>();
+      List<KnowledgeDocumentContent.ChunkDocument> chunks = new ArrayList<>();
+      int nextChunkIndex = 0;
       for (TextSection section : readText(source, sourceFilename)) {
-        parents.addAll(
-            split(documentId, userId, sourceFilename, contentType, section.text(), section.pageNumber()));
+        List<KnowledgeDocumentContent.ChunkDocument> pageChunks =
+            chunkingService.chunk(
+                documentId,
+                userId,
+                sourceFilename,
+                contentType,
+                section.text(),
+                section.pageNumber(),
+                nextChunkIndex);
+        chunks.addAll(pageChunks);
+        nextChunkIndex += pageChunks.size();
       }
-      return new KnowledgeDocumentContent(documentId, userId, sourceFilename, contentType, parents);
+      return new KnowledgeDocumentContent(documentId, userId, sourceFilename, contentType, chunks);
     } catch (KnowledgeDocumentEtlException error) {
       throw error;
     } catch (Exception error) {
@@ -167,78 +192,6 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
           : normalized.substring(3, normalized.length() - 3);
     }
     return normalized.strip();
-  }
-
-  private List<KnowledgeDocumentContent.ParentDocument> split(
-      String documentId,
-      Long userId,
-      String filename,
-      String contentType,
-      String text,
-      Integer pageNumber) {
-    List<String> parentTokens = tokens(text);
-    List<KnowledgeDocumentContent.ParentDocument> parents = new ArrayList<>();
-    for (int parentStart = 0, parentIndex = 0;
-        parentStart < parentTokens.size();
-        parentStart += PARENT_TOKENS, parentIndex++) {
-      int parentEnd = Math.min(parentTokens.size(), parentStart + PARENT_TOKENS);
-      String parentText = join(parentTokens.subList(parentStart, parentEnd));
-      String parentId = documentId + "_p_" + parentIndex;
-      List<KnowledgeDocumentContent.ChildDocument> children = new ArrayList<>();
-      int childIndex = 0;
-      for (int childStart = parentStart; childStart < parentEnd; childStart += CHILD_TOKENS - CHILD_OVERLAP) {
-        int childEnd = Math.min(parentEnd, childStart + CHILD_TOKENS);
-        String childText = join(parentTokens.subList(childStart, childEnd));
-        Map<String, Object> metadata =
-            metadata(userId, documentId, filename, contentType, parentIndex, childIndex, pageNumber);
-        children.add(
-            new KnowledgeDocumentContent.ChildDocument(
-                parentId + "_c_" + childIndex,
-                parentId,
-                childIndex,
-                pageNumber,
-                childText,
-                metadata));
-        childIndex++;
-        if (childEnd == parentEnd) break;
-      }
-      parents.add(
-          new KnowledgeDocumentContent.ParentDocument(
-              parentId,
-              parentIndex,
-              pageNumber,
-              parentText,
-              metadata(userId, documentId, filename, contentType, parentIndex, null, pageNumber),
-              children));
-    }
-    return parents;
-  }
-
-  private static Map<String, Object> metadata(
-      Long userId,
-      String documentId,
-      String filename,
-      String contentType,
-      int parentIndex,
-      Integer childIndex,
-      Integer pageNumber) {
-    Map<String, Object> metadata = new HashMap<>();
-    metadata.put("userId", userId);
-    metadata.put("documentId", documentId);
-    metadata.put("sourceFilename", filename);
-    metadata.put("contentType", contentType);
-    metadata.put("parentIndex", parentIndex);
-    if (pageNumber != null) metadata.put("pageNumber", pageNumber);
-    if (childIndex != null) metadata.put("childIndex", childIndex);
-    return metadata;
-  }
-
-  private static List<String> tokens(String text) {
-    return List.of(text.replaceAll("\\s+", " ").trim().split(" "));
-  }
-
-  private static String join(List<String> tokens) {
-    return String.join(" ", tokens).strip();
   }
 
   private static boolean isImage(String contentType) {

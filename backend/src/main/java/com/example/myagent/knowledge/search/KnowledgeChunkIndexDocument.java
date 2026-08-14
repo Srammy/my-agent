@@ -1,12 +1,11 @@
 package com.example.myagent.knowledge.search;
 
-public record KnowledgeParentDocument(
-    String id,
+public record KnowledgeChunkIndexDocument(
+    String chunkId,
     Long userId,
     String documentId,
-    String sourceFilename,
-    String contentType,
-    int parentIndex,
+    int chunkIndex,
     Integer pageNumber,
+    String sourceFilename,
     String content,
     String status) {}
