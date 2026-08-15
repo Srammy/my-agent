@@ -53,7 +53,7 @@ describe('KnowledgePanel', () => {
     expect(wrapper.text()).not.toContain('0 B')
   })
 
-  it('renders failed document errors and polls processing documents', async () => {
+  it('hides failed document error details and polls processing documents', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify([processing]), {
         status: 200,
@@ -66,10 +66,10 @@ describe('KnowledgePanel', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const wrapper = mount(KnowledgePanel, { global: { plugins: [ElementPlus] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('解析失败'), { timeout: 3000 })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('FAILED'), { timeout: 3000 })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(wrapper.text()).toContain('FAILED')
+    expect(wrapper.text()).not.toContain('解析失败')
   })
 
   it('deletes a document after confirmation', async () => {

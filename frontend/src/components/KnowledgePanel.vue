@@ -140,7 +140,6 @@ function createdAtLabel(createdAt: string) {
           <span>{{ sizeLabel(document.sizeBytes) }}</span>
           <span>Chunk {{ document.chunkCount }}</span>
         </div>
-        <p v-if="document.errorMessage" class="panel-error">{{ document.errorMessage }}</p>
       </article>
     </div>
   </section>
