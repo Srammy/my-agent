@@ -84,6 +84,44 @@ describe('ChatTranscript auto scroll', () => {
     expect(content).not.toContain('skills/_drafts/')
   })
 
+  it('collapses assistant references and expands them on demand', async () => {
+    const wrapper = mount(ChatTranscript, {
+      props: {
+        messages: [message('m1', '回答内容\n\n参考来源：\n- guide.pdf，第 1 页\n- guide.pdf，第 2 页')],
+        loading: false,
+        hasSession: true,
+        sessionId: 's1'
+      },
+      global: { stubs: { ToolEventCard: true } }
+    })
+
+    const references = wrapper.get('.message-references')
+
+    expect(wrapper.get('.message-bubble__content').text()).toBe('回答内容')
+    expect(references.get('summary').text()).toContain('参考来源（2 条）')
+    expect(references.attributes('open')).toBeUndefined()
+    expect(references.findAll('li')).toHaveLength(2)
+
+    await references.get('summary').trigger('click')
+
+    expect(references.attributes('open')).toBeDefined()
+  })
+
+  it('hides references when the knowledge answer cannot be determined', () => {
+    const wrapper = mount(ChatTranscript, {
+      props: {
+        messages: [message('m1', '无法从知识库确定如何进行品牌营销。\n\n参考来源：\n- python.pdf，第 1 页')],
+        loading: false,
+        hasSession: true,
+        sessionId: 's1'
+      },
+      global: { stubs: { ToolEventCard: true } }
+    })
+
+    expect(wrapper.get('.message-bubble__content').text()).toContain('无法从知识库确定')
+    expect(wrapper.find('.message-references').exists()).toBe(false)
+  })
+
   it('does not force scroll when the user has scrolled up', async () => {
     const wrapper = mount(ChatTranscript, {
       props: { messages: [message('m1', 'hello')], loading: false, hasSession: true, sessionId: 's1' },

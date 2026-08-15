@@ -93,7 +93,6 @@ function createdAtLabel(createdAt: string) {
     <div class="panel-row knowledge-panel__header">
       <div>
         <strong>个人知识库</strong>
-        <p>文档会异步解析、切分并建立检索索引。</p>
       </div>
       <el-button type="primary" size="small" :loading="knowledge.uploading" @click="chooseFile">
         上传文档

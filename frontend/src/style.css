@@ -608,6 +608,29 @@ body.chat-resizing * {
   white-space: pre-wrap;
 }
 
+.message-references {
+  margin-top: 12px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 8px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.message-references summary {
+  cursor: pointer;
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.message-references ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.message-references li {
+  margin: 4px 0;
+}
+
 .message-bubble__muted,
 .chat-transcript__status {
   color: #64748b;

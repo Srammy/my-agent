@@ -36,6 +36,7 @@ describe('KnowledgePanel', () => {
 
     expect(wrapper.text()).toContain('Chunk 7')
     expect(wrapper.text()).toContain('上传时间 2026-08-09 12:18')
+    expect(wrapper.text()).not.toContain('文档会异步解析、切分并建立检索索引。')
   })
 
   it('shows unknown when the stored document size is zero', async () => {

@@ -26,6 +26,7 @@ import org.apache.pdfbox.rendering.PDFRenderer;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
@@ -40,6 +41,7 @@ public class SpringAiKnowledgeDocumentReader implements KnowledgeDocumentReader 
     this(chatModel, objectMapper, new KnowledgeChunkingService(defaultProperties()));
   }
 
+  @Autowired
   public SpringAiKnowledgeDocumentReader(
       @Qualifier("knowledgeMultimodalChatModel") ChatModel chatModel,
       ObjectMapper objectMapper,

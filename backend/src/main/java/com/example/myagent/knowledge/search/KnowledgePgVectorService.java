@@ -6,6 +6,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class KnowledgePgVectorService {
 
+  private static final int EMBEDDING_BATCH_SIZE = 10;
   private final VectorStore vectorStore;
   private final JdbcTemplate jdbcTemplate;
 
@@ -42,9 +45,16 @@ public class KnowledgePgVectorService {
       metadata.putAll(chunk.metadata());
       metadata.put("chunkId", chunk.chunkId());
       metadata.put("chunkIndex", chunk.chunkIndex());
-      documents.add(Document.builder().id(chunk.chunkId()).text(chunk.text()).metadata(metadata).build());
+      documents.add(Document.builder()
+          .id(vectorDocumentId(chunk.chunkId()))
+          .text(chunk.text())
+          .metadata(metadata)
+          .build());
     }
-    vectorStore.add(documents);
+    for (int start = 0; start < documents.size(); start += EMBEDDING_BATCH_SIZE) {
+      int end = Math.min(start + EMBEDDING_BATCH_SIZE, documents.size());
+      vectorStore.add(documents.subList(start, end));
+    }
   }
 
   public List<KnowledgeVectorHit> search(
@@ -59,13 +69,17 @@ public class KnowledgePgVectorService {
         .filter(document -> documentIds == null || documentIds.isEmpty()
             || documentIds.contains(String.valueOf(document.getMetadata().get("documentId"))))
         .map(document -> new KnowledgeVectorHit(
-            document.getId(),
+            stringValue(document.getMetadata(), "chunkId"),
             stringValue(document.getMetadata(), "documentId"),
             integerValue(document.getMetadata(), "chunkIndex"),
             integerValue(document.getMetadata(), "pageNumber"),
             stringValue(document.getMetadata(), "sourceFilename"),
             document.getText()))
         .toList();
+  }
+
+  private static String vectorDocumentId(String chunkId) {
+    return UUID.nameUUIDFromBytes(chunkId.getBytes(StandardCharsets.UTF_8)).toString();
   }
 
   private static String stringValue(Map<String, Object> metadata, String key) {

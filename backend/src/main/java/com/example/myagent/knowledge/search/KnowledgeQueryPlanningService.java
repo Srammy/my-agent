@@ -9,6 +9,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
@@ -19,6 +20,7 @@ public class KnowledgeQueryPlanningService {
   private final ChatModel chatModel;
   private final ObjectMapper objectMapper;
 
+  @Autowired
   public KnowledgeQueryPlanningService(
       @Qualifier("knowledgeMultimodalChatModel") ObjectProvider<ChatModel> chatModels,
       ObjectMapper objectMapper) {

@@ -8,7 +8,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.flyway.FlywayMigrationInitializer;
 
 @Configuration
 public class KnowledgePostgresConfiguration {
@@ -47,14 +47,16 @@ public class KnowledgePostgresConfiguration {
     return Flyway.configure()
         .dataSource(dataSource)
         .schemas(postgres.schema())
+        .baselineOnMigrate(true)
+        .baselineVersion("0")
         .locations("classpath:" + postgres.migrationLocations())
         .load();
   }
 
-  @Bean
-  ApplicationRunner knowledgePostgresqlMigrationRunner(
+  @Bean(name = "knowledgePostgresqlFlywayInitializer")
+  FlywayMigrationInitializer knowledgePostgresqlMigrationInitializer(
       @org.springframework.beans.factory.annotation.Qualifier("knowledgePostgresqlFlyway")
           Flyway flyway) {
-    return args -> flyway.migrate();
+    return new FlywayMigrationInitializer(flyway);
   }
 }

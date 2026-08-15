@@ -1,48 +1,33 @@
 # Task 1 Report
 
-## Tests
+## Status
 
-Attempted the briefed focused test:
-
-```powershell
-$env:JAVA_HOME='C:\Program Files\Java\latest\jdk-21'
-$env:Path="$env:JAVA_HOME\bin;$env:Path"
-mvn -q -Dtest=KnowledgeConfigurationTest test
-```
-
-Result: blocked by dependency resolution before compilation. Maven could not resolve the parent POM
-`org.springframework.boot:spring-boot-starter-parent:3.3.5` from the configured Aliyun repository because the sandbox denied network access.
-
-Static check:
-
-```powershell
-git diff --check -- backend/pom.xml backend/src/main/resources/application.yml docker-compose.yml backend/src/main/java/com/example/myagent/config/KnowledgeProperties.java backend/src/test/java/com/example/myagent/knowledge/KnowledgeConfigurationTest.java
-```
-
-Result: passed. No whitespace or conflict-marker issues were reported.
+DONE_WITH_CONCERNS
 
 ## Commit
 
-- SHA: `22b5a5d`
-- Title: `feat: configure rag infrastructure`
+- SHA: `a5e3727`
+- Title: `feat: add postgres knowledge infrastructure`
 
 ## Files
 
-This task touches exactly these files:
-
 - `backend/pom.xml`
-- `backend/src/main/resources/application.yml`
-- `docker-compose.yml`
 - `backend/src/main/java/com/example/myagent/config/KnowledgeProperties.java`
+- `backend/src/main/java/com/example/myagent/config/KnowledgeRetrievalProperties.java`
+- `backend/src/main/java/com/example/myagent/config/KnowledgePostgresConfiguration.java`
+- `backend/src/main/resources/application.yml`
 - `backend/src/test/java/com/example/myagent/knowledge/KnowledgeConfigurationTest.java`
+- `docker-compose.yml`
 
-## Checks
+## Tests
 
-- `KnowledgeProperties` is bound through Spring Boot configuration-properties scanning.
-- Default values are set for `parentIndex`, `childIndex`, Kafka topic/group, and model fields.
-- Elasticsearch 8.x and Kafka KRaft services use persistent volumes and the private `rag_private` network without publishing host ports.
+TDD red test attempt: `mvn -q -Dtest=KnowledgeConfigurationTest test`.
+
+Result: failed before compilation because the sandbox could not resolve the Spring Boot 3.3.5 parent POM from the configured Aliyun repository (`Permission denied: getsockopt`).
+
+Static checks: `git diff --check` and `docker compose config` both completed successfully. Docker Compose rendered the new postgres service, health check, volume, backend dependency and environment variables.
 
 ## Concerns
 
-- Maven could not download the parent POM in this sandbox, so the focused test did not reach compilation.
-- No secrets were added to source or configuration.
+- Maven dependency resolution remains blocked by the sandbox network; compile verification is pending an escalated/network-enabled run.
+- PgVector starter is intentionally not added yet. It will be added with the explicit PostgreSQL-backed PgVector bean in Task 4, preventing accidental auto-connection to MySQL.
