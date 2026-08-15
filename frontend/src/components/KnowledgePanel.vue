@@ -84,7 +84,14 @@ function sizeLabel(size: number | null) {
 }
 
 function createdAtLabel(createdAt: string) {
-  return createdAt.replace('T', ' ').slice(0, 16)
+  const value = /(?:Z|[+-]\d{2}:?\d{2})$/.test(createdAt) ? createdAt : `${createdAt}Z`
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return createdAt.replace('T', ' ').slice(0, 16)
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+    dateStyle: 'short',
+    timeStyle: 'short'
+  }).format(date)
 }
 </script>
 

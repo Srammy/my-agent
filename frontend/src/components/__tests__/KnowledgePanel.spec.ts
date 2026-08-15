@@ -7,7 +7,7 @@ import KnowledgePanel from '../KnowledgePanel.vue'
 const processing = {
   id: 'doc-1',
   originalFilename: 'guide.md',
-  createdAt: '2026-08-09T12:18:00',
+  createdAt: '2026-08-09T04:18:00',
   contentType: 'text/markdown',
   sizeBytes: 12,
   status: 'PROCESSING',
