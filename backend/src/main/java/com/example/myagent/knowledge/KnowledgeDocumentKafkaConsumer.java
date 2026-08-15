@@ -1,6 +1,7 @@
 package com.example.myagent.knowledge;
 
 import com.example.myagent.knowledge.messaging.KnowledgeDocumentProcessMessage;
+import com.example.myagent.knowledge.etl.KnowledgeDocumentNonRetryableException;
 import org.springframework.kafka.annotation.DltHandler;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.annotation.RetryableTopic;
@@ -20,7 +21,8 @@ public class KnowledgeDocumentKafkaConsumer {
   @RetryableTopic(
       attempts = "${knowledge.kafka.max-attempts:5}",
       autoCreateTopics = "true",
-      dltTopicSuffix = ".DLT")
+      dltTopicSuffix = ".DLT",
+      exclude = {KnowledgeDocumentNonRetryableException.class})
   @KafkaListener(
       topics = "${knowledge.kafka.topic}",
       groupId = "${knowledge.kafka.group}")

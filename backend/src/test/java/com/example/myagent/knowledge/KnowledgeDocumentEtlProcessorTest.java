@@ -18,6 +18,7 @@ import com.example.myagent.knowledge.document.KnowledgeDocumentStatus;
 import com.example.myagent.knowledge.document.KnowledgeDocumentStorage;
 import com.example.myagent.knowledge.etl.KnowledgeDocumentContent;
 import com.example.myagent.knowledge.etl.KnowledgeDocumentEtlException;
+import com.example.myagent.knowledge.etl.KnowledgeDocumentNonRetryableException;
 import com.example.myagent.knowledge.KnowledgeDocumentCleanupService;
 import com.example.myagent.knowledge.KnowledgeDocumentEtlProcessor;
 import com.example.myagent.knowledge.etl.KnowledgeDocumentReader;
@@ -100,6 +101,29 @@ class KnowledgeDocumentEtlProcessorTest {
     verify(cleanupService, org.mockito.Mockito.times(2)).cleanup(7L, "doc-1");
     verify(documentMapper, never()).updateById(any(KnowledgeDocumentEntity.class));
     verify(storage, never()).deleteIfExists(any());
+  }
+
+  @Test
+  void marksMultimodalQuotaFailureAsNonRetryable() {
+    KnowledgeDocumentMapper documentMapper = mock(KnowledgeDocumentMapper.class);
+    KnowledgeDocumentStorage storage = mock(KnowledgeDocumentStorage.class);
+    KnowledgeDocumentReader reader = mock(KnowledgeDocumentReader.class);
+    KnowledgeIndexService indexService = mock(KnowledgeIndexService.class);
+    KnowledgeDocumentCleanupService cleanupService = mock(KnowledgeDocumentCleanupService.class);
+    KnowledgeDocumentEntity document = document(7L, "doc-1");
+    when(documentMapper.findOwnedById(7L, "doc-1")).thenReturn(document);
+    when(reader.read(any(), eq(7L), eq("doc-1"), eq("source.pdf"), eq("application/pdf")))
+        .thenThrow(
+            new IllegalStateException(
+                "403 AllocationQuota.FreeTierOnly: Free quota exhausted"));
+
+    KnowledgeDocumentEtlProcessor processor =
+        new KnowledgeDocumentEtlProcessor(
+            documentMapper, storage, reader, indexService, cleanupService);
+
+    assertThatThrownBy(() -> processor.process(new KnowledgeDocumentProcessMessage("doc-1", 7L)))
+        .isInstanceOf(KnowledgeDocumentNonRetryableException.class)
+        .hasMessageContaining("AllocationQuota.FreeTierOnly");
   }
 
   @Test

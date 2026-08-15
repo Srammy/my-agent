@@ -6,6 +6,7 @@ import com.example.myagent.knowledge.document.KnowledgeDocumentStatus;
 import com.example.myagent.knowledge.document.KnowledgeDocumentStorage;
 import com.example.myagent.knowledge.etl.KnowledgeDocumentContent;
 import com.example.myagent.knowledge.etl.KnowledgeDocumentEtlException;
+import com.example.myagent.knowledge.etl.KnowledgeDocumentNonRetryableException;
 import com.example.myagent.knowledge.etl.KnowledgeDocumentReader;
 import com.example.myagent.knowledge.messaging.KnowledgeDocumentProcessMessage;
 import com.example.myagent.knowledge.search.KnowledgeIndexService;
@@ -54,6 +55,12 @@ public class KnowledgeDocumentEtlProcessor {
       indexService.index(content);
     } catch (RuntimeException error) {
       cleanupService.cleanup(message.userId(), message.documentId());
+      if (isMultimodalQuotaFailure(error)) {
+        throw new KnowledgeDocumentNonRetryableException(
+            "Multimodal OCR provider quota or permission is unavailable: "
+                + rootMessage(error),
+            error);
+      }
       throw new KnowledgeDocumentEtlException("Knowledge document ETL failed", error);
     }
 
@@ -109,5 +116,29 @@ public class KnowledgeDocumentEtlProcessor {
   private static String shortMessage(Throwable error) {
     String message = error == null || error.getMessage() == null ? "Unknown ETL failure" : error.getMessage();
     return message.length() > 2000 ? message.substring(0, 2000) : message;
+  }
+
+  private static boolean isMultimodalQuotaFailure(Throwable error) {
+    Throwable current = error;
+    while (current != null) {
+      String message = current.getMessage();
+      if (message != null
+          && (message.contains("AllocationQuota.FreeTierOnly")
+              || message.contains("Free quota exhausted"))) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
+  private static String rootMessage(Throwable error) {
+    Throwable current = error;
+    Throwable deepest = error;
+    while (current != null) {
+      deepest = current;
+      current = current.getCause();
+    }
+    return deepest.getMessage() == null ? "unknown provider error" : deepest.getMessage();
   }
 }
