@@ -10,7 +10,9 @@ RUN mvn -B -q -DskipTests package
 FROM eclipse-temurin:21-jre
 WORKDIR /app
 
-RUN useradd -r -u 10001 appuser
+RUN useradd -r -u 10001 appuser \
+    && mkdir -p /app/.knowledge \
+    && chown -R appuser:appuser /app/.knowledge
 
 COPY --from=build /app/target/*.jar /app/app.jar
 

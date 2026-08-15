@@ -8,9 +8,10 @@ function session(id: string, title = id): ChatSession {
   return {
     id,
     title,
+    mode: id === 'kb' ? 'KNOWLEDGE' : 'NORMAL',
     createdAt: '2026-07-18T00:00:00Z',
     updatedAt: '2026-07-18T00:00:00Z'
-  }
+  } as ChatSession
 }
 
 function mountSidebar() {
@@ -28,6 +29,23 @@ function mountSidebar() {
 }
 
 describe('SessionSidebar', () => {
+  it('labels normal and knowledge sessions in the session list', () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        sessions: [session('normal', 'Chat'), session('kb', 'Docs')],
+        currentSessionId: 'normal',
+        loading: false,
+        deletingSessionId: '',
+        renamingSessionId: '',
+        cancellingSessionIds: {}
+      },
+      global: { plugins: [ElementPlus] }
+    })
+
+    expect(wrapper.text()).toContain('普通对话')
+    expect(wrapper.text()).toContain('知识库问答')
+  })
+
   it('enters rename mode and emits rename on Enter', async () => {
     const wrapper = mountSidebar()
 

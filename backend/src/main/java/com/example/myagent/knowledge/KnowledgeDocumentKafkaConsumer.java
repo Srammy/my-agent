@@ -1,0 +1,42 @@
+package com.example.myagent.knowledge;
+
+import com.example.myagent.knowledge.messaging.KnowledgeDocumentProcessMessage;
+import com.example.myagent.knowledge.etl.KnowledgeDocumentNonRetryableException;
+import org.springframework.kafka.annotation.DltHandler;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.annotation.RetryableTopic;
+import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.stereotype.Component;
+
+@Component
+public class KnowledgeDocumentKafkaConsumer {
+
+  private final KnowledgeDocumentEtlProcessor processor;
+
+  public KnowledgeDocumentKafkaConsumer(KnowledgeDocumentEtlProcessor processor) {
+    this.processor = processor;
+  }
+
+  @RetryableTopic(
+      attempts = "${knowledge.kafka.max-attempts:5}",
+      autoCreateTopics = "true",
+      dltTopicSuffix = ".DLT",
+      exclude = {KnowledgeDocumentNonRetryableException.class})
+  @KafkaListener(
+      topics = "${knowledge.kafka.topic}",
+      groupId = "${knowledge.kafka.group}")
+  public void consume(KnowledgeDocumentProcessMessage message) {
+    processor.process(message);
+  }
+
+  @DltHandler
+  public void consumeDeadLetter(
+      KnowledgeDocumentProcessMessage message,
+      @Header(name = KafkaHeaders.DLT_EXCEPTION_MESSAGE, required = false) String errorMessage) {
+    processor.markFailed(
+        message,
+        new IllegalStateException(
+            errorMessage == null || errorMessage.isBlank() ? "Kafka ETL retries exhausted" : errorMessage));
+  }
+}

@@ -33,8 +33,9 @@ public class SessionController {
     return Mono.fromCallable(
             () ->
                 ChatSessionDto.fromEntity(
-                    sessionService.createSession(
-                        currentUser, request != null ? request.title() : null)))
+                    request == null || request.mode() == null
+                        ? sessionService.createSession(currentUser, request != null ? request.title() : null)
+                        : sessionService.createSession(currentUser, request.title(), request.mode())))
         .subscribeOn(Schedulers.boundedElastic());
   }
 

@@ -92,6 +92,6 @@ async function saveMode(nextMode: PermissionMode) {
     </el-select>
 
     <p v-if="!compact && !sessionId" class="panel-muted">选择或创建会话后可调整权限。</p>
-    <p v-if="error" class="panel-error">{{ error }}</p>
+    <p v-if="error && !compact" class="panel-error">{{ error }}</p>
   </section>
 </template>

@@ -26,6 +26,67 @@ services:
       timeout: 5s
       retries: 10
 
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${KNOWLEDGE_POSTGRES_DATABASE:-myagent_knowledge}
+      POSTGRES_USER: ${KNOWLEDGE_POSTGRES_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${KNOWLEDGE_POSTGRES_PASSWORD:?Set KNOWLEDGE_POSTGRES_PASSWORD in .env}
+    volumes:
+      - knowledge_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rag_private
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+    networks:
+      - rag_private
+
+  kafka:
+    image: bitnamilegacy/kafka:3.9.0-debian-12-r12
+    environment:
+      KAFKA_ENABLE_KRAFT: "yes"
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_CFG_NUM_PARTITIONS: 1
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_KRAFT_CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka_data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+    networks:
+      - rag_private
+
   backend:
     build:
       context: ./backend
@@ -33,6 +94,25 @@ services:
       SPRING_PROFILES_ACTIVE: docker
       SECURITY_JWT_SECRET: ${SECURITY_JWT_SECRET:?Set SECURITY_JWT_SECRET in .env}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      KNOWLEDGE_EMBEDDING_API_KEY: ${DASHSCOPE_API_KEY:-}
+      KNOWLEDGE_EMBEDDING_BASE_URL: ${KNOWLEDGE_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode}
+      KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-text-embedding-v4}
+      KNOWLEDGE_MULTIMODAL_PROVIDER: ${KNOWLEDGE_MULTIMODAL_PROVIDER:-dashscope}
+      KNOWLEDGE_MULTIMODAL_MODEL: ${KNOWLEDGE_MULTIMODAL_MODEL:-qwen3.7-plus}
+      KNOWLEDGE_MULTIMODAL_API_KEY_ENV: ${KNOWLEDGE_MULTIMODAL_API_KEY_ENV:-DASHSCOPE_API_KEY}
+      KNOWLEDGE_RETRIEVAL_MIN_RRF_SCORE: ${KNOWLEDGE_RETRIEVAL_MIN_RRF_SCORE:-0.02}
+      KNOWLEDGE_RETRIEVAL_TOP_K: ${KNOWLEDGE_RETRIEVAL_TOP_K:-8}
+      KNOWLEDGE_RETRIEVAL_CHANNEL_TOP_K: ${KNOWLEDGE_RETRIEVAL_CHANNEL_TOP_K:-50}
+      KNOWLEDGE_RETRIEVAL_RRF_K: ${KNOWLEDGE_RETRIEVAL_RRF_K:-60}
+      KNOWLEDGE_RETRIEVAL_NEIGHBOR_WINDOW: ${KNOWLEDGE_RETRIEVAL_NEIGHBOR_WINDOW:-1}
+      KNOWLEDGE_QUERY_PLANNING_ENABLED: ${KNOWLEDGE_QUERY_PLANNING_ENABLED:-true}
+      KNOWLEDGE_POSTGRES_HOST: ${KNOWLEDGE_POSTGRES_HOST:-postgres}
+      KNOWLEDGE_POSTGRES_PORT: ${KNOWLEDGE_POSTGRES_PORT:-5432}
+      KNOWLEDGE_POSTGRES_DATABASE: ${KNOWLEDGE_POSTGRES_DATABASE:-myagent_knowledge}
+      KNOWLEDGE_POSTGRES_USERNAME: ${KNOWLEDGE_POSTGRES_USERNAME:-postgres}
+      KNOWLEDGE_POSTGRES_PASSWORD: ${KNOWLEDGE_POSTGRES_PASSWORD:?Set KNOWLEDGE_POSTGRES_PASSWORD in .env}
+      KNOWLEDGE_PGVECTOR_TABLE: ${KNOWLEDGE_PGVECTOR_TABLE:-vector_store}
+      KNOWLEDGE_PGVECTOR_DIMENSIONS: ${KNOWLEDGE_PGVECTOR_DIMENSIONS:-1024}
       AGENT_SCOPE_ENABLED: ${AGENT_SCOPE_ENABLED:-false}
       AGENT_MODEL_PROVIDER: ${AGENT_MODEL_PROVIDER:-dashscope}
       AGENT_MODEL_NAME: ${AGENT_MODEL_NAME:-dashscope:qwen-plus}
@@ -49,13 +129,24 @@ services:
       REDIS_DATABASE: ${REDIS_DATABASE:-0}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
       AGENT_STATE_STORE_REDIS_URI: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
+    volumes:
+      - knowledge_data:/app/.knowledge
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     ports:
       - "8080:8080"
+    networks:
+      - default
+      - rag_private
 
   frontend:
     build:
@@ -63,8 +154,16 @@ services:
     depends_on:
       - backend
     ports:
-      - "5173:80"
+      - "127.0.0.1:5173:80"
 
 volumes:
   mysql_data:
   redis_data:
+  elasticsearch_data:
+  kafka_data:
+  knowledge_data:
+  knowledge_postgres_data:
+
+networks:
+  rag_private:
+    internal: true

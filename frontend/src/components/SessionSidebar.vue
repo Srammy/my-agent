@@ -64,6 +64,10 @@ function formatDate(value: string) {
     minute: '2-digit'
   })
 }
+
+function modeLabel(mode: ChatSession['mode']) {
+  return mode === 'KNOWLEDGE' ? '知识库问答' : '普通对话'
+}
 </script>
 
 <template>
@@ -103,6 +107,7 @@ function formatDate(value: string) {
             @keyup.esc.stop.prevent="cancelRename"
           />
           <strong v-else>{{ session.title || '新会话' }}</strong>
+          <small class="session-item__mode">{{ modeLabel(session.mode) }}</small>
           <small>{{ formatDate(session.updatedAt) }}</small>
         </span>
         <span class="session-item__actions">

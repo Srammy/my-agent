@@ -1,0 +1,248 @@
+# 个人知识库 RAG 设计
+
+## 目标
+
+在现有 MyAgent 中增加按用户隔离的个人知识库：用户上传文档后，系统使用 Spring AI 读取和切分文档，生成父子文档并写入 Elasticsearch 8.x；知识库问答使用 Elasticsearch 的关键词检索和向量检索，经原生 RRF 融合后，将命中的父文档上下文交给现有普通 Agent 生成回答。没有检索到可用内容时不调用 Agent 生成自由回答。
+
+## 已确认的产品行为
+
+- 左侧会话列表展示会话名称和模式：`普通对话` 或 `知识库问答`。
+- 会话创建时选择模式，创建后模式固定；切换会话时同步切换回答策略。
+- 右侧顶层保留 `Skill` 和 `知识库` 两个 tab。
+- `知识库` 下只保留一个 `知识库` 子 tab，用于上传文档和查看文档处理状态。
+- 知识库问答仍使用普通 Agent 能力，但只能使用检索得到的个人文档上下文。
+- 知识库问答未检索到内容时显示固定提示，不让 Agent 自由回答。
+- 文档、父文档、子文档、检索和会话都必须按当前登录用户隔离。
+
+## 技术方案
+
+### 文档处理
+
+使用 Spring AI 的 ETL 文档模型：
+
+1. 上传接口接收 PDF、DOCX、TXT 和 Markdown 文件，并为上传生成后端文档 ID。
+2. 使用 `TikaDocumentReader` 将文件读取为 Spring AI `Document`，保留来源文件名等元数据。
+3. 将读取结果按逻辑上下文组装为父文档。一个父文档约 1,500～2,000 个 token，边界优先在标题、段落和页面边界处确定。
+4. 对每个父文档使用 Spring AI `TokenTextSplitter` 生成子文档，子文档约 300～500 个 token，重叠约 50～80 个 token；长段落在句子边界处切分。
+5. 为每个父文档和子文档写入以下元数据：`userId`、`documentId`、`parentId`、`chunkIndex`、`sourceFilename`、`status`。
+6. 使用 Spring AI `EmbeddingModel` 调用 DashScope `text-embedding-v4`，固定输出 1024 维向量，对子文档批量生成向量；只将子文档写入检索索引，父文档保留完整上下文，供命中后回取。
+
+上传接口与 ETL 解耦。上传请求只保存原文件、创建 `PROCESSING` 文档记录和 Outbox 任务记录，返回 202；Outbox Relay 将任务可靠投递到 Kafka，Kafka Consumer 负责读取、父子切分、向量化和 Elasticsearch 写入。处理成功后状态变为 `READY`，失败后变为 `FAILED`。
+
+### OCR、图片和表格抽取
+
+ETL 同时处理文本、图片和表格内容：
+
+1. 对可直接解析的 PDF、DOCX、TXT 和 Markdown，优先使用 Spring AI 的文档 Reader 获取文本和已有元数据。
+2. 对扫描 PDF 页面、独立图片或文本密度不足的页面，将页面渲染为图片，通过 Spring AI 多模态 `ChatModel` 的 `Media` 输入执行 OCR 和图片内容理解。
+3. 对检测到的表格，要求多模态模型返回结构化 `TableExtraction`：表头、列定义、行数据、页码和置信说明；同时将表格转换为带表头的 Markdown 文本，供关键词和向量检索。
+4. 使用 Spring AI 结构化输出将模型结果映射为 Java record，并执行 schema 校验；无法解析的结果抛出异常交给 Kafka 重试，不能把不完整 JSON 当作成功结果。
+5. 图片描述、OCR 文本和表格 Markdown 进入父文档内容；原始表格 JSON 作为 `structuredContent` 保存到父文档，子文档继承 `contentType`、页码和来源元数据。
+6. 表格切分时保持表头与行数据在同一父文档上下文内；长表格按“表头 + 行分组”生成多个父文档，避免子文档失去列含义。
+
+多模态模型不可用时，纯文本文件仍可正常处理；包含扫描页、图片或表格的文件会进入 `FAILED`，并在文档列表中展示“多模态模型不可用”，不静默丢弃视觉内容。
+
+父子关系使用应用层 `parentId` 逻辑关联，不使用 Elasticsearch `join` 字段。这样 RRF 只在子文档索引上执行，命中后根据 `parentId` 批量读取父文档，检索和隔离逻辑更容易测试。
+
+### Elasticsearch 索引
+
+Docker Compose 增加 Elasticsearch 8.x 和单节点 KRaft Kafka 服务及持久化 volume，不将 Elasticsearch 或 Kafka 端口暴露给宿主机。后端通过 Compose 网络访问它；backend 同时挂载 `knowledge_data` volume 保存异步处理期间的原文件。
+
+使用两个索引：
+
+`myagent_knowledge_parents`
+
+| 字段 | 类型 | 用途 |
+| --- | --- | --- |
+| `parentId` | `keyword` | 父文档 ID |
+| `documentId` | `keyword` | 关联 MySQL 文档记录 |
+| `userId` | `keyword` | 强制用户过滤 |
+| `status` | `keyword` | 只允许检索 `READY` 父文档 |
+| `content` | `text` | 交给 Agent 的完整父上下文 |
+| `structuredContent` | `object` | 表格的结构化 JSON |
+| `contentType` | `keyword` | `TEXT`、`OCR`、`IMAGE`、`TABLE` |
+| `sourceFilename` | `keyword` | 来源文件名 |
+| `pageNumber` | `integer` | 来源页码，无法识别时为空 |
+| `parentIndex` | `integer` | 父文档顺序 |
+
+`myagent_knowledge_children`
+
+| 字段 | 类型 | 用途 |
+| --- | --- | --- |
+| `childId` | `keyword` | 子文档 ID |
+| `parentId` | `keyword` | 回取父文档 |
+| `documentId` | `keyword` | 文档归属 |
+| `userId` | `keyword` | 强制用户过滤 |
+| `status` | `keyword` | 只允许检索 `READY` 子文档 |
+| `content` | `text` | BM25 关键词检索字段 |
+| `embedding` | `dense_vector` | 向量检索字段 |
+| `contentType` | `keyword` | 内容类型 |
+| `sourceFilename` | `keyword` | UI 展示来源 |
+| `pageNumber` | `integer` | 来源页码 |
+| `chunkIndex` | `integer` | 子片段顺序 |
+
+两个索引都在初始化时创建明确 mapping；本期 `embedding` 维度固定为 1024，不能在运行时对已存在索引静默变更。文档 chunk 和用户问题必须使用同一个 `text-embedding-v4` 模型。
+
+模型全部通过配置选择，默认值如下：
+
+- 普通 Agent 聊天模型：`qwen-plus`。
+- 知识库 Embedding 模型：`text-embedding-v4`，维度 `1024`。
+- OCR、图片理解和表格抽取多模态模型：`qwen3.7-plus`。
+
+三类模型共用现有 `DASHSCOPE_API_KEY`，但使用独立的模型配置项。启动时校验 Embedding 模型的输出维度，以及多模态模型是否支持图片输入和结构化输出；校验失败时后端启动失败或将相关文档任务标记为 `FAILED`，不能静默降级到错误模型。
+
+对应环境变量为：
+
+```dotenv
+AGENT_MODEL_NAME=qwen-plus
+KNOWLEDGE_EMBEDDING_MODEL=text-embedding-v4
+KNOWLEDGE_EMBEDDING_DIMENSIONS=1024
+KNOWLEDGE_MULTIMODAL_MODEL=qwen3.7-plus
+KNOWLEDGE_MODEL_API_KEY_ENV=DASHSCOPE_API_KEY
+```
+
+模型提供商和 Base URL 也通过知识库配置提供，以便替换为其他支持 Spring AI 的模型服务；更换 Embedding 模型或维度时必须新建索引并重新处理文档。
+
+### 混合检索和 RRF
+
+知识库问答收到问题后：
+
+1. 校验会话归属和会话模式必须为 `KNOWLEDGE`。
+2. 使用同一个 DashScope `text-embedding-v4` `EmbeddingModel` 将问题向量化。
+3. 对子文档索引发起 Elasticsearch 原生 `_search` 请求，使用 `rrf` retriever 合并两个子检索器：
+   - `standard`：对 `content` 执行 BM25 `multi_match`。
+   - `knn`：对 `embedding` 执行近邻检索。
+4. 在 RRF retriever 的共享过滤条件中加入 `userId = 当前用户`，并只允许检索已完成文档的子文档。
+5. 使用 `rank_window_size` 和 `rank_constant` 配置 RRF；默认分别为 50 和 60，最终取前 5 个子文档。
+6. 如果没有检索结果，直接返回“未在知识库中找到相关内容”，不调用 Agent。
+7. 如果有结果，按 `parentId` 去重并限制父文档数量，再从父文档索引批量获取完整上下文。
+8. 将父文档上下文和原始问题交给现有 `ChatAgentGateway`，系统提示明确要求只根据上下文回答；上下文不能支持答案时仍返回固定的未找到提示。
+9. 通过聊天事件向前端发送来源文件名、父文档 ID 和片段摘要；普通对话不产生知识库来源事件。
+
+RRF 只负责融合排序，不承担用户权限判断。权限判断由每个检索器共享的 `userId` 过滤和后端当前用户上下文共同保证。
+
+### 用户隔离
+
+用户 ID 只从 `@AuthenticationPrincipal CurrentUser` 取得，禁止从上传表单、URL 或前端 JSON 中接收作为权限依据。
+
+- MySQL 文档列表使用 `WHERE user_id = currentUser.id()`。
+- 上传创建的文档记录写入当前用户 ID。
+- 父、子文档的 Elasticsearch metadata 写入当前用户 ID。
+- RRF 的 `standard` 和 `knn` 子检索器都继承同一个 `userId` filter。
+- 父文档回取使用 `userId + parentId` 双重条件。
+- 文档状态更新只允许当前用户更新自己的文档记录。
+- 测试必须覆盖用户 A 无法看到、检索或回取用户 B 的文档。
+
+## 后端数据模型和接口
+
+### MySQL 迁移
+
+新增 `knowledge_documents` 表：
+
+- `id varchar(64) primary key`
+- `user_id bigint not null`
+- `original_filename varchar(255) not null`
+- `content_type varchar(128) not null`
+- `size_bytes bigint not null`
+- `storage_key varchar(500) not null`
+- `status varchar(32) not null`，取值 `PROCESSING`、`READY`、`FAILED`
+- `parent_count int not null default 0`
+- `child_count int not null default 0`
+- `error_message varchar(500)`
+- `created_at datetime not null`
+- `updated_at datetime not null`
+
+索引为 `(user_id, created_at)` 和 `(user_id, status)`。原文件保存到后端生成的用户隔离路径，并通过 Docker `knowledge_data` volume 持久化；处理成功后删除原文件并清空 `storage_key`，处理失败时保留原文件以支持重试。本期列表不提供原文件下载。
+
+新增 `knowledge_document_jobs` Outbox 表：
+
+- `id varchar(64) primary key`
+- `document_id varchar(64) not null unique`
+- `user_id bigint not null`
+- `status varchar(32) not null`，取值 `PENDING`、`SENT`、`FAILED`
+- `attempts int not null default 0`
+- `last_error varchar(500)`
+- `created_at datetime not null`
+- `updated_at datetime not null`
+
+文档记录和 Outbox 记录在同一个 MySQL 事务中创建。Kafka 暂不可用时，Outbox 保持 `PENDING`，不会丢失任务。
+
+新增 `chat_sessions.mode varchar(32) not null`，取值 `NORMAL`、`KNOWLEDGE`。已有会话迁移为 `NORMAL`。
+
+### HTTP 接口
+
+- `POST /api/knowledge/documents`：multipart 上传单个文档，返回文档元数据和处理状态。
+- `GET /api/knowledge/documents`：只返回当前用户的文档列表，按更新时间倒序。
+- `POST /api/chat/sessions`：请求新增可选 `mode`；缺省为 `NORMAL`。
+- `GET /api/chat/sessions`：返回 `mode`，供左侧列表展示标签。
+- `POST /api/chat/sessions/{sessionId}/stream`：沿用现有流式接口；服务端根据会话模式选择普通 Agent 或知识库检索链路。
+
+上传处理采用 Kafka 异步任务，不阻塞上传请求：
+
+1. 接口校验文件类型和 20 MB 大小限制，将文件写入 `knowledge_data/{userId}/{documentId}/source`，并在同一个 MySQL 事务中创建 `PROCESSING` 文档记录和 `PENDING` Outbox 记录。
+2. 接口返回 202 和 `PROCESSING` 状态；Outbox Relay 定期批量读取 `PENDING` 记录，通过 `KafkaTemplate` 发布到 `myagent.knowledge.document.process`，成功后标记 `SENT`。
+3. Kafka Consumer 使用消费组 `myagent-knowledge-etl` 接收消息，重新从 MySQL 校验文档归属和状态，使用 `storage_key` 读取原文件，执行 Spring AI ETL、EmbeddingModel 批处理和 Elasticsearch bulk 写入。
+4. 每次写入前按 `userId + documentId` 清理该文档的旧父子索引数据；处理过程发生异常时，在重新抛出异常触发 Kafka 重试前，再按同样条件删除父、子索引中的半成品，确保重试期间也不会被检索。
+5. 全部写入成功后更新父子计数并将文档置为 `READY`，删除原文件；重试耗尽进入 DLT 后再次执行清理，将文档置为 `FAILED` 并保存可读错误信息。原文件在 `FAILED` 状态下保留。
+6. Consumer 使用确定性的父子 ID和清理后重建保证重复消费幂等；Outbox Relay 在应用重启后继续发送 `PENDING` 任务。
+
+`GET /api/knowledge/documents` 返回实时状态，前端在有 `PROCESSING` 文档时轮询列表；聊天检索只允许 `READY` 文档。
+
+Kafka 使用单独的处理主题、重试主题和死信主题。开发环境使用单节点 KRaft 和 replication factor 1；生产部署时由 Kafka 集群配置更高副本数。Kafka Consumer 的并发数和 Outbox Relay 批量大小通过配置控制。
+
+## 前端设计
+
+- 扩展会话类型，增加 `mode`。
+- 新建会话时提供 `普通对话` 和 `知识库问答` 两个选项。
+- 左侧 `SessionSidebar` 在标题下显示模式标签，并在当前会话变化时同步聊天模式。
+- 右侧 Assistant panel 的顶层 tabs 为 `Skill` 和 `知识库`；知识库只渲染一个文档管理子页面。
+- 文档管理页面提供上传按钮、文件名、状态、片段数量和失败原因。
+- 知识库问答消息显示检索来源；普通对话保持现有消息渲染。
+- 无命中时显示固定提示，不显示“普通 Agent”内部状态徽章。
+
+## 错误处理
+
+- 未认证请求沿用现有安全配置返回 401。
+- 跨用户文档或会话访问统一返回 404，不泄露资源是否存在。
+- 不支持的文件类型返回 415。
+- 超过单文件大小限制返回 413；本期限制为 20 MB。
+- EmbeddingModel 不可用、Elasticsearch 不可用或解析失败时，文档变为 `FAILED`，列表显示明确错误；不写入可检索的半成品数据。
+- 知识库会话无命中时返回正常聊天流中的固定文本事件和 `done` 事件，不伪装成模型生成内容。
+
+## 测试和验收标准
+
+### 后端
+
+- Spring AI 父文档组装和子文档切分测试：标题、段落、重叠、超长段落和 metadata 继承。
+- 文档服务测试：上传成功计数、失败状态和临时文件清理。
+- Kafka 异步测试：上传接口快速返回 202；Outbox 在 Kafka 不可用时保持 `PENDING`；Consumer 更新 `PROCESSING` 到 `READY` 或 `FAILED`；重试和 DLT 状态正确；重复消费不会留下重复索引。
+- OCR 和多模态 ETL 测试：扫描页能生成 OCR 文本，图片能生成描述，表格能生成合法的结构化 JSON 和带表头 Markdown；视觉模型返回非法结构时任务失败并进入重试。
+- Elasticsearch 检索请求测试：同时包含 `standard`、`knn`、RRF 和 `userId` filter。
+- 用户隔离测试：不同用户不能列表、检索或回取彼此的文档。
+- 知识库 ChatService 测试：无命中不调用 Agent；有命中时把父文档上下文传给 Agent；普通模式不触发检索。
+- 会话模式迁移、创建、列表和归属测试。
+- Docker Compose 测试：Elasticsearch 服务、认证配置和持久化 volume 存在，Elasticsearch 不发布宿主机端口。
+
+### 前端
+
+- 会话 store 保存并展示 `mode`。
+- 新建会话模式选择请求正确传递。
+- 左侧列表分别显示“普通对话”和“知识库问答”。
+- 知识库 tab 能加载文档列表并显示 `PROCESSING`、`READY`、`FAILED`。
+- 知识库来源事件正确渲染，普通对话不显示来源区域。
+
+### 验收场景
+
+1. 用户 A 上传 PDF，列表出现文档，状态最终为 `READY`，父子片段数量大于 0。
+2. 用户 A 创建知识库问答会话，询问文档中存在的问题，回答来自父文档上下文并显示来源。
+3. 用户 A 询问文档中不存在的问题，系统返回“未在知识库中找到相关内容”，不调用 Agent 自由回答。
+4. 用户 B 登录后看不到用户 A 的文档，也检索不到用户 A 的内容。
+5. 用户 A 上传扫描 PDF，OCR 文本可被关键词和向量检索。
+6. 用户 A 上传包含图片和表格的文档，图片描述、表格 JSON 和 Markdown 均被保存并可用于问答。
+7. 普通对话会话不访问 Elasticsearch 知识库检索，行为保持现有 Agent 流程。
+
+## 非目标
+
+- 本期不做原文件下载、在线预览、文档删除和重新索引按钮。
+- 本期不实现 Kafka 以外的消息队列；Kafka 使用单节点 KRaft 开发配置，生产集群扩容不在本期范围内。
+- 本期不调整现有普通 Agent 的工具确认和权限机制。

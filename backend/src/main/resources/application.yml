@@ -1,6 +1,13 @@
 spring:
   application:
     name: myagent
+  ai:
+    openai:
+      api-key: ${KNOWLEDGE_EMBEDDING_API_KEY:${DASHSCOPE_API_KEY:}}
+      base-url: ${KNOWLEDGE_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+      embedding:
+        options:
+          model: ${KNOWLEDGE_EMBEDDING_MODEL:text-embedding-v4}
   datasource:
     url: jdbc:mysql://${MYSQL_HOST:mysql}:3306/${MYSQL_DATABASE:myagent}?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
     username: ${MYSQL_USERNAME:root}
@@ -12,6 +19,20 @@ spring:
       port: ${REDIS_PORT:6379}
       database: ${REDIS_DATABASE:0}
       password: ${REDIS_PASSWORD:}
+  kafka:
+    bootstrap-servers: ${KNOWLEDGE_KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.value.default.type: com.example.myagent.knowledge.messaging.KnowledgeDocumentProcessMessage
+        spring.json.trusted.packages: com.example.myagent.knowledge.messaging
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
 
 server:
   port: 8080
@@ -56,3 +77,48 @@ mybatis-plus:
 security:
   jwt:
     secret: ${SECURITY_JWT_SECRET}
+
+knowledge:
+  retrieval:
+    min-rrf-score: ${KNOWLEDGE_RETRIEVAL_MIN_RRF_SCORE:0.02}
+    top-k: ${KNOWLEDGE_RETRIEVAL_TOP_K:8}
+    channel-top-k: ${KNOWLEDGE_RETRIEVAL_CHANNEL_TOP_K:50}
+    rrf-k: ${KNOWLEDGE_RETRIEVAL_RRF_K:60}
+    neighbor-window: ${KNOWLEDGE_RETRIEVAL_NEIGHBOR_WINDOW:1}
+    query-planning-enabled: ${KNOWLEDGE_QUERY_PLANNING_ENABLED:true}
+  embedding:
+    provider: ${KNOWLEDGE_EMBEDDING_PROVIDER:dashscope}
+    model: ${KNOWLEDGE_EMBEDDING_MODEL:text-embedding-v4}
+    dimensions: ${KNOWLEDGE_EMBEDDING_DIMENSIONS:1024}
+    api-key-env: ${KNOWLEDGE_EMBEDDING_API_KEY_ENV:DASHSCOPE_API_KEY}
+  multimodal:
+    provider: ${KNOWLEDGE_MULTIMODAL_PROVIDER:dashscope}
+    model: ${KNOWLEDGE_MULTIMODAL_MODEL:qwen3.7-plus}
+    api-key-env: ${KNOWLEDGE_MULTIMODAL_API_KEY_ENV:DASHSCOPE_API_KEY}
+  elasticsearch:
+    url: ${KNOWLEDGE_ELASTICSEARCH_URL:http://elasticsearch:9200}
+    username: ${KNOWLEDGE_ELASTICSEARCH_USERNAME:elastic}
+    password: ${KNOWLEDGE_ELASTICSEARCH_PASSWORD:}
+    chunk-index: ${KNOWLEDGE_ELASTICSEARCH_CHUNK_INDEX:myagent_knowledge_chunks}
+  kafka:
+    topic: ${KNOWLEDGE_KAFKA_TOPIC:myagent.knowledge.document.process}
+    group: ${KNOWLEDGE_KAFKA_GROUP:myagent-knowledge-etl}
+    bootstrap-servers: ${KNOWLEDGE_KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    relay-delay-ms: ${KNOWLEDGE_KAFKA_RELAY_DELAY_MS:1000}
+    max-attempts: ${KNOWLEDGE_KAFKA_MAX_ATTEMPTS:5}
+  storage:
+    root: ${KNOWLEDGE_STORAGE_ROOT:./.knowledge/storage}
+  chunking:
+    target-tokens: ${KNOWLEDGE_CHUNKING_TARGET_TOKENS:240}
+    max-tokens: ${KNOWLEDGE_CHUNKING_MAX_TOKENS:320}
+    overlap-tokens: ${KNOWLEDGE_CHUNKING_OVERLAP_TOKENS:32}
+  postgresql:
+    url: jdbc:postgresql://${KNOWLEDGE_POSTGRES_HOST:postgres}:${KNOWLEDGE_POSTGRES_PORT:5432}/${KNOWLEDGE_POSTGRES_DATABASE:myagent_knowledge}
+    username: ${KNOWLEDGE_POSTGRES_USERNAME:postgres}
+    password: ${KNOWLEDGE_POSTGRES_PASSWORD:}
+    schema: ${KNOWLEDGE_POSTGRES_SCHEMA:public}
+    migration-locations: ${KNOWLEDGE_POSTGRES_MIGRATION_LOCATIONS:db/knowledge-migration}
+  pgvector:
+    table-name: ${KNOWLEDGE_PGVECTOR_TABLE:vector_store}
+    dimensions: ${KNOWLEDGE_PGVECTOR_DIMENSIONS:${KNOWLEDGE_EMBEDDING_DIMENSIONS:1024}}
+    initialize-schema: ${KNOWLEDGE_PGVECTOR_INITIALIZE_SCHEMA:true}

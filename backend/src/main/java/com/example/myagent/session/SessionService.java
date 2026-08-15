@@ -40,11 +40,17 @@ public class SessionService {
   }
 
   public ChatSessionEntity createSession(CurrentUser currentUser, String title) {
+    return createSession(currentUser, title, SessionMode.NORMAL);
+  }
+
+  public ChatSessionEntity createSession(
+      CurrentUser currentUser, String title, SessionMode requestedMode) {
     LocalDateTime now = LocalDateTime.now();
     ChatSessionEntity session = new ChatSessionEntity();
     session.setId("s_" + UUID.randomUUID().toString().replace("-", ""));
     session.setUserId(currentUser.id());
     session.setTitle(normalizeTitle(title));
+    session.setMode(requestedMode == null ? SessionMode.NORMAL : requestedMode);
     session.setCreatedAt(now);
     session.setUpdatedAt(now);
     chatSessionMapper.insert(session);

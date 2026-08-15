@@ -47,6 +47,35 @@ function visibleContent(message: ChatMessage) {
   return message.role === 'assistant' ? redactInternalPaths(message.content) : message.content
 }
 
+function contentParts(message: ChatMessage) {
+  const content = visibleContent(message)
+  if (message.role !== 'assistant') {
+    return { body: content, references: [] }
+  }
+
+  const marker = /\n{2,}参考来源[:：]/.exec(content)
+  if (!marker || marker.index === undefined) {
+    return { body: content, references: [] }
+  }
+
+  const body = content.slice(0, marker.index).trimEnd()
+  if (body.includes('无法从知识库确定') || body.includes('未在知识库中找到相关内容')) {
+    return { body, references: [] }
+  }
+
+  const references = content
+    .slice(marker.index + marker[0].length)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('- '))
+    .map((line) => line.slice(2).trim())
+
+  return {
+    body,
+    references
+  }
+}
+
 function updateNearBottom() {
   const element = transcript.value
 
@@ -119,10 +148,18 @@ watch(
     >
       <div class="message-bubble">
         <div class="message-bubble__meta">{{ roleLabel(message.role) }}</div>
-        <div v-if="visibleContent(message)" class="message-bubble__content">{{ visibleContent(message) }}</div>
+        <div v-if="contentParts(message).body" class="message-bubble__content">{{ contentParts(message).body }}</div>
         <div v-else-if="message.loading" class="message-bubble__content message-bubble__muted">
           正在思考...
         </div>
+        <details v-if="contentParts(message).references.length" class="message-references">
+          <summary>参考来源（{{ contentParts(message).references.length }} 条）</summary>
+          <ul>
+            <li v-for="(reference, index) in contentParts(message).references" :key="`${message.id}-reference-${index}`">
+              {{ reference }}
+            </li>
+          </ul>
+        </details>
         <div v-if="visibleEvents(message).length" class="message-events">
           <ToolEventCard
             v-for="event in visibleEvents(message)"

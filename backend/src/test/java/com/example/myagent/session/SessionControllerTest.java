@@ -57,6 +57,8 @@ class SessionControllerTest {
         .isEqualTo("s_123")
         .jsonPath("$.title")
         .isEqualTo("Sprint planning")
+        .jsonPath("$.mode")
+        .isEqualTo("NORMAL")
         .jsonPath("$.createdAt")
         .isEqualTo("2026-07-04T09:30:00")
         .jsonPath("$.updatedAt")
@@ -65,6 +67,30 @@ class SessionControllerTest {
         .doesNotExist();
 
     verify(sessionService).createSession(eq(USER), eq("Sprint planning"));
+  }
+
+  @Test
+  void postSessionsAcceptsKnowledgeModeWithoutAcceptingClientUserId() {
+    ChatSessionEntity session =
+        new ChatSessionEntity(
+            "s_knowledge", USER.id(), "Knowledge", SessionMode.KNOWLEDGE, CREATED_AT, UPDATED_AT);
+    when(sessionService.createSession(USER, "Knowledge", SessionMode.KNOWLEDGE)).thenReturn(session);
+
+    authenticatedClient()
+        .post()
+        .uri("/api/chat/sessions")
+        .contentType(MediaType.APPLICATION_JSON)
+        .bodyValue("{\"title\":\"Knowledge\",\"mode\":\"KNOWLEDGE\",\"userId\":999}")
+        .exchange()
+        .expectStatus()
+        .isOk()
+        .expectBody()
+        .jsonPath("$.mode")
+        .isEqualTo("KNOWLEDGE")
+        .jsonPath("$.userId")
+        .doesNotExist();
+
+    verify(sessionService).createSession(eq(USER), eq("Knowledge"), eq(SessionMode.KNOWLEDGE));
   }
 
   @Test

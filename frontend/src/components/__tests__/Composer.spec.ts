@@ -3,6 +3,23 @@ import { mount } from '@vue/test-utils'
 import Composer from '../Composer.vue'
 
 describe('Composer permission control', () => {
+  it('does not show a duplicate conversation mode above the input', () => {
+    const wrapper = mount(Composer, {
+      props: { disabled: false, hasSession: true, sessionId: 's1' },
+      global: {
+        stubs: {
+          ElInput: { template: '<textarea class="composer__input" />' },
+          ElButton: { template: '<button class="composer__send"><slot /></button>' },
+          PermissionPanel: { template: '<div class="composer__permission" />' }
+        }
+      }
+    })
+
+    expect(wrapper.findAll('.composer__mode')).toHaveLength(0)
+    expect(wrapper.findAll('.composer__input')).toHaveLength(1)
+    expect(wrapper.findAll('.composer__send')).toHaveLength(1)
+  })
+
   it('places the compact permission selector between the message input and send button', () => {
     const wrapper = mount(Composer, {
       props: { disabled: false, hasSession: true, sessionId: 's1' },

@@ -10,6 +10,7 @@ public class ChatSessionEntity {
   @TableId private String id;
   private Long userId;
   private String title;
+  private SessionMode mode;
   private LocalDateTime createdAt;
   private LocalDateTime updatedAt;
 
@@ -17,9 +18,20 @@ public class ChatSessionEntity {
 
   public ChatSessionEntity(
       String id, Long userId, String title, LocalDateTime createdAt, LocalDateTime updatedAt) {
+    this(id, userId, title, SessionMode.NORMAL, createdAt, updatedAt);
+  }
+
+  public ChatSessionEntity(
+      String id,
+      Long userId,
+      String title,
+      SessionMode mode,
+      LocalDateTime createdAt,
+      LocalDateTime updatedAt) {
     this.id = id;
     this.userId = userId;
     this.title = title;
+    this.mode = mode;
     this.createdAt = createdAt;
     this.updatedAt = updatedAt;
   }
@@ -46,6 +58,14 @@ public class ChatSessionEntity {
 
   public void setTitle(String title) {
     this.title = title;
+  }
+
+  public SessionMode getMode() {
+    return mode;
+  }
+
+  public void setMode(SessionMode mode) {
+    this.mode = mode;
   }
 
   public LocalDateTime getCreatedAt() {

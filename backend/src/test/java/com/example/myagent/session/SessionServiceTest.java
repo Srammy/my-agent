@@ -42,7 +42,7 @@ class SessionServiceTest {
   void createSessionUsesCurrentUserAndDefaultTitle() {
     when(chatSessionMapper.insert(any(ChatSessionEntity.class))).thenReturn(1);
 
-    ChatSessionEntity created = sessionService.createSession(USER_A, "   ");
+    ChatSessionEntity created = sessionService.createSession(USER_A, "   ", null);
 
     ArgumentCaptor<ChatSessionEntity> captor = ArgumentCaptor.forClass(ChatSessionEntity.class);
     verify(chatSessionMapper).insert(captor.capture());
@@ -50,12 +50,27 @@ class SessionServiceTest {
     assertThat(saved.getId()).startsWith("s_").hasSize(34);
     assertThat(saved.getUserId()).isEqualTo(USER_A.id());
     assertThat(saved.getTitle()).isEqualTo("\u65b0\u4f1a\u8bdd");
+    assertThat(saved.getMode()).isEqualTo(SessionMode.NORMAL);
     assertThat(saved.getCreatedAt()).isNotNull();
     assertThat(saved.getUpdatedAt()).isEqualTo(saved.getCreatedAt());
 
     assertThat(created.getId()).isEqualTo(saved.getId());
     assertThat(created.getUserId()).isEqualTo(saved.getUserId());
     assertThat(created.getTitle()).isEqualTo(saved.getTitle());
+    assertThat(created.getMode()).isEqualTo(SessionMode.NORMAL);
+  }
+
+  @Test
+  void createSessionPersistsExplicitKnowledgeMode() {
+    when(chatSessionMapper.insert(any(ChatSessionEntity.class))).thenReturn(1);
+
+    ChatSessionEntity created =
+        sessionService.createSession(USER_A, "Knowledge base", SessionMode.KNOWLEDGE);
+
+    ArgumentCaptor<ChatSessionEntity> captor = ArgumentCaptor.forClass(ChatSessionEntity.class);
+    verify(chatSessionMapper).insert(captor.capture());
+    assertThat(captor.getValue().getMode()).isEqualTo(SessionMode.KNOWLEDGE);
+    assertThat(created.getMode()).isEqualTo(SessionMode.KNOWLEDGE);
   }
 
   @Test

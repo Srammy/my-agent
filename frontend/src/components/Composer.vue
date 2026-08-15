@@ -36,7 +36,8 @@ function onKeydown(event: KeyboardEvent) {
 </script>
 
 <template>
-  <form class="composer" @submit.prevent="send">
+  <div class="composer-shell">
+    <form class="composer" @submit.prevent="send">
     <el-input
       v-model="draft"
       class="composer__input"
@@ -61,5 +62,6 @@ function onKeydown(event: KeyboardEvent) {
     >
       发送
     </el-button>
-  </form>
+    </form>
+  </div>
 </template>
